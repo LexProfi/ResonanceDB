@@ -1,9 +1,6 @@
-/*
- * ${PROJECT_NAME} — Waveform Semantic Engine
- * Copyright © ${YEAR} Alexander Listopad
- * SPDX-License-Identifier: Prosperity-3.0
- *
- * ${PATENT_LINE}
- *
- * Commercial use >30 days → license@evacortex.com
- */
+ResonanceDB — Waveform Semantic Engine
+Copyright © 2025 Alexander Listopad
+SPDX-License-Identifier: Prosperity-3.0
+
+Patent notice: The authors intend to seek patent protection for this software.
+Commercial use >30 days → license@evacortex.com

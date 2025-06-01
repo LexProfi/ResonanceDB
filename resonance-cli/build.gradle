@@ -1,0 +1,16 @@
+apply plugin: 'java'
+apply plugin: 'application'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(22)
+    }
+}
+
+dependencies {
+    implementation project(':resonance-core')
+}
+
+application {
+    mainClass = 'cli.Main' // создашь этот класс позже
+}

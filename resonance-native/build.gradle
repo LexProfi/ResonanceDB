@@ -1,0 +1,20 @@
+apply plugin: 'java'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(22)
+    }
+}
+
+dependencies {
+    implementation project(':resonance-core')
+}
+
+def nativeLibName = "libresonance.so" // подставь под ОС: .dll, .dylib
+
+tasks.register('buildNativeLib', Exec) {
+    workingDir = file("src/main/c")
+    commandLine "gcc", "-O3", "-mavx2", "-fPIC", "-shared", "-lm", "-o", "../../libs/${nativeLibName}", "compare.c"
+}
+
+tasks.build.dependsOn 'buildNativeLib'

@@ -1,0 +1,31 @@
+import java.time.Year
+
+plugins {
+    id 'com.github.hierynomus.license' version '0.16.1' apply false
+}
+
+allprojects {
+    group   = 'ai.evacortex.resonancedb'
+    version = '0.1.0'
+
+    repositories { mavenCentral() }
+}
+
+subprojects {
+    apply plugin: 'java-library'
+    apply plugin: 'com.github.hierynomus.license'
+    ext.year        = Year.now().value
+    ext.patentLine  = 'Patent notice: The authors intend to seek patent protection for this software.'
+
+    license {
+        header = rootProject.file('config/header.txt')
+        mapping { java = 'SLASHSTAR_STYLE' }
+        strictCheck = true
+    }
+
+    tasks.withType(Jar).configureEach {
+        from("${rootProject.projectDir}/LICENSE") {
+            into 'META-INF'
+        }
+    }
+}
