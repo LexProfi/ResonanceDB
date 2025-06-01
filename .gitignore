@@ -1,0 +1,50 @@
+# ─── Build Artifacts ───────────────────────────────────────────────────────────
+/build/
+/*/build/
+out/
+bin/
+
+# ─── Gradle ────────────────────────────────────────────────────────────────────
+.gradle/
+.gradle-cache/
+!gradle/wrapper/gradle-wrapper.jar
+!gradle-wrapper.properties
+
+# ─── Native Libraries ──────────────────────────────────────────────────────────
+libs/libresonance.so
+libs/libresonance.dll
+libs/libresonance.dylib
+
+# ─── IDE Files ─────────────────────────────────────────────────────────────────
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# ─── VS Code ───────────────────────────────────────────────────────────────────
+.vscode/
+*.code-workspace
+
+# ─── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+*.tmp
+hs_err_pid*
+
+# ─── Test Artifacts ────────────────────────────────────────────────────────────
+*.class
+/test-results/
+/test-output/
+/reports/
+
+# ─── OS/Editor Specific ────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.bak
+
+# ─── Generated ─────────────────────────────────────────────────────────────────
+*.jar
+*.war
+*.zip
+*.tar.gz
