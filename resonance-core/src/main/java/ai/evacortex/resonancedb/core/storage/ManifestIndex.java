@@ -19,8 +19,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-import java.io.*;
-import java.nio.file.*;
 import java.time.Duration;
 import java.util.concurrent.*;
 
@@ -28,6 +26,7 @@ public class ManifestIndex implements Closeable {
 
     private final Path indexFile;
     private final Map<String, PatternLocation> map;
+    private final Set<String> knownSegments;
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
     private final ScheduledExecutorService scheduler;
     private volatile boolean dirty = false;
@@ -35,6 +34,7 @@ public class ManifestIndex implements Closeable {
     private ManifestIndex(Path indexFile) {
         this.indexFile = indexFile;
         this.map = new ConcurrentHashMap<>();
+        this.knownSegments = ConcurrentHashMap.newKeySet();
         this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r);
             t.setDaemon(true);
@@ -47,8 +47,12 @@ public class ManifestIndex implements Closeable {
         ManifestIndex idx = new ManifestIndex(path);
         if (Files.exists(path)) {
             try (DataInputStream in = new DataInputStream(new BufferedInputStream(Files.newInputStream(path)))) {
-                int count = in.readInt();
-                for (int i = 0; i < count; i++) {
+                int segmentCount = in.readInt();
+                for (int i = 0; i < segmentCount; i++) {
+                    idx.knownSegments.add(in.readUTF());
+                }
+                int patternCount = in.readInt();
+                for (int i = 0; i < patternCount; i++) {
                     String id = in.readUTF();
                     String segment = in.readUTF();
                     long offset = in.readLong();
@@ -59,6 +63,7 @@ public class ManifestIndex implements Closeable {
                         phaseCenter = 0.0;
                     }
                     idx.map.put(id, new PatternLocation(segment, offset, phaseCenter));
+                    idx.knownSegments.add(segment); // Ensure consistency
                 }
             } catch (IOException e) {
                 Path backup = path.resolveSibling(path.getFileName().toString() + ".bak");
@@ -82,7 +87,19 @@ public class ManifestIndex implements Closeable {
         lock.writeLock().lock();
         try {
             map.put(id, new PatternLocation(segment, offset, phaseCenter));
+            knownSegments.add(segment);
             dirty = true;
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    public void registerSegmentIfAbsent(String segmentName) {
+        lock.writeLock().lock();
+        try {
+            if (knownSegments.add(segmentName)) {
+                dirty = true;
+            }
         } finally {
             lock.writeLock().unlock();
         }
@@ -120,7 +137,7 @@ public class ManifestIndex implements Closeable {
     public Set<String> getAllSegmentNames() {
         lock.readLock().lock();
         try {
-            Set<String> result = new HashSet<>();
+            Set<String> result = new HashSet<>(knownSegments);
             for (PatternLocation loc : map.values()) {
                 result.add(loc.segmentName());
             }
@@ -163,8 +180,13 @@ public class ManifestIndex implements Closeable {
             }
 
             try (DataOutputStream out = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(indexFile)))) {
-                lock.readLock().lock(); // protect map snapshot during write
+                lock.readLock().lock();
                 try {
+                    out.writeInt(knownSegments.size());
+                    for (String seg : knownSegments) {
+                        out.writeUTF(seg);
+                    }
+
                     out.writeInt(map.size());
                     for (Map.Entry<String, PatternLocation> e : map.entrySet()) {
                         out.writeUTF(e.getKey());

@@ -17,6 +17,7 @@ import ai.evacortex.resonancedb.core.exceptions.PatternNotFoundException;
 import ai.evacortex.resonancedb.core.metadata.PatternMetaStore;
 import ai.evacortex.resonancedb.core.sharding.PhaseShardSelector;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -30,7 +31,7 @@ import java.util.stream.Collectors;
  * responsible for managing insertions, deletions, updates, and queries of WavePatterns,
  * with support for phase-based sharding using a PhaseShardSelector.
  */
-public class WavePatternStoreImpl implements ResonanceStore {
+public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
     private final ManifestIndex manifest;
     private final PatternMetaStore metaStore;
@@ -167,10 +168,26 @@ public class WavePatternStoreImpl implements ResonanceStore {
             try {
                 Path path = rootDir.resolve("segments/" + name);
                 Files.createDirectories(path.getParent());
+
+                synchronized (manifest) {
+                    manifest.registerSegmentIfAbsent(name);
+                    manifest.flush();
+                }
+
                 return new SegmentWriter(path);
             } catch (IOException e) {
                 throw new RuntimeException("Failed to create segment writer: " + name, e);
             }
         });
+    }
+
+    @Override
+    public void close() {
+        synchronized (manifest) {
+            manifest.flush();
+        }
+        synchronized (metaStore) {
+            metaStore.flush();
+        }
     }
 }
