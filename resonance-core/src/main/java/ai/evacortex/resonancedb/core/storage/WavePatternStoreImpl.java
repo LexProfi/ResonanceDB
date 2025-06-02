@@ -44,49 +44,57 @@ public class WavePatternStoreImpl implements ResonanceStore {
         this.manifest = ManifestIndex.loadOrCreate(dbRoot.resolve("index/manifest.idx"));
         this.metaStore = PatternMetaStore.loadOrCreate(dbRoot.resolve("metadata/pattern-meta.json"));
         this.segmentWriters = new ConcurrentHashMap<>();
-        this.tracer = new NoOpTracer(); // Can be replaced with full tracing
+        this.tracer = new NoOpTracer();
 
-        // Load writers for all known segments from manifest
         for (String segmentName : manifest.getAllSegmentNames()) {
             Path segPath = dbRoot.resolve("segments/" + segmentName);
             segmentWriters.put(segmentName, new SegmentWriter(segPath));
         }
 
-        // Reconstruct sharding map from manifest index entries
         List<ManifestIndex.PatternLocation> locations = manifest.getAllLocations();
-        this.shardSelector = PhaseShardSelector.fromManifest(locations, 0.1); // default epsilon = 0.1
+        this.shardSelector = PhaseShardSelector.fromManifest(locations, 0.1);
     }
 
     @Override
-    public synchronized void insert(String id, WavePattern psi, Map<String, String> metadata) {
+    public void insert(String id, WavePattern psi, Map<String, String> metadata) {
         if (manifest.contains(id)) {
             throw new DuplicatePatternException(id);
         }
 
         SegmentWriter writer = getOrCreateWriterFor(psi);
-        long offset = writer.write(id, psi, metadata);
-        double phaseCenter = Arrays.stream(psi.phase()).average().orElse(0.0);
 
-        try {
-            manifest.add(id, writer.getSegmentName(), offset, phaseCenter);
-            metaStore.put(id, metadata);
-            metaStore.flush();
-        } catch (Exception e) {
-            manifest.remove(id); // rollback manifest if meta write fails
-            throw new RuntimeException("Failed to persist metadata", e);
+        synchronized (writer) {
+            long offset = writer.write(id, psi, metadata);
+            double phaseCenter = Arrays.stream(psi.phase()).average().orElse(0.0);
+
+            synchronized (manifest) {
+                try {
+                    manifest.add(id, writer.getSegmentName(), offset, phaseCenter);
+                    synchronized (metaStore) {
+                        metaStore.put(id, metadata);
+                        metaStore.flush();
+                    }
+                } catch (Exception e) {
+                    manifest.remove(id); // rollback manifest if meta write fails
+                    throw new RuntimeException("Failed to persist metadata", e);
+                }
+            }
         }
     }
 
     @Override
-    public synchronized String insert(WavePattern psi) {
+    public String insert(WavePattern psi) {
         String id = HashingUtil.computeContentHash(psi);
         insert(id, psi, Map.of());
         return id;
     }
 
     @Override
-    public synchronized void delete(String id) {
-        ManifestIndex.PatternLocation loc = manifest.get(id);
+    public void delete(String id) {
+        ManifestIndex.PatternLocation loc;
+        synchronized (manifest) {
+            loc = manifest.get(id);
+        }
         if (loc == null) {
             throw new PatternNotFoundException(id);
         }
@@ -96,13 +104,19 @@ public class WavePatternStoreImpl implements ResonanceStore {
             throw new RuntimeException("Segment writer not found for: " + loc.segmentName());
         }
 
-        writer.markDeleted(loc.offset());
-        manifest.remove(id);
-        metaStore.remove(id);
+        synchronized (writer) {
+            writer.markDeleted(loc.offset());
+        }
+        synchronized (manifest) {
+            manifest.remove(id);
+        }
+        synchronized (metaStore) {
+            metaStore.remove(id);
+        }
     }
 
     @Override
-    public synchronized void update(String id, WavePattern psi) {
+    public void update(String id, WavePattern psi) {
         if (!manifest.contains(id)) {
             throw new PatternNotFoundException(id);
         }

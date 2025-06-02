@@ -19,6 +19,7 @@ import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 
+
 /**
  * SegmentReader allows reading serialized {@link WavePattern}s
  * from a memory-mapped .segment file produced by {@link SegmentWriter}.
@@ -28,11 +29,12 @@ import java.util.List;
  *   [AMPLITUDES] [PHASES]
  *
  * Deleted entries (tombstones) are marked with 0x00 at the first byte.
+ * This class is read-only and thread-safe via duplicated buffer strategy.
  */
 public class SegmentReader implements AutoCloseable {
 
     private static final int ID_SIZE = 16;
-    private static final int HEADER_SIZE = ID_SIZE + 4 + 4; // ID + length + metaOffset
+    private static final int HEADER_SIZE = ID_SIZE + 4 + 4; // ID_HASH + LENGTH + META_OFFSET
     private static final int MAX_LENGTH = 65536;
 
     private final Path path;
@@ -41,6 +43,8 @@ public class SegmentReader implements AutoCloseable {
 
     /**
      * Constructs a SegmentReader over a memory-mapped segment file.
+     *
+     * @param path path to the .segment file
      */
     public SegmentReader(Path path) {
         this.path = path;
@@ -54,13 +58,19 @@ public class SegmentReader implements AutoCloseable {
 
     /**
      * Reads a WavePattern from a given offset.
+     *
+     * @param offset byte offset inside the segment file
+     * @return reconstructed WavePattern
      */
     public WavePattern readAt(long offset) {
         return readWithId(offset).pattern();
     }
 
     /**
-     * Reads WavePattern and its internal ID (16-byte hash as hex string).
+     * Reads WavePattern and its 16-byte hex ID from a given offset.
+     *
+     * @param offset file offset to start reading
+     * @return PatternWithId record containing ID and WavePattern
      */
     public PatternWithId readWithId(long offset) {
         ByteBuffer buf = mmap.duplicate();
@@ -68,25 +78,27 @@ public class SegmentReader implements AutoCloseable {
 
         byte[] idBytes = new byte[ID_SIZE];
         buf.get(idBytes);
-        String idHex = bytesToHex(idBytes);
 
-        int length = buf.getInt();
+        int len = buf.getInt();
         buf.getInt(); // skip metaOffset
 
-        if (length <= 0 || length > MAX_LENGTH) {
+        if (len <= 0 || len > MAX_LENGTH) {
             throw new IllegalStateException("Corrupted pattern length at offset " + offset);
         }
 
-        double[] amp = new double[length];
-        double[] phase = new double[length];
-        for (int i = 0; i < length; i++) amp[i] = buf.getDouble();
-        for (int i = 0; i < length; i++) phase[i] = buf.getDouble();
+        double[] amp = new double[len];
+        double[] phase = new double[len];
+        for (int i = 0; i < len; i++) amp[i] = buf.getDouble();
+        for (int i = 0; i < len; i++) phase[i] = buf.getDouble();
 
-        return new PatternWithId(idHex, new WavePattern(amp, phase));
+        return new PatternWithId(bytesToHex(idBytes), new WavePattern(amp, phase));
     }
 
     /**
      * Reads all valid (non-deleted) WavePatterns with their IDs from the segment.
+     * Entries with tombstone marker (0x00) at the first byte are skipped.
+     *
+     * @return list of valid patterns with their IDs
      */
     public List<PatternWithId> readAllWithId() {
         List<PatternWithId> result = new ArrayList<>();
@@ -94,19 +106,22 @@ public class SegmentReader implements AutoCloseable {
         buf.position(0);
 
         while (buf.remaining() >= HEADER_SIZE) {
-            int start = buf.position();
-            byte tombstone = buf.get(start);
-            if (tombstone == 0x00) {
-                buf.position(start + ID_SIZE); // skip ID
+            int entryStart = buf.position();
+            byte firstByte = buf.get(entryStart);
+
+            // Check tombstone
+            if (firstByte == 0x00) {
+                buf.position(entryStart + 1); // skip tombstone byte
+                byte[] skipId = new byte[ID_SIZE - 1];
+                buf.get(skipId); // skip remaining ID
                 int len = buf.getInt();
                 int skip = HEADER_SIZE + len * 2 * Double.BYTES;
-                buf.position(start + skip);
+                buf.position(entryStart + skip);
                 continue;
             }
 
             byte[] idBytes = new byte[ID_SIZE];
             buf.get(idBytes);
-            String idHex = bytesToHex(idBytes);
 
             int len = buf.getInt();
             buf.getInt(); // skip metaOffset
@@ -118,7 +133,7 @@ public class SegmentReader implements AutoCloseable {
             for (int i = 0; i < len; i++) amp[i] = buf.getDouble();
             for (int i = 0; i < len; i++) phase[i] = buf.getDouble();
 
-            result.add(new PatternWithId(idHex, new WavePattern(amp, phase)));
+            result.add(new PatternWithId(bytesToHex(idBytes), new WavePattern(amp, phase)));
         }
 
         return result;
@@ -126,14 +141,16 @@ public class SegmentReader implements AutoCloseable {
 
     /**
      * Returns the path of this segment file.
+     *
+     * @return path to .segment
      */
     public Path getPath() {
         return path;
     }
 
     /**
-     * Closes the underlying FileChannel. Note: MappedByteBuffer is not explicitly unmapped
-     * due to JVM limitations. It will be released when GC collects it.
+     * Closes the underlying file channel.
+     * Memory-mapped buffer will be GC'd.
      */
     @Override
     public void close() throws IOException {
@@ -148,8 +165,9 @@ public class SegmentReader implements AutoCloseable {
 
     /**
      * Result of reading a pattern with ID.
-     * @param id Hex-encoded 16-byte content hash
-     * @param pattern WavePattern data
+     *
+     * @param id      16-byte hex content hash
+     * @param pattern reconstructed WavePattern
      */
     public record PatternWithId(String id, WavePattern pattern) {}
 }

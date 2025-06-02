@@ -14,6 +14,7 @@ import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
@@ -29,15 +30,16 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  *
  * Thread-safe: uses ReentrantReadWriteLock for concurrent read/write access.
  */
-public class SegmentWriter {
+public class SegmentWriter implements AutoCloseable {
 
     private static final int HEADER_SIZE = 16 + 4 + 4; // ID (16) + length + metaOffset
     private static final int ALIGNMENT = 8;
+    private static final int INITIAL_CAPACITY = 4 * 1024 * 1024; // 4 MB
 
     private final Path path;
     private final String segmentName;
     private final FileChannel channel;
-    private final MappedByteBuffer buffer;
+    private MappedByteBuffer buffer;
     private final AtomicLong writeOffset;
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
 
@@ -51,9 +53,12 @@ public class SegmentWriter {
         try {
             this.path = path;
             this.segmentName = path.getFileName().toString();
+            Files.createDirectories(path.getParent());
+
             RandomAccessFile raf = new RandomAccessFile(path.toFile(), "rw");
             this.channel = raf.getChannel();
-            long size = Math.max(1024 * 1024, channel.size());
+
+            long size = Math.max(INITIAL_CAPACITY, channel.size());
             this.buffer = channel.map(FileChannel.MapMode.READ_WRITE, 0, size);
             this.writeOffset = new AtomicLong(channel.size());
         } catch (IOException e) {
@@ -63,11 +68,11 @@ public class SegmentWriter {
 
     /**
      * Writes a WavePattern into the segment file at the current write offset.
-     * ID is hashed to 16 bytes (MD5). Metadata is currently not stored.
+     * ID is hashed to 16 bytes (MD5). Metadata is currently stored externally.
      *
      * @param id       Unique identifier for the pattern (hashed)
      * @param pattern  WavePattern to store
-     * @param metadata Optional metadata (not yet used)
+     * @param metadata Optional metadata (reserved for offset tracking)
      * @return Offset within the segment file where the pattern was written
      */
     public long write(String id, WavePattern pattern, Map<String, String> metadata) {
@@ -79,12 +84,15 @@ public class SegmentWriter {
 
             int len = amp.length;
             int blockSize = HEADER_SIZE + 8 * len * 2;
-            long offset = writeOffset.getAndAdd(align(blockSize));
+            int alignedSize = align(blockSize);
+            long offset = writeOffset.getAndAdd(alignedSize);
 
+            ensureCapacity(offset + alignedSize);
             buffer.position((int) offset);
-            buffer.put(idHash);      // 16-byte MD5
-            buffer.putInt(len);      // number of elements
-            buffer.putInt(-1);       // placeholder for metadata offset
+
+            buffer.put(idHash);     // 16-byte MD5
+            buffer.putInt(len);     // number of elements
+            buffer.putInt(-1);      // placeholder for metadata offset (external store)
 
             for (double v : amp) buffer.putDouble(v);
             for (double v : phase) buffer.putDouble(v);
@@ -129,11 +137,57 @@ public class SegmentWriter {
     }
 
     /**
+     * Ensures the buffer can accommodate the requested size.
+     * Remaps the file if capacity is insufficient.
+     *
+     * @param requiredCapacity required position after writing
+     */
+    private void ensureCapacity(long requiredCapacity) {
+        if (requiredCapacity > buffer.capacity()) {
+            try {
+                long newSize = Math.max(buffer.capacity() * 2L, requiredCapacity);
+                buffer.force(); // flush before remapping
+                this.buffer = channel.map(FileChannel.MapMode.READ_WRITE, 0, newSize);
+            } catch (IOException e) {
+                throw new RuntimeException("Failed to remap segment buffer", e);
+            }
+        }
+    }
+
+    /**
      * Returns the path of the segment file on disk.
      *
      * @return path to segment
      */
     public Path getPath() {
         return path;
+    }
+
+    /**
+     * Flushes memory-mapped buffer to disk.
+     */
+    public void flush() {
+        lock.writeLock().lock();
+        try {
+            buffer.force();
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * Closes the file channel and flushes pending data.
+     */
+    @Override
+    public void close() {
+        lock.writeLock().lock();
+        try {
+            flush();
+            channel.close();
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to close segment writer", e);
+        } finally {
+            lock.writeLock().unlock();
+        }
     }
 }

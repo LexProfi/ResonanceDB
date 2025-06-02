@@ -43,9 +43,6 @@ public class ManifestIndex implements Closeable {
         });
     }
 
-    /**
-     * Loads an existing manifest index or creates a new one if absent.
-     */
     public static ManifestIndex loadOrCreate(Path path) {
         ManifestIndex idx = new ManifestIndex(path);
         if (Files.exists(path)) {
@@ -59,7 +56,7 @@ public class ManifestIndex implements Closeable {
                     try {
                         phaseCenter = in.readDouble();
                     } catch (EOFException e) {
-                        phaseCenter = 0.0; // legacy compatibility
+                        phaseCenter = 0.0;
                     }
                     idx.map.put(id, new PatternLocation(segment, offset, phaseCenter));
                 }
@@ -75,18 +72,12 @@ public class ManifestIndex implements Closeable {
         return idx;
     }
 
-    /**
-     * Starts automatic periodic flushing.
-     */
     public void startAutoFlush(Duration interval) {
         scheduler.scheduleAtFixedRate(() -> {
             if (dirty) flush();
         }, interval.toMillis(), interval.toMillis(), TimeUnit.MILLISECONDS);
     }
 
-    /**
-     * Registers a new pattern ID and its location.
-     */
     public void add(String id, String segment, long offset, double phaseCenter) {
         lock.writeLock().lock();
         try {
@@ -97,9 +88,6 @@ public class ManifestIndex implements Closeable {
         }
     }
 
-    /**
-     * Removes a pattern ID from the index.
-     */
     public void remove(String id) {
         lock.writeLock().lock();
         try {
@@ -111,9 +99,6 @@ public class ManifestIndex implements Closeable {
         }
     }
 
-    /**
-     * Returns the stored location of a given ID.
-     */
     public PatternLocation get(String id) {
         lock.readLock().lock();
         try {
@@ -123,9 +108,6 @@ public class ManifestIndex implements Closeable {
         }
     }
 
-    /**
-     * Returns whether a given ID is indexed.
-     */
     public boolean contains(String id) {
         lock.readLock().lock();
         try {
@@ -135,24 +117,20 @@ public class ManifestIndex implements Closeable {
         }
     }
 
-    /**
-     * Returns all unique segment names used in this index.
-     */
     public Set<String> getAllSegmentNames() {
         lock.readLock().lock();
         try {
             Set<String> result = new HashSet<>();
-            for (PatternLocation loc : map.values()) result.add(loc.segmentName());
+            for (PatternLocation loc : map.values()) {
+                result.add(loc.segmentName());
+            }
             return result;
         } finally {
             lock.readLock().unlock();
         }
     }
 
-    /**
-     * Returns all known locations for external access (e.g. PhaseShardSelector).
-     */
-    public Collection<PatternLocation> allLocations() {
+    public List<PatternLocation> getAllLocations() {
         lock.readLock().lock();
         try {
             return new ArrayList<>(map.values());
@@ -161,9 +139,6 @@ public class ManifestIndex implements Closeable {
         }
     }
 
-    /**
-     * Flushes the index to disk with backup support.
-     */
     public void flush() {
         lock.readLock().lock();
         try {
@@ -174,9 +149,6 @@ public class ManifestIndex implements Closeable {
         }
     }
 
-    /**
-     * Gracefully shuts down the flush scheduler and persists data.
-     */
     @Override
     public void close() {
         scheduler.shutdownNow();
@@ -191,13 +163,18 @@ public class ManifestIndex implements Closeable {
             }
 
             try (DataOutputStream out = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(indexFile)))) {
-                out.writeInt(map.size());
-                for (Map.Entry<String, PatternLocation> e : map.entrySet()) {
-                    out.writeUTF(e.getKey());
-                    PatternLocation loc = e.getValue();
-                    out.writeUTF(loc.segmentName());
-                    out.writeLong(loc.offset());
-                    out.writeDouble(loc.phaseCenter());
+                lock.readLock().lock(); // protect map snapshot during write
+                try {
+                    out.writeInt(map.size());
+                    for (Map.Entry<String, PatternLocation> e : map.entrySet()) {
+                        out.writeUTF(e.getKey());
+                        PatternLocation loc = e.getValue();
+                        out.writeUTF(loc.segmentName());
+                        out.writeLong(loc.offset());
+                        out.writeDouble(loc.phaseCenter());
+                    }
+                } finally {
+                    lock.readLock().unlock();
                 }
             }
         } catch (IOException e) {
@@ -205,20 +182,5 @@ public class ManifestIndex implements Closeable {
         }
     }
 
-    /**
-     * Returns a snapshot of all stored PatternLocations.
-     */
-    public List<PatternLocation> getAllLocations() {
-        lock.readLock().lock();
-        try {
-            return new ArrayList<>(map.values());
-        } finally {
-            lock.readLock().unlock();
-        }
-    }
-
-    /**
-     * Describes physical segment, offset, and phase for pattern.
-     */
     public record PatternLocation(String segmentName, long offset, double phaseCenter) {}
 }

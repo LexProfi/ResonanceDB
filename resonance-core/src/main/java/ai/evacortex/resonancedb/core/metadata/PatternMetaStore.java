@@ -17,11 +17,7 @@ import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.*;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
@@ -50,7 +46,9 @@ public class PatternMetaStore {
             try (InputStream in = Files.newInputStream(path)) {
                 TypeReference<Map<String, Map<String, String>>> typeRef = new TypeReference<>() {};
                 Map<String, Map<String, String>> loaded = metaStore.mapper.readValue(in, typeRef);
-                metaStore.store.putAll(loaded);
+                synchronized (metaStore.store) {
+                    metaStore.store.putAll(loaded);
+                }
             } catch (IOException e) {
                 throw new RuntimeException("Failed to load metadata store", e);
             }
@@ -60,8 +58,8 @@ public class PatternMetaStore {
 
     private PatternMetaStore(Path metaFile) {
         this.metaFile = metaFile;
-        this.store = new ConcurrentHashMap<>();
         this.mapper = new ObjectMapper();
+        this.store = Collections.synchronizedMap(new HashMap<>());
         this.rwLock = new ReentrantReadWriteLock();
     }
 
@@ -106,7 +104,8 @@ public class PatternMetaStore {
     public Map<String, String> get(String id) {
         rwLock.readLock().lock();
         try {
-            return store.get(id);
+            Map<String, String> meta = store.get(id);
+            return meta != null ? new HashMap<>(meta) : null;
         } finally {
             rwLock.readLock().unlock();
         }
@@ -119,7 +118,12 @@ public class PatternMetaStore {
      * @return true if present
      */
     public boolean contains(String id) {
-        return store.containsKey(id);
+        rwLock.readLock().lock();
+        try {
+            return store.containsKey(id);
+        } finally {
+            rwLock.readLock().unlock();
+        }
     }
 
     /**
@@ -145,7 +149,11 @@ public class PatternMetaStore {
     public Map<String, Map<String, String>> snapshot() {
         rwLock.readLock().lock();
         try {
-            return new HashMap<>(store);
+            Map<String, Map<String, String>> copy = new HashMap<>();
+            for (var entry : store.entrySet()) {
+                copy.put(entry.getKey(), new HashMap<>(entry.getValue()));
+            }
+            return copy;
         } finally {
             rwLock.readLock().unlock();
         }
