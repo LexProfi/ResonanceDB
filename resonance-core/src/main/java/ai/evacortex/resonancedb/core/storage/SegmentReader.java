@@ -9,6 +9,7 @@
 package ai.evacortex.resonancedb.core.storage;
 
 import ai.evacortex.resonancedb.core.WavePattern;
+import ai.evacortex.resonancedb.core.io.format.BinaryHeader;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -23,23 +24,25 @@ import java.util.List;
 /**
  * SegmentReader allows reading serialized {@link WavePattern}s
  * from a memory-mapped .segment file produced by {@link SegmentWriter}.
- *
+
+ * Each segment starts with a {@link BinaryHeader}.
  * Each entry layout:
  *   [ID_HASH (16 bytes)] [LENGTH (4 bytes)] [META_OFFSET (4 bytes)]
  *   [AMPLITUDES] [PHASES]
- *
+
  * Deleted entries (tombstones) are marked with 0x00 at the first byte.
  * This class is read-only and thread-safe via duplicated buffer strategy.
  */
 public class SegmentReader implements AutoCloseable {
 
     private static final int ID_SIZE = 16;
-    private static final int HEADER_SIZE = ID_SIZE + 4 + 4; // ID_HASH + LENGTH + META_OFFSET
+    private static final int HEADER_SIZE = ID_SIZE + 4 + 4; // ID + length + metaOffset
     private static final int MAX_LENGTH = 65536;
 
     private final Path path;
     private final FileChannel channel;
     private final MappedByteBuffer mmap;
+    private final BinaryHeader header;
 
     /**
      * Constructs a SegmentReader over a memory-mapped segment file.
@@ -51,6 +54,12 @@ public class SegmentReader implements AutoCloseable {
         try {
             this.channel = FileChannel.open(path, StandardOpenOption.READ);
             this.mmap = channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size());
+
+            // Read header
+            ByteBuffer headerBuf = mmap.duplicate();
+            headerBuf.position(0);
+            this.header = BinaryHeader.from(headerBuf);
+
         } catch (IOException e) {
             throw new RuntimeException("Failed to map segment: " + path, e);
         }
@@ -59,7 +68,7 @@ public class SegmentReader implements AutoCloseable {
     /**
      * Reads a WavePattern from a given offset.
      *
-     * @param offset byte offset inside the segment file
+     * @param offset byte offset inside the segment file (must be ≥ BinaryHeader.SIZE)
      * @return reconstructed WavePattern
      */
     public WavePattern readAt(long offset) {
@@ -96,14 +105,13 @@ public class SegmentReader implements AutoCloseable {
 
     /**
      * Reads all valid (non-deleted) WavePatterns with their IDs from the segment.
-     * Entries with tombstone marker (0x00) at the first byte are skipped.
      *
      * @return list of valid patterns with their IDs
      */
     public List<PatternWithId> readAllWithId() {
         List<PatternWithId> result = new ArrayList<>();
         ByteBuffer buf = mmap.duplicate();
-        buf.position(0);
+        buf.position(BinaryHeader.SIZE); // skip file header
 
         while (buf.remaining() >= HEADER_SIZE) {
             int entryStart = buf.position();
@@ -111,9 +119,9 @@ public class SegmentReader implements AutoCloseable {
 
             // Check tombstone
             if (firstByte == 0x00) {
-                buf.position(entryStart + 1); // skip tombstone byte
+                buf.position(entryStart + 1); // skip 0x00 marker
                 byte[] skipId = new byte[ID_SIZE - 1];
-                buf.get(skipId); // skip remaining ID
+                buf.get(skipId);
                 int len = buf.getInt();
                 int skip = HEADER_SIZE + len * 2 * Double.BYTES;
                 buf.position(entryStart + skip);
@@ -140,9 +148,14 @@ public class SegmentReader implements AutoCloseable {
     }
 
     /**
+     * Returns the parsed segment file header.
+     */
+    public BinaryHeader getHeader() {
+        return header;
+    }
+
+    /**
      * Returns the path of this segment file.
-     *
-     * @return path to .segment
      */
     public Path getPath() {
         return path;
@@ -150,7 +163,6 @@ public class SegmentReader implements AutoCloseable {
 
     /**
      * Closes the underlying file channel.
-     * Memory-mapped buffer will be GC'd.
      */
     @Override
     public void close() throws IOException {

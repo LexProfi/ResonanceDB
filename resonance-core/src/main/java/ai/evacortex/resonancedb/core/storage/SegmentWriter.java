@@ -9,9 +9,12 @@
 package ai.evacortex.resonancedb.core.storage;
 
 import ai.evacortex.resonancedb.core.WavePattern;
+import ai.evacortex.resonancedb.core.io.format.BinaryHeader;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
@@ -23,11 +26,12 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 /**
  * SegmentWriter is responsible for low-level binary serialization and storage
  * of {@link WavePattern} entries into a memory-mapped segment file (.segment).
- *
+
+ * Each segment starts with a {@link BinaryHeader}.
  * Each entry layout:
  *   [ID_HASH (16 bytes)] [LENGTH (4 bytes)] [META_OFFSET (4 bytes)]
  *   [AMPLITUDES (8 * len bytes)] [PHASES (8 * len bytes)]
- *
+
  * Thread-safe: uses ReentrantReadWriteLock for concurrent read/write access.
  */
 public class SegmentWriter implements AutoCloseable {
@@ -42,6 +46,8 @@ public class SegmentWriter implements AutoCloseable {
     private MappedByteBuffer buffer;
     private final AtomicLong writeOffset;
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
+    private final boolean isNew;
+    private int recordCount = 0;
 
     /**
      * Creates a new SegmentWriter bound to a specific .segment file.
@@ -58,9 +64,24 @@ public class SegmentWriter implements AutoCloseable {
             RandomAccessFile raf = new RandomAccessFile(path.toFile(), "rw");
             this.channel = raf.getChannel();
 
+            this.isNew = channel.size() == 0;
             long size = Math.max(INITIAL_CAPACITY, channel.size());
             this.buffer = channel.map(FileChannel.MapMode.READ_WRITE, 0, size);
-            this.writeOffset = new AtomicLong(channel.size());
+
+            if (isNew) {
+                BinaryHeader header = new BinaryHeader(1, System.currentTimeMillis(), 0);
+                buffer.put(header.toBytes());
+                this.writeOffset = new AtomicLong(BinaryHeader.SIZE);
+            } else {
+                ByteBuffer hdr = buffer.duplicate();
+                hdr.order(ByteOrder.LITTLE_ENDIAN);
+                hdr.position(0);
+                hdr.getInt();      // version
+                hdr.getLong();     // timestamp
+                this.recordCount = hdr.getInt();
+                this.writeOffset = new AtomicLong(channel.size());
+            }
+
         } catch (IOException e) {
             throw new RuntimeException("Failed to initialize segment writer", e);
         }
@@ -78,7 +99,7 @@ public class SegmentWriter implements AutoCloseable {
     public long write(String id, WavePattern pattern, Map<String, String> metadata) {
         lock.writeLock().lock();
         try {
-            byte[] idHash = HashingUtil.md5(id); // 16 bytes
+            byte[] idHash = HashingUtil.md5(id);
             double[] amp = pattern.amplitude();
             double[] phase = pattern.phase();
 
@@ -92,11 +113,12 @@ public class SegmentWriter implements AutoCloseable {
 
             buffer.put(idHash);     // 16-byte MD5
             buffer.putInt(len);     // number of elements
-            buffer.putInt(-1);      // placeholder for metadata offset (external store)
+            buffer.putInt(-1);      // placeholder for metadata offset
 
             for (double v : amp) buffer.putDouble(v);
             for (double v : phase) buffer.putDouble(v);
 
+            recordCount++;
             return offset;
         } finally {
             lock.writeLock().unlock();
@@ -117,36 +139,19 @@ public class SegmentWriter implements AutoCloseable {
         }
     }
 
-    /**
-     * Returns the name of the segment (filename).
-     *
-     * @return segment file name
-     */
     public String getSegmentName() {
         return segmentName;
     }
 
-    /**
-     * Ensures alignment to 8-byte boundary for proper memory layout.
-     *
-     * @param size Size to align
-     * @return Aligned size (multiple of ALIGNMENT)
-     */
     private int align(int size) {
         return ((size + ALIGNMENT - 1) / ALIGNMENT) * ALIGNMENT;
     }
 
-    /**
-     * Ensures the buffer can accommodate the requested size.
-     * Remaps the file if capacity is insufficient.
-     *
-     * @param requiredCapacity required position after writing
-     */
     private void ensureCapacity(long requiredCapacity) {
         if (requiredCapacity > buffer.capacity()) {
             try {
                 long newSize = Math.max(buffer.capacity() * 2L, requiredCapacity);
-                buffer.force(); // flush before remapping
+                buffer.force();
                 this.buffer = channel.map(FileChannel.MapMode.READ_WRITE, 0, newSize);
             } catch (IOException e) {
                 throw new RuntimeException("Failed to remap segment buffer", e);
@@ -154,30 +159,25 @@ public class SegmentWriter implements AutoCloseable {
         }
     }
 
-    /**
-     * Returns the path of the segment file on disk.
-     *
-     * @return path to segment
-     */
     public Path getPath() {
         return path;
     }
 
-    /**
-     * Flushes memory-mapped buffer to disk.
-     */
     public void flush() {
         lock.writeLock().lock();
         try {
+            // update BinaryHeader with new recordCount
+            buffer.position(0);
+            buffer.putInt(1); // version
+            buffer.putLong(System.currentTimeMillis()); // updated timestamp
+            buffer.putInt(recordCount); // updated count
+
             buffer.force();
         } finally {
             lock.writeLock().unlock();
         }
     }
 
-    /**
-     * Closes the file channel and flushes pending data.
-     */
     @Override
     public void close() {
         lock.writeLock().lock();
