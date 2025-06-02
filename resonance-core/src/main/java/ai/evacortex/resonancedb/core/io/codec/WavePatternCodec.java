@@ -15,46 +15,25 @@ import java.nio.ByteOrder;
 
 public class WavePatternCodec {
 
-    private static final int MAGIC = 0x57565750; // 'WAVP'
+    private static final int MAGIC = 0x57565750;
     private static final ByteOrder ORDER = ByteOrder.LITTLE_ENDIAN;
 
-    /**
-     * Serializes the pattern into a new byte array (used in CLI/tools).
-     */
-    public static byte[] serialize(WavePattern pattern) {
-        ByteBuffer buf = ByteBuffer.allocate(estimateSize(pattern)).order(ORDER);
-        writeTo(buf, pattern);
-        return buf.array();
-    }
-
-    /**
-     * Deserializes a pattern from a byte array (used in CLI/tools).
-     */
-    public static WavePattern deserialize(byte[] data) {
-        ByteBuffer buf = ByteBuffer.wrap(data).order(ORDER);
-        return readFrom(buf);
-    }
-
-    /**
-     * Writes the pattern to an existing ByteBuffer (used in mmap storage).
-     */
-    public static void writeTo(ByteBuffer buf, WavePattern pattern) {
+    public static void writeTo(ByteBuffer buf, WavePattern pattern, boolean withMagic) {
         double[] amp = pattern.amplitude();
         double[] phase = pattern.phase();
         int len = amp.length;
 
-        buf.putInt(MAGIC);
+        if (withMagic) buf.putInt(MAGIC);
         buf.putInt(len);
         for (double v : amp) buf.putDouble(v);
         for (double v : phase) buf.putDouble(v);
     }
 
-    /**
-     * Reads a pattern from the current position of ByteBuffer.
-     */
-    public static WavePattern readFrom(ByteBuffer buf) {
-        int magic = buf.getInt();
-        if (magic != MAGIC) throw new IllegalArgumentException("Invalid pattern header");
+    public static WavePattern readFrom(ByteBuffer buf, boolean withMagic) {
+        if (withMagic) {
+            int magic = buf.getInt();
+            if (magic != MAGIC) throw new IllegalArgumentException("Invalid pattern header");
+        }
 
         int len = buf.getInt();
         double[] amp = new double[len];
@@ -66,10 +45,24 @@ public class WavePatternCodec {
         return new WavePattern(amp, phase);
     }
 
-    /**
-     * Estimates the byte size of the serialized pattern.
-     */
-    public static int estimateSize(WavePattern pattern) {
-        return 4 + 4 + 8 * 2 * pattern.amplitude().length;
+    public static byte[] serialize(WavePattern pattern) {
+        ByteBuffer buf = ByteBuffer.allocate(estimateSize(pattern, true)).order(ORDER);
+        writeTo(buf, pattern, true);
+        return buf.array();
+    }
+
+    public static WavePattern deserialize(byte[] data) {
+        ByteBuffer buf = ByteBuffer.wrap(data).order(ORDER);
+        return readFrom(buf, true);
+    }
+
+    public static int estimateSize(WavePattern pattern, boolean withMagic) {
+        int base = 4 * 2 + 8 * 2 * pattern.amplitude().length;
+        return withMagic ? base + 4 : base;
+    }
+
+    public static int estimateSize(int length, boolean withMagic) {
+        int base = 4 + 8 * 2 * length;
+        return withMagic ? base + 4 : base;
     }
 }

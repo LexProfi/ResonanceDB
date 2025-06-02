@@ -9,6 +9,7 @@
 package ai.evacortex.resonancedb.core.storage;
 
 import ai.evacortex.resonancedb.core.WavePattern;
+import ai.evacortex.resonancedb.core.io.codec.WavePatternCodec;
 import ai.evacortex.resonancedb.core.io.format.BinaryHeader;
 
 import java.io.IOException;
@@ -24,12 +25,11 @@ import java.util.List;
 /**
  * SegmentReader allows reading serialized {@link WavePattern}s
  * from a memory-mapped .segment file produced by {@link SegmentWriter}.
-
+ *
  * Each segment starts with a {@link BinaryHeader}.
  * Each entry layout:
- *   [ID_HASH (16 bytes)] [LENGTH (4 bytes)] [META_OFFSET (4 bytes)]
- *   [AMPLITUDES] [PHASES]
-
+ *   [ID_HASH (16 bytes)] [LENGTH (4 bytes)] [META_OFFSET (4 bytes)] [WavePattern binary]
+ *
  * Deleted entries (tombstones) are marked with 0x00 at the first byte.
  * This class is read-only and thread-safe via duplicated buffer strategy.
  */
@@ -44,11 +44,6 @@ public class SegmentReader implements AutoCloseable {
     private final MappedByteBuffer mmap;
     private final BinaryHeader header;
 
-    /**
-     * Constructs a SegmentReader over a memory-mapped segment file.
-     *
-     * @param path path to the .segment file
-     */
     public SegmentReader(Path path) {
         this.path = path;
         try {
@@ -65,22 +60,10 @@ public class SegmentReader implements AutoCloseable {
         }
     }
 
-    /**
-     * Reads a WavePattern from a given offset.
-     *
-     * @param offset byte offset inside the segment file (must be ≥ BinaryHeader.SIZE)
-     * @return reconstructed WavePattern
-     */
     public WavePattern readAt(long offset) {
         return readWithId(offset).pattern();
     }
 
-    /**
-     * Reads WavePattern and its 16-byte hex ID from a given offset.
-     *
-     * @param offset file offset to start reading
-     * @return PatternWithId record containing ID and WavePattern
-     */
     public PatternWithId readWithId(long offset) {
         ByteBuffer buf = mmap.duplicate();
         buf.position((int) offset);
@@ -95,19 +78,18 @@ public class SegmentReader implements AutoCloseable {
             throw new IllegalStateException("Corrupted pattern length at offset " + offset);
         }
 
-        double[] amp = new double[len];
-        double[] phase = new double[len];
-        for (int i = 0; i < len; i++) amp[i] = buf.getDouble();
-        for (int i = 0; i < len; i++) phase[i] = buf.getDouble();
+        int patternBytes = WavePatternCodec.estimateSize(len, false);
+        if (buf.remaining() < patternBytes) {
+            throw new IllegalStateException("Insufficient bytes to decode pattern at offset " + offset);
+        }
 
-        return new PatternWithId(bytesToHex(idBytes), new WavePattern(amp, phase));
+        ByteBuffer slice = buf.slice();
+        slice.limit(patternBytes);
+        WavePattern pattern = WavePatternCodec.readFrom(slice, false);
+
+        return new PatternWithId(bytesToHex(idBytes), pattern);
     }
 
-    /**
-     * Reads all valid (non-deleted) WavePatterns with their IDs from the segment.
-     *
-     * @return list of valid patterns with their IDs
-     */
     public List<PatternWithId> readAllWithId() {
         List<PatternWithId> result = new ArrayList<>();
         ByteBuffer buf = mmap.duplicate();
@@ -117,53 +99,46 @@ public class SegmentReader implements AutoCloseable {
             int entryStart = buf.position();
             byte firstByte = buf.get(entryStart);
 
-            // Check tombstone
             if (firstByte == 0x00) {
-                buf.position(entryStart + 1); // skip 0x00 marker
+                buf.position(entryStart + 1);
                 byte[] skipId = new byte[ID_SIZE - 1];
                 buf.get(skipId);
                 int len = buf.getInt();
-                int skip = HEADER_SIZE + len * 2 * Double.BYTES;
-                buf.position(entryStart + skip);
+                buf.getInt(); // metaOffset
+                int skipBytes = HEADER_SIZE + WavePatternCodec.estimateSize(len, false);
+                buf.position(entryStart + skipBytes);
                 continue;
             }
 
             byte[] idBytes = new byte[ID_SIZE];
             buf.get(idBytes);
-
             int len = buf.getInt();
             buf.getInt(); // skip metaOffset
 
-            if (len <= 0 || len > MAX_LENGTH || buf.remaining() < len * 2 * Double.BYTES) break;
+            if (len <= 0 || len > MAX_LENGTH || buf.remaining() < WavePatternCodec.estimateSize(len, false)) {
+                break; // malformed or incomplete
+            }
 
-            double[] amp = new double[len];
-            double[] phase = new double[len];
-            for (int i = 0; i < len; i++) amp[i] = buf.getDouble();
-            for (int i = 0; i < len; i++) phase[i] = buf.getDouble();
+            ByteBuffer slice = buf.slice();
+            int size = WavePatternCodec.estimateSize(len, false);
+            slice.limit(size);
+            WavePattern pattern = WavePatternCodec.readFrom(slice, false);
+            buf.position(buf.position() + size);
 
-            result.add(new PatternWithId(bytesToHex(idBytes), new WavePattern(amp, phase)));
+            result.add(new PatternWithId(bytesToHex(idBytes), pattern));
         }
 
         return result;
     }
 
-    /**
-     * Returns the parsed segment file header.
-     */
     public BinaryHeader getHeader() {
         return header;
     }
 
-    /**
-     * Returns the path of this segment file.
-     */
     public Path getPath() {
         return path;
     }
 
-    /**
-     * Closes the underlying file channel.
-     */
     @Override
     public void close() throws IOException {
         channel.close();
@@ -175,11 +150,5 @@ public class SegmentReader implements AutoCloseable {
         return sb.toString();
     }
 
-    /**
-     * Result of reading a pattern with ID.
-     *
-     * @param id      16-byte hex content hash
-     * @param pattern reconstructed WavePattern
-     */
     public record PatternWithId(String id, WavePattern pattern) {}
 }
