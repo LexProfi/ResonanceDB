@@ -14,6 +14,7 @@ import ai.evacortex.resonancedb.core.io.format.BinaryHeader;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
@@ -33,11 +34,12 @@ import java.util.List;
  * Deleted entries (tombstones) are marked with 0x00 at the first byte.
  * This class is read-only and thread-safe via duplicated buffer strategy.
  */
-public class SegmentReader implements AutoCloseable {
+public final class SegmentReader implements AutoCloseable {
 
     private static final int ID_SIZE = 16;
-    private static final int HEADER_SIZE = ID_SIZE + 4 + 4; // ID + length + metaOffset
-    private static final int MAX_LENGTH = 65536;
+    private static final int HEADER_SIZE = ID_SIZE + 4 + 4;
+    private static final int MAX_LENGTH = 65_536;
+    private static final int ALIGNMENT = 8;
 
     private final Path path;
     private final FileChannel channel;
@@ -50,10 +52,9 @@ public class SegmentReader implements AutoCloseable {
             this.channel = FileChannel.open(path, StandardOpenOption.READ);
             this.mmap = channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size());
 
-            // Read header
-            ByteBuffer headerBuf = mmap.duplicate();
-            headerBuf.position(0);
-            this.header = BinaryHeader.from(headerBuf);
+            ByteBuffer hdrBuf = mmap.duplicate().order(ByteOrder.LITTLE_ENDIAN);
+            hdrBuf.position(0);
+            this.header = BinaryHeader.from(hdrBuf);
 
         } catch (IOException e) {
             throw new RuntimeException("Failed to map segment: " + path, e);
@@ -65,69 +66,82 @@ public class SegmentReader implements AutoCloseable {
     }
 
     public PatternWithId readWithId(long offset) {
-        ByteBuffer buf = mmap.duplicate();
-        buf.position((int) offset);
-
-        byte[] idBytes = new byte[ID_SIZE];
-        buf.get(idBytes);
-
-        int len = buf.getInt();
-        buf.getInt(); // skip metaOffset
-
-        if (len <= 0 || len > MAX_LENGTH) {
-            throw new IllegalStateException("Corrupted pattern length at offset " + offset);
+        if (offset < 0 || offset + HEADER_SIZE >= header.lastOffset()) {
+            throw new IllegalArgumentException("Offset out of segment bounds: " + offset);
         }
 
+        ByteBuffer buf = mmap.duplicate().order(ByteOrder.LITTLE_ENDIAN);
+        buf.position((int) offset);
+        if (buf.get(buf.position()) == 0x00) {
+            throw new IllegalStateException("Tombstone entry at offset " + offset);
+        }
+        byte[] idBytes = new byte[ID_SIZE];
+        buf.get(idBytes);
+        int len = buf.getInt();
+        buf.getInt();
+        if (len <= 0 || len > MAX_LENGTH) {
+            throw new IllegalStateException("Invalid pattern length at offset " + offset);
+        }
         int patternBytes = WavePatternCodec.estimateSize(len, false);
         if (buf.remaining() < patternBytes) {
             throw new IllegalStateException("Insufficient bytes to decode pattern at offset " + offset);
         }
 
-        ByteBuffer slice = buf.slice();
-        slice.limit(patternBytes);
-        WavePattern pattern = WavePatternCodec.readFrom(slice, false);
+        ByteBuffer patternBuf = buf.slice();
+        patternBuf.limit(patternBytes);
+        WavePattern pattern = WavePatternCodec.readFrom(patternBuf,  false);
 
-        return new PatternWithId(bytesToHex(idBytes), pattern);
+        return new PatternWithId(bytesToHex(idBytes), pattern, offset);
     }
 
     public List<PatternWithId> readAllWithId() {
         List<PatternWithId> result = new ArrayList<>();
-        ByteBuffer buf = mmap.duplicate();
-        buf.position(BinaryHeader.SIZE); // skip file header
+        ByteBuffer buf = mmap.duplicate().order(ByteOrder.LITTLE_ENDIAN);
+        buf.position(BinaryHeader.SIZE);
 
-        while (buf.remaining() >= HEADER_SIZE) {
+        while (buf.position() < header.lastOffset()) {
             int entryStart = buf.position();
+            if (buf.remaining() < HEADER_SIZE) break;
             byte firstByte = buf.get(entryStart);
-
             if (firstByte == 0x00) {
-                buf.position(entryStart + 1);
-                byte[] skipId = new byte[ID_SIZE - 1];
-                buf.get(skipId);
+                buf.position(entryStart + ID_SIZE);
+                if (buf.remaining() < 8) break;
                 int len = buf.getInt();
-                buf.getInt(); // metaOffset
-                int skipBytes = HEADER_SIZE + WavePatternCodec.estimateSize(len, false);
-                buf.position(entryStart + skipBytes);
+                buf.getInt();
+                if (len <= 0 || len > MAX_LENGTH) break;
+                int skip = align(HEADER_SIZE + WavePatternCodec.estimateSize(len, false));
+                buf.position(entryStart + skip);
                 continue;
             }
 
+            buf.position(entryStart);
             byte[] idBytes = new byte[ID_SIZE];
             buf.get(idBytes);
             int len = buf.getInt();
-            buf.getInt(); // skip metaOffset
-
-            if (len <= 0 || len > MAX_LENGTH || buf.remaining() < WavePatternCodec.estimateSize(len, false)) {
-                break; // malformed or incomplete
+            buf.getInt();
+            if (len <= 0 || len > MAX_LENGTH) {
+                System.err.printf("Invalid pattern length %d at offset %d%n", len, entryStart);
+                break;
             }
 
-            ByteBuffer slice = buf.slice();
-            int size = WavePatternCodec.estimateSize(len, false);
-            slice.limit(size);
-            WavePattern pattern = WavePatternCodec.readFrom(slice, false);
-            buf.position(buf.position() + size);
+            int patternSize = WavePatternCodec.estimateSize(len, false);
+            if (buf.remaining() < patternSize) {
+                System.err.printf("Not enough bytes for pattern (need %d) at %d%n",
+                        patternSize, buf.position());
+                break;
+            }
 
-            result.add(new PatternWithId(bytesToHex(idBytes), pattern));
+            ByteBuffer patternSlice = buf.slice();
+            patternSlice.limit(patternSize);
+            WavePattern pattern = WavePatternCodec.readFrom(patternSlice, false);
+
+            int skip = align(HEADER_SIZE + patternSize);
+            buf.position(entryStart + skip);
+
+            result.add(new PatternWithId(bytesToHex(idBytes), pattern, entryStart));
         }
 
+        System.out.println("OK readAllWithId returned " + result.size() + " entries");
         return result;
     }
 
@@ -137,6 +151,10 @@ public class SegmentReader implements AutoCloseable {
 
     public Path getPath() {
         return path;
+    }
+
+    private static int align(int size) {
+        return ((size + ALIGNMENT - 1) / ALIGNMENT) * ALIGNMENT;
     }
 
     @Override
@@ -150,5 +168,5 @@ public class SegmentReader implements AutoCloseable {
         return sb.toString();
     }
 
-    public record PatternWithId(String id, WavePattern pattern) {}
+    public record PatternWithId(String id, WavePattern pattern, long offset) {}
 }

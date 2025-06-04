@@ -63,7 +63,7 @@ public class ManifestIndex implements Closeable {
                         phaseCenter = 0.0;
                     }
                     idx.map.put(id, new PatternLocation(segment, offset, phaseCenter));
-                    idx.knownSegments.add(segment); // Ensure consistency
+                    idx.knownSegments.add(segment);
                 }
             } catch (IOException e) {
                 Path backup = path.resolveSibling(path.getFileName().toString() + ".bak");
@@ -174,6 +174,8 @@ public class ManifestIndex implements Closeable {
 
     private void persistToFile() {
         try {
+            Files.createDirectories(indexFile.getParent());
+
             if (Files.exists(indexFile)) {
                 Path backup = indexFile.resolveSibling(indexFile.getFileName().toString() + ".bak");
                 Files.copy(indexFile, backup, StandardCopyOption.REPLACE_EXISTING);
@@ -201,6 +203,17 @@ public class ManifestIndex implements Closeable {
             }
         } catch (IOException e) {
             throw new RuntimeException("Failed to write manifest index", e);
+        }
+    }
+
+    public void ensureFileExists() {
+        try {
+            Files.createDirectories(indexFile.getParent());
+            if (!Files.exists(indexFile)) {
+                Files.createFile(indexFile);
+            }
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to ensure manifest index file exists", e);
         }
     }
 

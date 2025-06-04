@@ -89,9 +89,15 @@ public class PhaseShardSelector {
         double min = avgPhase - epsilon;
         double max = avgPhase + epsilon;
 
-        return new ArrayList<>(phaseShardMap.subMap(min, true, max, true).values());
-    }
+        Collection<String> rangeHits = phaseShardMap
+                .subMap(min, true, max, true)
+                .values();
 
+        if (!rangeHits.isEmpty()) {
+            return new ArrayList<>(rangeHits);
+        }
+        return new ArrayList<>(phaseShardMap.values());
+    }
     /**
      * Returns the (min, max) phase range used for querying.
      */
@@ -109,27 +115,42 @@ public class PhaseShardSelector {
      */
     public List<String> allShards() {
         if (!useExplicitRanges) {
-            return Collections.unmodifiableList(
-                    new ArrayList<>() {{
-                        for (int i = 0; i < totalShards; i++) {
-                            add("phase-" + i + ".segment");
-                        }
-                    }}
-            );
+            List<String> result = new ArrayList<>(totalShards);
+            for (int i = 0; i < totalShards; i++) {
+                result.add("phase-" + i + ".segment");
+            }
+            return Collections.unmodifiableList(result);
         }
         return new ArrayList<>(phaseShardMap.values());
     }
 
     /**
      * Builds a PhaseShardSelector using ManifestIndex data.
-     * Assumes range-based routing by clustering phase centers.
+     * Aggregates segmentName → average(phaseCenter) and maps that to segment.
      */
     public static PhaseShardSelector fromManifest(Collection<ManifestIndex.PatternLocation> locations, double epsilon) {
-        TreeMap<Double, String> map = new TreeMap<>();
+        // Group: segmentName → list of phaseCenters
+        Map<String, List<Double>> grouped = new HashMap<>();
         for (ManifestIndex.PatternLocation loc : locations) {
-            map.put(loc.phaseCenter(), loc.segmentName());
+            grouped.computeIfAbsent(loc.segmentName(), k -> new ArrayList<>()).add(loc.phaseCenter());
         }
+
+        TreeMap<Double, String> map = new TreeMap<>();
+        for (Map.Entry<String, List<Double>> entry : grouped.entrySet()) {
+            String segment = entry.getKey();
+            List<Double> phases = entry.getValue();
+            double avg = phases.stream().mapToDouble(d -> d).average().orElse(0.0);
+            map.put(avg, segment);
+        }
+
         return new PhaseShardSelector(map, epsilon);
+    }
+
+    /**
+     * Fallback selector that maps all patterns to a default shard.
+     */
+    public static PhaseShardSelector emptyFallback() {
+        return new PhaseShardSelector(Map.of(0.0, "phase-0.segment"), Math.PI);
     }
 
     @Override

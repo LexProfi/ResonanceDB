@@ -12,10 +12,9 @@ import java.util.List;
 import java.util.Map;
 
 public interface ResonanceStore {
-    void insert(String id, WavePattern psi, Map<String, String> metadata);
-    String insert(WavePattern psi);
+    String insert(WavePattern psi, Map<String, String> metadata);
     void delete(String id);
-    void update(String id, WavePattern psi);
+    void update(String id, WavePattern psi, Map<String, String> metadata);
     List<ResonanceMatch> query(WavePattern query, int topK);
     float compare(WavePattern a, WavePattern b);
 }

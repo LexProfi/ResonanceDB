@@ -23,16 +23,18 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 /**
  * PatternMetaStore is responsible for storing and retrieving
  * metadata associated with WavePattern entries.
- *
+
  * Metadata is stored as a JSON map: id → {key → value}.
  * The store is thread-safe and supports atomic persistence to disk.
  */
 public class PatternMetaStore {
 
     private final Path metaFile;
-    private final Map<String, Map<String, String>> store;
+    private final Map<String, PatternMeta> store;
     private final ObjectMapper mapper;
     private final ReentrantReadWriteLock rwLock;
+
+    public record PatternMeta(Map<String, String> metadata) {}
 
     /**
      * Loads an existing metadata file or creates a new empty store.
@@ -44,8 +46,8 @@ public class PatternMetaStore {
         PatternMetaStore metaStore = new PatternMetaStore(path);
         if (Files.exists(path)) {
             try (InputStream in = Files.newInputStream(path)) {
-                TypeReference<Map<String, Map<String, String>>> typeRef = new TypeReference<>() {};
-                Map<String, Map<String, String>> loaded = metaStore.mapper.readValue(in, typeRef);
+                TypeReference<Map<String, PatternMeta>> typeRef = new TypeReference<>() {};
+                Map<String, PatternMeta> loaded = metaStore.mapper.readValue(in, typeRef);
                 synchronized (metaStore.store) {
                     metaStore.store.putAll(loaded);
                 }
@@ -64,16 +66,15 @@ public class PatternMetaStore {
     }
 
     /**
-     * Adds or updates metadata for a given ID.
-     * Persists the store after modification.
+     * Adds or updates metadata with explicit rawId. Persists the store after modification.
      *
-     * @param id       the WavePattern ID
-     * @param metadata the metadata map
+     * @param hashId SHA-256 ID of the pattern
+     * @param metadata arbitrary metadata map
      */
-    public void put(String id, Map<String, String> metadata) {
+    public void put(String hashId, Map<String, String> metadata) {
         rwLock.writeLock().lock();
         try {
-            store.put(id, new HashMap<>(metadata));
+            store.put(hashId, new PatternMeta(new HashMap<>(metadata)));
             flush();
         } finally {
             rwLock.writeLock().unlock();
@@ -81,14 +82,14 @@ public class PatternMetaStore {
     }
 
     /**
-     * Removes metadata for a given ID and persists the change.
+     * Removes metadata for a given hash ID and persists the change.
      *
-     * @param id the pattern ID to remove
+     * @param hashId SHA-256 ID of the pattern
      */
-    public void remove(String id) {
+    public void remove(String hashId) {
         rwLock.writeLock().lock();
         try {
-            store.remove(id);
+            store.remove(hashId);
             flush();
         } finally {
             rwLock.writeLock().unlock();
@@ -96,31 +97,31 @@ public class PatternMetaStore {
     }
 
     /**
-     * Retrieves metadata for a given ID.
+     * Retrieves metadata for a given hash ID.
      *
-     * @param id the pattern ID
+     * @param hashId SHA-256 ID of the pattern
      * @return metadata map or null if not present
      */
-    public Map<String, String> get(String id) {
+    public Map<String, String> getMetadata(String hashId) {
         rwLock.readLock().lock();
         try {
-            Map<String, String> meta = store.get(id);
-            return meta != null ? new HashMap<>(meta) : null;
+            PatternMeta meta = store.get(hashId);
+            return meta != null ? new HashMap<>(meta.metadata()) : null;
         } finally {
             rwLock.readLock().unlock();
         }
     }
 
     /**
-     * Checks if metadata exists for the given ID.
+     * Checks if metadata exists for the given hash ID.
      *
-     * @param id pattern ID
+     * @param hashId SHA-256 ID of the pattern
      * @return true if present
      */
-    public boolean contains(String id) {
+    public boolean contains(String hashId) {
         rwLock.readLock().lock();
         try {
-            return store.containsKey(id);
+            return store.containsKey(hashId);
         } finally {
             rwLock.readLock().unlock();
         }
@@ -144,14 +145,14 @@ public class PatternMetaStore {
     }
 
     /**
-     * Returns the underlying metadata map (read-only copy).
+     * Returns a snapshot of the entire metadata map.
      */
-    public Map<String, Map<String, String>> snapshot() {
+    public Map<String, PatternMeta> snapshot() {
         rwLock.readLock().lock();
         try {
-            Map<String, Map<String, String>> copy = new HashMap<>();
+            Map<String, PatternMeta> copy = new HashMap<>();
             for (var entry : store.entrySet()) {
-                copy.put(entry.getKey(), new HashMap<>(entry.getValue()));
+                copy.put(entry.getKey(), new PatternMeta(new HashMap<>(entry.getValue().metadata())));
             }
             return copy;
         } finally {
@@ -160,9 +161,9 @@ public class PatternMetaStore {
     }
 
     /**
-     * Returns all IDs currently stored.
+     * Returns all hash IDs currently stored.
      *
-     * @return set of all pattern IDs
+     * @return set of all pattern ID hashes
      */
     public Set<String> getAllIds() {
         rwLock.readLock().lock();

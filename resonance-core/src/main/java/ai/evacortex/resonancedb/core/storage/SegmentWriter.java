@@ -20,7 +20,7 @@ import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Map;
+import java.util.HexFormat;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -36,9 +36,10 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  */
 public class SegmentWriter implements AutoCloseable {
 
-    private static final int FIXED_HEADER_SIZE = 16 + 4 + 4; // ID_HASH (16) + LEN (4) + META_OFFSET (4)
+    private static final int ID_SIZE = 16;
+    private static final int FIXED_HEADER_SIZE = 16 + 4 + 4;
     private static final int ALIGNMENT = 8;
-    private static final int INITIAL_CAPACITY = 4 * 1024 * 1024; // 4 MB
+    private static final int INITIAL_CAPACITY = 4 * 1024 * 1024;
 
     private final Path path;
     private final String segmentName;
@@ -46,7 +47,6 @@ public class SegmentWriter implements AutoCloseable {
     private MappedByteBuffer buffer;
     private final AtomicLong writeOffset;
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
-    private final boolean isNew;
     private int recordCount = 0;
 
     public SegmentWriter(Path path) {
@@ -58,97 +58,98 @@ public class SegmentWriter implements AutoCloseable {
             RandomAccessFile raf = new RandomAccessFile(path.toFile(), "rw");
             this.channel = raf.getChannel();
 
-            this.isNew = channel.size() == 0;
-            long size = Math.max(INITIAL_CAPACITY, channel.size());
-            this.buffer = channel.map(FileChannel.MapMode.READ_WRITE, 0, size);
+            boolean isNew = channel.size() == 0;
+            long mapSize = Math.max(INITIAL_CAPACITY, channel.size());
+            this.buffer = channel.map(FileChannel.MapMode.READ_WRITE, 0, mapSize);
+            this.buffer.order(ByteOrder.LITTLE_ENDIAN);
 
             if (isNew) {
-                BinaryHeader header = new BinaryHeader(1, System.currentTimeMillis(), 0);
+                BinaryHeader header = new BinaryHeader(1, System.currentTimeMillis(), 0, BinaryHeader.SIZE);
                 buffer.put(header.toBytes());
                 this.writeOffset = new AtomicLong(BinaryHeader.SIZE);
             } else {
-                ByteBuffer hdr = buffer.duplicate();
-                hdr.order(ByteOrder.LITTLE_ENDIAN);
+                ByteBuffer hdr = buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN);
                 hdr.position(0);
-                hdr.getInt();      // version
-                hdr.getLong();     // timestamp
+                int version = hdr.getInt();
+                long ts = hdr.getLong();
                 this.recordCount = hdr.getInt();
-                this.writeOffset = new AtomicLong(channel.size());
+                long lastOffset = hdr.getLong();
+                this.writeOffset = new AtomicLong(lastOffset);
             }
         } catch (IOException e) {
             throw new RuntimeException("Failed to initialize segment writer", e);
         }
     }
 
-    /**
-     * Writes a WavePattern entry with given ID and optional metadata.
-     *
-     * @param id       unique identifier for the pattern
-     * @param pattern  the WavePattern to serialize
-     * @param metadata optional metadata (currently unused)
-     * @return byte offset where pattern was written
-     */
-    public long write(String id, WavePattern pattern, Map<String, String> metadata) {
+    public long write(String hexId, WavePattern pattern) {
         lock.writeLock().lock();
         try {
-            byte[] idHash = HashingUtil.md5(id);
-
+            byte[] idBytes = HexFormat.of().parseHex(hexId);
+            if (idBytes.length != 16) {
+                throw new IllegalArgumentException("ID must be a 16-byte MD5 hex string (32 characters)");
+            }
             int patternSize = WavePatternCodec.estimateSize(pattern, false);
             int blockSize = FIXED_HEADER_SIZE + patternSize;
             int alignedSize = align(blockSize);
-            long offset = writeOffset.getAndAdd(alignedSize);
 
+            long offset = writeOffset.get();
             ensureCapacity(offset + alignedSize);
-            buffer.position((int) offset);
 
-            buffer.put(idHash);                           // 16-byte MD5
-            buffer.putInt(pattern.amplitude().length);    // pattern length
-            buffer.putInt(-1);                            // reserved metaOffset
+            buffer.position((int) offset);
+            buffer.put(idBytes);
+            buffer.putInt(pattern.amplitude().length);
+            buffer.putInt(-1);
 
             ByteBuffer tmpBuf = ByteBuffer.allocate(patternSize).order(ByteOrder.LITTLE_ENDIAN);
             WavePatternCodec.writeTo(tmpBuf, pattern, false);
             tmpBuf.flip();
             buffer.put(tmpBuf);
 
+            writeOffset.addAndGet(alignedSize);
             recordCount++;
+            buffer.position(0);
+            buffer.putInt(1);
+            buffer.putLong(System.currentTimeMillis());
+            buffer.putInt(recordCount);
+            buffer.putLong(writeOffset.get());
+            buffer.force(0, BinaryHeader.SIZE);
+            System.out.printf("Writing at offset %d (cap=%d)%n", offset, buffer.capacity());
             return offset;
         } finally {
             lock.writeLock().unlock();
         }
     }
 
-    /**
-     * Marks an entry at given offset as deleted (tombstone).
-     *
-     * @param offset offset of the entry to mark deleted
-     */
     public void markDeleted(long offset) {
         lock.writeLock().lock();
         try {
-            buffer.put((int) offset, (byte) 0x00);
+            if (offset < buffer.limit()) {
+                buffer.put((int) offset, (byte) 0x00);
+            } else {
+                throw new IllegalArgumentException("Offset exceeds segment capacity: " + offset);
+            }
         } finally {
             lock.writeLock().unlock();
         }
     }
 
-    public String getSegmentName() {
-        return segmentName;
+    public void unmarkDeleted(long offset) {
+        lock.writeLock().lock();
+        try {
+            buffer.position((int) offset + ID_SIZE + 4);
+            buffer.putInt(-1);
+            buffer.force();
+        } finally {
+            lock.writeLock().unlock();
+        }
     }
 
-    public Path getPath() {
-        return path;
-    }
-
-    /**
-     * Flushes header with current record count.
-     */
     public void flush() {
         lock.writeLock().lock();
         try {
             buffer.position(0);
-            buffer.putInt(1); // version
-            buffer.putLong(System.currentTimeMillis());
-            buffer.putInt(recordCount);
+            BinaryHeader header = new BinaryHeader(1, System.currentTimeMillis(), recordCount, writeOffset.get());
+            buffer.put(header.toBytes());
             buffer.force();
         } finally {
             lock.writeLock().unlock();
@@ -165,18 +166,34 @@ public class SegmentWriter implements AutoCloseable {
                 long newSize = Math.max(buffer.capacity() * 2L, requiredCapacity);
                 buffer.force();
                 this.buffer = channel.map(FileChannel.MapMode.READ_WRITE, 0, newSize);
+                this.buffer.order(ByteOrder.LITTLE_ENDIAN);
             } catch (IOException e) {
                 throw new RuntimeException("Failed to remap segment buffer", e);
             }
         }
     }
 
+    public String getSegmentName() {
+        return segmentName;
+    }
+
+    public Path getPath() {
+        return path;
+    }
+
     @Override
     public void close() {
         lock.writeLock().lock();
         try {
-            flush();
-            channel.close();
+            if (buffer != null) {
+                flush();
+                buffer.force();
+                Buffers.unmap(buffer);
+                buffer = null;
+            }
+            if (channel.isOpen()) {
+                channel.close();
+            }
         } catch (IOException e) {
             throw new RuntimeException("Failed to close segment writer", e);
         } finally {

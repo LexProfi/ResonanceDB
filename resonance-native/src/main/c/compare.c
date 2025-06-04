@@ -1,7 +1,13 @@
 #include <math.h>
-#include <immintrin.h> // AVX2
+#include <immintrin.h>
 #include <stddef.h>
 
+/**
+ * Compare two complex wave patterns using SIMD-accelerated AVX2 instructions.
+ * Formula used:
+ *   E = 0.5 * |ψ₁ + ψ₂|² / (|ψ₁|² + |ψ₂|²) * (2 * sqrt(E₁·E₂) / (E₁ + E₂))
+ * All inputs must be 32-bit aligned and of the same length.
+ */
 float compare_wave_patterns(const float* amp1, const float* phase1,
                             const float* amp2, const float* phase2,
                             int len) {
@@ -9,7 +15,66 @@ float compare_wave_patterns(const float* amp1, const float* phase1,
     float energyB = 0.0f;
     float interference = 0.0f;
 
-    for (int i = 0; i < len; i++) {
+    int i = 0;
+    const int step = 8;
+
+    for (; i <= len - step; i += step) {
+        // Load 8 floats per array
+        __m256 a1 = _mm256_loadu_ps(&amp1[i]);
+        __m256 p1 = _mm256_loadu_ps(&phase1[i]);
+        __m256 a2 = _mm256_loadu_ps(&amp2[i]);
+        __m256 p2 = _mm256_loadu_ps(&phase2[i]);
+
+        // Convert to real and imaginary parts: r = A * cos(φ), i = A * sin(φ)
+        float p1_vals[8], p2_vals[8];
+        _mm256_storeu_ps(p1_vals, p1);
+        _mm256_storeu_ps(p2_vals, p2);
+
+        float cos1[8], sin1[8], cos2[8], sin2[8];
+        for (int j = 0; j < 8; ++j) {
+            sincosf(p1_vals[j], &sin1[j], &cos1[j]);
+            sincosf(p2_vals[j], &sin2[j], &cos2[j]);
+        }
+
+        __m256 cs1 = _mm256_loadu_ps(cos1);
+        __m256 sn1 = _mm256_loadu_ps(sin1);
+        __m256 cs2 = _mm256_loadu_ps(cos2);
+        __m256 sn2 = _mm256_loadu_ps(sin2);
+
+        __m256 r1 = _mm256_mul_ps(a1, cs1);
+        __m256 i1 = _mm256_mul_ps(a1, sn1);
+        __m256 r2 = _mm256_mul_ps(a2, cs2);
+        __m256 i2 = _mm256_mul_ps(a2, sn2);
+
+        __m256 re = _mm256_add_ps(r1, r2);
+        __m256 im = _mm256_add_ps(i1, i2);
+
+        __m256 re2 = _mm256_mul_ps(re, re);
+        __m256 im2 = _mm256_mul_ps(im, im);
+        __m256 sumInterf = _mm256_add_ps(re2, im2);
+
+        __m256 r1_2 = _mm256_mul_ps(r1, r1);
+        __m256 i1_2 = _mm256_mul_ps(i1, i1);
+        __m256 r2_2 = _mm256_mul_ps(r2, r2);
+        __m256 i2_2 = _mm256_mul_ps(i2, i2);
+
+        __m256 eA = _mm256_add_ps(r1_2, i1_2);
+        __m256 eB = _mm256_add_ps(r2_2, i2_2);
+
+        // Horizontal sum
+        float tmp[8];
+        _mm256_storeu_ps(tmp, sumInterf);
+        for (int j = 0; j < 8; ++j) interference += tmp[j];
+
+        _mm256_storeu_ps(tmp, eA);
+        for (int j = 0; j < 8; ++j) energyA += tmp[j];
+
+        _mm256_storeu_ps(tmp, eB);
+        for (int j = 0; j < 8; ++j) energyB += tmp[j];
+    }
+
+    // Scalar fallback for tail
+    for (; i < len; ++i) {
         float r1 = amp1[i] * cosf(phase1[i]);
         float i1 = amp1[i] * sinf(phase1[i]);
         float r2 = amp2[i] * cosf(phase2[i]);
@@ -23,6 +88,15 @@ float compare_wave_patterns(const float* amp1, const float* phase1,
         energyB += r2 * r2 + i2 * i2;
     }
 
-    float denom = energyA + energyB;
-    return denom == 0.0f ? 0.0f : interference / denom;
+    float energySum = energyA + energyB;
+    if (energySum == 0.0f) return 0.0f;
+
+    float base = 0.5f * interference / energySum;
+    float ampFactor = 0.0f;
+
+    if (energyA > 0.0f && energyB > 0.0f) {
+        ampFactor = 2.0f * sqrtf(energyA * energyB) / energySum;
+    }
+
+    return base * ampFactor;
 }

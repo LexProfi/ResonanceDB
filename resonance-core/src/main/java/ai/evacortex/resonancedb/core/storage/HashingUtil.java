@@ -34,6 +34,9 @@ public class HashingUtil {
     }
 
     public static String computeContentHash(WavePattern pattern) {
+        if (pattern.amplitude().length != pattern.phase().length) {
+            throw new IllegalArgumentException("Amplitude and phase arrays must be of equal length.");
+        }
         MessageDigest digest = MD5_DIGEST.get();
         digest.reset();
 
@@ -48,6 +51,12 @@ public class HashingUtil {
 
         byte[] hash = digest.digest(buffer.array());
         return HexFormat.of().formatHex(hash);
+    }
+
+    public static byte[] parseAndValidateMd5(String hex) {
+        byte[] bytes = HexFormat.of().parseHex(hex);
+        if (bytes.length != 16) throw new IllegalArgumentException("Invalid MD5 hex length");
+        return bytes;
     }
 }
 
