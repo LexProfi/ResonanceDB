@@ -1,6 +1,6 @@
-> © 2025 Alexander Listopad  
-> Licensed under Creative Commons Attribution-NoDerivatives 4.0 International (CC BY-ND 4.0)  
-> This document is part of the ResonanceDB documentation set.  
+> © 2025 Alexander Listopad
+> Licensed under Creative Commons Attribution-NoDerivatives 4.0 International (CC BY-ND 4.0)
+> This document is part of the ResonanceDB documentation set.
 > This license applies to documentation only — not to the software, which is covered by the Prosperity Public License 3.0.
 
 # 🧠 Cognitive Resonance as a Field-Based Semantic Substrate
@@ -52,7 +52,7 @@ In ResonanceDB, this concept is realized when two waveforms produce **constructi
 We define isometric meaning as:
 
 $$
-compare(ψ_1, ψ_2) ≈ 1.0
+compare(\psi_1, \psi_2) \approx 1.0
 $$
 
 This is not merely similarity — it is **semantic equivalence through interference**.
@@ -66,14 +66,14 @@ This is not merely similarity — it is **semantic equivalence through interfere
 Each unit of meaning is encoded as a complex-valued function:
 
 $$
-ψ(x) = A(x) \cdot e^{i\varphi(x)}
+\psi(x) = A(x) \cdot e^{i\varphi(x)}
 $$
 
 Where:
 
-* $A(x)$: amplitude — intensity of semantic dimensions.
-* $\varphi(x)$: phase — contextual and modal influence.
-* $x$: internal axis of cognitive representation.
+* \$A(x)\$: amplitude — intensity of semantic dimensions.
+* \$\varphi(x)\$: phase — contextual and modal influence.
+* \$x\$: internal axis of cognitive representation.
 
 This encoding allows patterns to interfere, resonate, and exhibit field-like behavior.
 
@@ -87,13 +87,23 @@ Patterns are not atomic symbols. They are **excitations within a continuous cogn
 
 ### 4.1 Constructive Interference
 
-Given two patterns $ψ_1$ and $ψ_2$, we define resonance as:
+Given two patterns \$\psi\_1\$ and \$\psi\_2\$, we define resonance not as absolute energy of the summed waves, but as a **normalized constructive interference** metric:
 
 $$
-R(ψ_1, ψ_2) = \int |\psi_1(x) + \psi_2(x)|^2 dx
+R(\psi_1, \psi_2) = \frac{1}{2} \cdot \frac{|\psi_1(x) + \psi_2(x)|^2}{|\psi_1(x)|^2 + |\psi_2(x)|^2} \cdot \left( \frac{2 \cdot \sqrt{E_1 \cdot E_2}}{E_1 + E_2} \right)
 $$
 
-This represents the **energy of their joint wave**, modeling cognitive alignment more naturally than L2 or cosine distance.
+Where:
+
+* \$|\psi(x)|^2\$ is the local energy density,
+* \$E\_1\$ and \$E\_2\$ are total energies of each pattern,
+* the first term measures phase coherence,
+* the second term (\$A\$) balances amplitude asymmetry.
+
+This yields a score in $\[0.0, 1.0]\$, with:
+
+* \$R = 1.0\$ for perfect alignment (same amplitude, same phase),
+* \$R = 0.0\$ for destructive interference (\$\Delta\varphi = \pi\$).
 
 ### 4.2 Query as Probe
 
@@ -135,7 +145,7 @@ This allows integration with symbolic reasoning layers, without collapsing meani
 
 ### 6.2 Emotional & Modal State Encoding
 
-* Store affective patterns as ψ-forms.
+* Store affective patterns as \$\psi\$-forms.
 * Retrieve meaning that **resonates with internal state**.
 
 ### 6.3 AGI Memory Field
@@ -145,7 +155,7 @@ This allows integration with symbolic reasoning layers, without collapsing meani
 
 ### 6.4 Semantic Identity Maps
 
-* Each user/agent has a unique ψ-profile.
+* Each user/agent has a unique \$\psi\$-profile.
 * Used for **personalized retrieval**, identity verification, cognitive fingerprinting.
 
 ---
@@ -165,13 +175,13 @@ This allows integration with symbolic reasoning layers, without collapsing meani
 
 ## 🔭 8. Theoretical Foundations
 
-| Domain                   | Relation to ResonanceDB                                    |
-| ------------------------ | ---------------------------------------------------------- |
-| **Wave mechanics**       | ψ-patterns represent amplitude-phase interplay of meanings |
-| **Quantum cognition**    | Meaning retrieved by probabilistic resonance               |
-| **Field theory**         | Semantic field as dynamic substrate of excitation          |
-| **Information topology** | Meaning is shape, not position                             |
-| **Cognitive science**    | Supports intuition, emotion, and multimodal thought        |
+| Domain                   | Relation to ResonanceDB                                           |
+| ------------------------ | ----------------------------------------------------------------- |
+| **Wave mechanics**       | \$\psi\$-patterns represent amplitude-phase interplay of meanings |
+| **Quantum cognition**    | Meaning retrieved by probabilistic resonance                      |
+| **Field theory**         | Semantic field as dynamic substrate of excitation                 |
+| **Information topology** | Meaning is shape, not position                                    |
+| **Cognitive science**    | Supports intuition, emotion, and multimodal thought               |
 
 ---
 

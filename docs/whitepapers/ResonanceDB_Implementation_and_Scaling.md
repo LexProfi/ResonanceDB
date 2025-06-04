@@ -1,6 +1,6 @@
-> © 2025 Alexander Listopad  
-> Licensed under Creative Commons Attribution-NoDerivatives 4.0 International (CC BY-ND 4.0)  
-> This document is part of the ResonanceDB documentation set.  
+> © 2025 Alexander Listopad
+> Licensed under Creative Commons Attribution-NoDerivatives 4.0 International (CC BY-ND 4.0)
+> This document is part of the ResonanceDB documentation set.
 > This license applies to documentation only — not to the software, which is covered by the Prosperity Public License 3.0.
 
 # 🧱 ResonanceDB: Implementation and Scaling
@@ -56,14 +56,14 @@ Each `.segment` contains a flat binary serialization of WavePatterns:
 * pattern count (int32)
 * for each pattern:
 
-    * amplitude\[] (double \* N)
-    * phase\[] (double \* N)
+  * amplitude\[] (double \* N)
+  * phase\[] (double \* N)
 
 Serialization is little-endian. Deserialization must verify MAGIC header.
 
 ---
 
-## 🧭 4. Indexing and Manifest
+## 🗺️ 4. Indexing and Manifest
 
 The `manifest.idx` maintains:
 
@@ -83,42 +83,42 @@ This index allows:
 
 ```java
 public interface ResonanceStore {
-    void insert(String id, WavePattern psi, Map<String, String> metadata);
-    String insert(WavePattern psi);
+    String insert(WavePattern psi, Map<String, String> metadata);
     void delete(String id);
-    void update(String id, WavePattern psi);
+    void update(String id, WavePattern psi, Map<String, String> metadata);
     List<ResonanceMatch> query(WavePattern query, int topK);
     float compare(WavePattern a, WavePattern b);
 }
 ```
 
 ### Requirements:
-
-* `insert(id, …)` and `insert(…)` are logically independent.
-* Auto-ID must be stable (content hash or UUID).
 * All methods are thread-safe.
 * `compare()` is deterministic and stateless.
 
 ---
 
-## 🧮 6. Comparison Kernel
+## 🧲 6. Comparison Kernel
 
 ### 6.1 Resonance Equation
 
-Given two ψ-patterns:
+Given two ψ-patterns, the resonance energy is computed as:
 
 $$
-R(ψ_1, ψ_2) = \int |\psi_1(x) + \psi_2(x)|^2 dx
+R(\psi_1, \psi_2) = \frac{1}{2} \cdot \frac{|\psi_1(x) + \psi_2(x)|^2}{|\psi_1(x)|^2 + |\psi_2(x)|^2} \cdot \left( \frac{2 \cdot \sqrt{E_1 \cdot E_2}}{E_1 + E_2} \right)
 $$
 
 Steps:
 
 * Convert both patterns to complex\[]
 * Pointwise sum
-* Square magnitude and integrate
-* Optionally apply window function and normalization
+* Compute squared magnitude of interference
+* Normalize by combined energy
+* Apply amplitude balance factor
 
-Returns value in \[0.0 ... 1.0].
+This formula yields a result in \[0.0 ... 1.0], where:
+
+* 1.0 = full constructive interference (equal amplitude and phase)
+* 0.0 = full destructive interference (opposite phase)
 
 ---
 
@@ -156,7 +156,7 @@ Routing based on phase topology enables field-localized query acceleration.
 
 ---
 
-## 🪪 9. Error Handling
+## 🗰️ 9. Error Handling
 
 | Error Condition               | Exception                     |
 | ----------------------------- | ----------------------------- |
@@ -184,7 +184,7 @@ Routing based on phase topology enables field-localized query acceleration.
 
 ---
 
-## 🧾 12. Dependencies & Licensing
+## 🗂️ 12. Dependencies & Licensing
 
 * Language: **Java 17+**
 * Binary format: **custom codec** or FlatBuffers
