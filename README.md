@@ -91,6 +91,30 @@ public class Main {
     * You are on a supported OS (Linux/macOS); Windows requires `.dll`
 * When using **`JavaKernel`**, no native code is needed
 
+## 📦 Data Layout
+
+Each `.segment` file stores `WavePattern` entries in binary format:
+
+```
+[ID (16 bytes)] [Length (4 bytes)] [Meta Offset (4 bytes)] [Amplitude...] [Phase...]
+```
+
+* Memory-mapped I/O (`MappedByteBuffer`) is used for fast access.
+* Pattern metadata is stored separately in `pattern-meta.json`.
+* Index (`manifest.idx`) maps pattern IDs to their offsets and segment IDs.
+
+---
+
+## 🧭 Shard-Aware Routing
+
+Each `WavePattern` is assigned to a phase shard based on its average phase.  
+Routing is handled via the `PhaseShardSelector`:
+
+- **Explicit range map**: `[phaseStart .. phaseEnd] → segment`
+- **Fallback hash**: `hash(meanPhase) mod N`
+
+This enables scalable partitioning of stored waveforms and parallelized queries.
+
 ---
 
 ## 🗺 Roadmap
@@ -98,10 +122,10 @@ public class Main {
 * [x] Gradle multi-project structure (`core`, `native`, `cli`)
 * [x] Binary storage format (`.segment`, `manifest.idx`)
 * [x] `WavePattern` serialization and ID hashing
-* [x] Panama FFI integration (`compare()`)
+* [x] Panama FFI integration (`compare()` native backend)
 * [x] Configurable kernel backend (`JavaKernel`, `NativeKernel`)
-* [ ] `query(WavePattern, topK)` with scoring
-* [ ] Shard-aware routing and segment indexing
+* [x] `query(WavePattern, topK)` with scoring and self-match boost
+* [x] Shard-aware routing and phase-based segment indexing
 * [ ] CLI interface for insert/update/query
 * [ ] Thread-safe in-memory caches
 * [ ] Optional RocksDB index support
@@ -132,7 +156,7 @@ License terms will be updated upon filing.
 
 ## 📫 Contact
 
-* Author: [Alexander Listopad](mailto:license@evacortex.com)
+* Author: [Aleksandr Listopad](mailto:license@evacortex.com)
 * Security & Licensing: `license@evacortex.com`
 * SPDX Identifier: `SPDX-License-Identifier: Prosperity-3.0`
 
