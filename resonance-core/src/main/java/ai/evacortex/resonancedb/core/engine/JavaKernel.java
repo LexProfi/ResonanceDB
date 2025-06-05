@@ -11,6 +11,8 @@ package ai.evacortex.resonancedb.core.engine;
 import ai.evacortex.resonancedb.core.WavePattern;
 import ai.evacortex.resonancedb.core.math.Complex;
 
+import java.util.List;
+
 /**
  * {@code JavaKernel} provides a resonance-based similarity metric for comparing two {@link WavePattern}
  * instances, based on constructive interference of complex-valued waveforms.
@@ -39,8 +41,7 @@ import ai.evacortex.resonancedb.core.math.Complex;
  *
  * <p>{@link CompareOptions} can be used to enable or disable phase sensitivity and other
  * normalization strategies.</p>
- *
- * @author Alexander Listopad
+
  * @see ResonanceKernel
  * @see WavePattern
  */
@@ -60,8 +61,9 @@ public final class JavaKernel implements ResonanceKernel {
             throw new NullPointerException("patterns must not be null");
         }
 
-        Complex[] sa = a.toComplex();
-        Complex[] sb = b.toComplex();
+        Complex[] sa = toComplexWithOptions(a, options);
+        Complex[] sb = toComplexWithOptions(b, options);
+
         if (sa.length != sb.length) {
             throw new IllegalArgumentException("Mismatched lengths: " + sa.length + " vs " + sb.length);
         }
@@ -74,11 +76,6 @@ public final class JavaKernel implements ResonanceKernel {
             Complex c1 = sa[i];
             Complex c2 = sb[i];
 
-            if (options.ignorePhase()) {
-                c1 = new Complex(c1.abs(), 0.0);
-                c2 = new Complex(c2.abs(), 0.0);
-            }
-
             energyA      += c1.absSquared();
             energyB      += c2.absSquared();
             interference += c1.add(c2).absSquared();
@@ -90,5 +87,36 @@ public final class JavaKernel implements ResonanceKernel {
         double ampFactor = 2.0 * Math.sqrt(energyA * energyB) / (energyA + energyB);
 
         return (float) (base * ampFactor);
+    }
+
+    @Override
+    public float[] compareMany(WavePattern query, List<WavePattern> candidates) {
+        return compareMany(query, candidates, CompareOptions.defaultOptions());
+    }
+
+    @Override
+    public float[] compareMany(WavePattern query, List<WavePattern> candidates, CompareOptions options) {
+        if (query == null || candidates == null) {
+            throw new NullPointerException("query and candidates must not be null");
+        }
+
+        float[] results = new float[candidates.size()];
+        for (int i = 0; i < candidates.size(); i++) {
+            results[i] = compare(query, candidates.get(i), options);
+        }
+        return results;
+    }
+
+    private Complex[] toComplexWithOptions(WavePattern pattern, CompareOptions options) {
+        Complex[] complex = pattern.toComplex();
+
+        if (options.ignorePhase()) {
+            for (int i = 0; i < complex.length; i++) {
+                double mag = complex[i].abs();
+                complex[i] = new Complex(mag, 0.0);
+            }
+        }
+
+        return complex;
     }
 }

@@ -1,16 +1,21 @@
+/*
+ * ResonanceDB — Waveform Semantic Engine
+ * Copyright © 2025 Aleksandr Listopad
+ * SPDX-License-Identifier: Prosperity-3.0
+ *
+ * Patent notice: The authors intend to seek patent protection for this software.
+ * Commercial use >30 days → license@evacortex.com
+ */
 #include <math.h>
 #include <immintrin.h>
 #include <stddef.h>
 
 /**
- * Compare two complex wave patterns using SIMD-accelerated AVX2 instructions.
- * Formula used:
- *   E = 0.5 * |ψ₁ + ψ₂|² / (|ψ₁|² + |ψ₂|²) * (2 * sqrt(E₁·E₂) / (E₁ + E₂))
- * All inputs must be 32-bit aligned and of the same length.
+ * Compare two complex wave patterns using AVX2.
  */
-float compare_wave_patterns(const float* amp1, const float* phase1,
-                            const float* amp2, const float* phase2,
-                            int len) {
+EXPORT float compare_wave_patterns(const float* amp1, const float* phase1,
+                                   const float* amp2, const float* phase2,
+                                   int len) {
     float energyA = 0.0f;
     float energyB = 0.0f;
     float interference = 0.0f;
@@ -19,13 +24,11 @@ float compare_wave_patterns(const float* amp1, const float* phase1,
     const int step = 8;
 
     for (; i <= len - step; i += step) {
-        // Load 8 floats per array
         __m256 a1 = _mm256_loadu_ps(&amp1[i]);
         __m256 p1 = _mm256_loadu_ps(&phase1[i]);
         __m256 a2 = _mm256_loadu_ps(&amp2[i]);
         __m256 p2 = _mm256_loadu_ps(&phase2[i]);
 
-        // Convert to real and imaginary parts: r = A * cos(φ), i = A * sin(φ)
         float p1_vals[8], p2_vals[8];
         _mm256_storeu_ps(p1_vals, p1);
         _mm256_storeu_ps(p2_vals, p2);
@@ -61,8 +64,8 @@ float compare_wave_patterns(const float* amp1, const float* phase1,
         __m256 eA = _mm256_add_ps(r1_2, i1_2);
         __m256 eB = _mm256_add_ps(r2_2, i2_2);
 
-        // Horizontal sum
         float tmp[8];
+
         _mm256_storeu_ps(tmp, sumInterf);
         for (int j = 0; j < 8; ++j) interference += tmp[j];
 
@@ -73,7 +76,7 @@ float compare_wave_patterns(const float* amp1, const float* phase1,
         for (int j = 0; j < 8; ++j) energyB += tmp[j];
     }
 
-    // Scalar fallback for tail
+    // Scalar fallback for remaining elements
     for (; i < len; ++i) {
         float r1 = amp1[i] * cosf(phase1[i]);
         float i1 = amp1[i] * sinf(phase1[i]);
@@ -99,4 +102,15 @@ float compare_wave_patterns(const float* amp1, const float* phase1,
     }
 
     return base * ampFactor;
+}
+
+/**
+ * Batched comparison: computes similarity scores between query pattern and N candidate patterns.
+ */
+EXPORT void compare_many(const float* ampQ, const float* phaseQ,
+                         const float** ampList, const float** phaseList,
+                         int len, int count, float* out) {
+    for (int i = 0; i < count; ++i) {
+        out[i] = compare_wave_patterns(ampQ, phaseQ, ampList[i], phaseList[i], len);
+    }
 }

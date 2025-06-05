@@ -10,27 +10,45 @@ package ai.evacortex.resonancedb.nativeffi;
 
 import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
+import java.lang.invoke.VarHandle;
 
-public class NativeCompare {
+import static java.lang.foreign.ValueLayout.*;
+
+/**
+ * NativeCompare provides SIMD-accelerated FFI bindings for wave pattern comparison.
+ * It delegates to native implementations of:
+ * - compare_wave_patterns(float*, float*, float*, float*, int)
+ * - compare_many(float*, float*, float**, float**, int, int, float*)
+ */
+public final class NativeCompare {
 
     private static final Linker linker = Linker.nativeLinker();
 
-    private static final FunctionDescriptor desc = FunctionDescriptor.of(
-            ValueLayout.JAVA_FLOAT,    // return float
-            ValueLayout.ADDRESS,       // amp1
-            ValueLayout.ADDRESS,       // phase1
-            ValueLayout.ADDRESS,       // amp2
-            ValueLayout.ADDRESS,       // phase2
-            ValueLayout.JAVA_INT       // len
+    private static final FunctionDescriptor scalarDesc = FunctionDescriptor.of(
+            JAVA_FLOAT,
+            ADDRESS, ADDRESS, ADDRESS, ADDRESS, JAVA_INT
     );
 
-    private static final MethodHandle handle;
+    private static final FunctionDescriptor batchDesc = FunctionDescriptor.ofVoid(
+            ADDRESS, ADDRESS, ADDRESS, ADDRESS, JAVA_INT, JAVA_INT, ADDRESS
+    );
+
+    private static final MethodHandle scalarHandle;
+    private static final MethodHandle batchHandle;
 
     static {
         SymbolLookup lookup = SymbolLookup.libraryLookup("resonance", Arena.global());
-        handle = linker.downcallHandle(
-                lookup.find("compare_wave_patterns").orElseThrow(),
-                desc
+
+        scalarHandle = linker.downcallHandle(
+                lookup.find("compare_wave_patterns").orElseThrow(() ->
+                        new UnsatisfiedLinkError("Native symbol 'compare_wave_patterns' not found")),
+                scalarDesc
+        );
+
+        batchHandle = linker.downcallHandle(
+                lookup.find("compare_many").orElseThrow(() ->
+                        new UnsatisfiedLinkError("Native symbol 'compare_many' not found")),
+                batchDesc
         );
     }
 
@@ -46,14 +64,58 @@ public class NativeCompare {
             MemorySegment a2 = toMemorySegment(amp2, arena);
             MemorySegment p2 = toMemorySegment(phase2, arena);
 
-            return (float) handle.invoke(a1, p1, a2, p2, amp1.length);
+            return (float) scalarHandle.invoke(a1, p1, a2, p2, amp1.length);
+        }
+    }
+
+    public static float[] compareMany(float[] ampQ, float[] phaseQ,
+                                      float[][] ampList, float[][] phaseList) throws Throwable {
+
+        int count = ampList.length;
+        if (count != phaseList.length) {
+            throw new IllegalArgumentException("Mismatched candidate array count");
+        }
+
+        int len = ampQ.length;
+        for (int i = 0; i < count; i++) {
+            if (ampList[i].length != len || phaseList[i].length != len) {
+                throw new IllegalArgumentException("All candidate arrays must have length = " + len);
+            }
+        }
+
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment ampQSeg = toMemorySegment(ampQ, arena);
+            MemorySegment phaseQSeg = toMemorySegment(phaseQ, arena);
+
+            VarHandle addressHandle = ADDRESS.varHandle();
+
+            MemorySegment ampPtrs = arena.allocate(ADDRESS, count);
+            MemorySegment phasePtrs = arena.allocate(ADDRESS, count);
+            MemorySegment output = arena.allocate(JAVA_FLOAT, count);
+
+            for (int i = 0; i < count; i++) {
+                MemorySegment ampSeg = toMemorySegment(ampList[i], arena);
+                MemorySegment phaseSeg = toMemorySegment(phaseList[i], arena);
+
+                addressHandle.set(ampPtrs.asSlice(i * ADDRESS.byteSize()), ampSeg);
+                addressHandle.set(phasePtrs.asSlice(i * ADDRESS.byteSize()), phaseSeg);
+            }
+
+            batchHandle.invoke(ampQSeg, phaseQSeg, ampPtrs, phasePtrs, len, count, output);
+
+            float[] result = new float[count];
+            for (int i = 0; i < count; i++) {
+                result[i] = output.getAtIndex(JAVA_FLOAT, i);
+            }
+
+            return result;
         }
     }
 
     private static MemorySegment toMemorySegment(float[] array, Arena arena) {
-        MemorySegment segment = arena.allocate(ValueLayout.JAVA_FLOAT, array.length);
+        MemorySegment segment = arena.allocate(JAVA_FLOAT, array.length);
         for (int i = 0; i < array.length; i++) {
-            segment.setAtIndex(ValueLayout.JAVA_FLOAT, i, array[i]);
+            segment.setAtIndex(JAVA_FLOAT, i, array[i]);
         }
         return segment;
     }
