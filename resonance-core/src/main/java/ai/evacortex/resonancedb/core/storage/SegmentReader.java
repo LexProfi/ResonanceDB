@@ -9,6 +9,8 @@
 package ai.evacortex.resonancedb.core.storage;
 
 import ai.evacortex.resonancedb.core.WavePattern;
+import ai.evacortex.resonancedb.core.exceptions.InvalidWavePatternException;
+import ai.evacortex.resonancedb.core.exceptions.PatternNotFoundException;
 import ai.evacortex.resonancedb.core.io.codec.WavePatternCodec;
 import ai.evacortex.resonancedb.core.io.format.BinaryHeader;
 
@@ -67,24 +69,24 @@ public final class SegmentReader implements AutoCloseable {
 
     public PatternWithId readWithId(long offset) {
         if (offset < 0 || offset + HEADER_SIZE >= header.lastOffset()) {
-            throw new IllegalArgumentException("Offset out of segment bounds: " + offset);
+            throw new InvalidWavePatternException("Offset out of segment bounds: " + offset);
         }
 
         ByteBuffer buf = mmap.duplicate().order(ByteOrder.LITTLE_ENDIAN);
         buf.position((int) offset);
         if (buf.get(buf.position()) == 0x00) {
-            throw new IllegalStateException("Tombstone entry at offset " + offset);
+            throw new PatternNotFoundException("Deleted (tombstoned) pattern at offset " + offset);
         }
         byte[] idBytes = new byte[ID_SIZE];
         buf.get(idBytes);
         int len = buf.getInt();
         buf.getInt();
         if (len <= 0 || len > MAX_LENGTH) {
-            throw new IllegalStateException("Invalid pattern length at offset " + offset);
+            throw new InvalidWavePatternException("Invalid pattern length at offset " + offset);
         }
         int patternBytes = WavePatternCodec.estimateSize(len, false);
         if (buf.remaining() < patternBytes) {
-            throw new IllegalStateException("Insufficient bytes to decode pattern at offset " + offset);
+            throw new InvalidWavePatternException("Insufficient bytes to decode pattern at offset " + offset);
         }
 
         ByteBuffer patternBuf = buf.slice();
@@ -101,34 +103,44 @@ public final class SegmentReader implements AutoCloseable {
 
         while (buf.position() < header.lastOffset()) {
             int entryStart = buf.position();
-            if (buf.remaining() < HEADER_SIZE) break;
+
+            if (buf.remaining() < HEADER_SIZE) {
+                throw new InvalidWavePatternException("Corrupted segment: insufficient space for header at offset " + entryStart);
+            }
+
             byte firstByte = buf.get(entryStart);
             if (firstByte == 0x00) {
+                // Tombstone entry — skip
                 buf.position(entryStart + ID_SIZE);
-                if (buf.remaining() < 8) break;
+                if (buf.remaining() < 8) {
+                    throw new InvalidWavePatternException("Corrupted tombstone: can't read length at offset " + entryStart);
+                }
+
                 int len = buf.getInt();
-                buf.getInt();
-                if (len <= 0 || len > MAX_LENGTH) break;
+                buf.getInt(); // skip tombstone marker
+                if (len <= 0 || len > MAX_LENGTH) {
+                    throw new InvalidWavePatternException("Invalid pattern length in tombstone at offset " + entryStart + ": " + len);
+                }
+
                 int skip = align(HEADER_SIZE + WavePatternCodec.estimateSize(len, false));
                 buf.position(entryStart + skip);
                 continue;
             }
 
+            // Live entry
             buf.position(entryStart);
             byte[] idBytes = new byte[ID_SIZE];
             buf.get(idBytes);
             int len = buf.getInt();
-            buf.getInt();
+            buf.getInt(); // tombstone marker, must be -1
+
             if (len <= 0 || len > MAX_LENGTH) {
-                System.err.printf("Invalid pattern length %d at offset %d%n", len, entryStart);
-                break;
+                throw new InvalidWavePatternException("Invalid pattern length at offset " + entryStart + ": " + len);
             }
 
             int patternSize = WavePatternCodec.estimateSize(len, false);
             if (buf.remaining() < patternSize) {
-                System.err.printf("Not enough bytes for pattern (need %d) at %d%n",
-                        patternSize, buf.position());
-                break;
+                throw new InvalidWavePatternException("Insufficient bytes for pattern at offset " + entryStart + ": need " + patternSize + ", found " + buf.remaining());
             }
 
             ByteBuffer patternSlice = buf.slice();

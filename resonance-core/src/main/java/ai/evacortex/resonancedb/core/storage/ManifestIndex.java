@@ -217,5 +217,27 @@ public class ManifestIndex implements Closeable {
         }
     }
 
+    public void replace(String id,
+                        String oldSegment,
+                        long oldOffset,
+                        String newSegment,
+                        long newOffset,
+                        double newPhaseCenter) {
+        lock.writeLock().lock();
+        try {
+            PatternLocation current = map.get(id);
+            if (current == null ||
+                    !current.segmentName().equals(oldSegment) ||
+                    current.offset() != oldOffset) {
+                throw new IllegalStateException("Attempt to replace non-matching entry: " + id);
+            }
+
+            map.put(id, new PatternLocation(newSegment, newOffset, newPhaseCenter));
+            dirty = true;
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
     public record PatternLocation(String segmentName, long offset, double phaseCenter) {}
 }

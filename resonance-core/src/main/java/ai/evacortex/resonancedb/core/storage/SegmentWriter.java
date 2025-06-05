@@ -9,6 +9,8 @@
 package ai.evacortex.resonancedb.core.storage;
 
 import ai.evacortex.resonancedb.core.WavePattern;
+import ai.evacortex.resonancedb.core.exceptions.InvalidWavePatternException;
+import ai.evacortex.resonancedb.core.exceptions.SegmentOverflowException;
 import ai.evacortex.resonancedb.core.io.codec.WavePatternCodec;
 import ai.evacortex.resonancedb.core.io.format.BinaryHeader;
 
@@ -81,18 +83,23 @@ public class SegmentWriter implements AutoCloseable {
         }
     }
 
-    public long write(String hexId, WavePattern pattern) {
+    public long write(String hexId, WavePattern pattern) throws SegmentOverflowException {
         lock.writeLock().lock();
         try {
             byte[] idBytes = HexFormat.of().parseHex(hexId);
             if (idBytes.length != 16) {
-                throw new IllegalArgumentException("ID must be a 16-byte MD5 hex string (32 characters)");
+                throw new InvalidWavePatternException("ID must be a 16-byte MD5 hex string (32 characters)");
             }
             int patternSize = WavePatternCodec.estimateSize(pattern, false);
             int blockSize = FIXED_HEADER_SIZE + patternSize;
             int alignedSize = align(blockSize);
 
             long offset = writeOffset.get();
+            if (offset + alignedSize > buffer.capacity()) {
+                throw new SegmentOverflowException("Not enough space in segment: required " + alignedSize +
+                        " bytes, but only " + (buffer.capacity() - offset) + " available");
+            }
+
             ensureCapacity(offset + alignedSize);
 
             buffer.position((int) offset);
@@ -126,7 +133,7 @@ public class SegmentWriter implements AutoCloseable {
             if (offset < buffer.limit()) {
                 buffer.put((int) offset, (byte) 0x00);
             } else {
-                throw new IllegalArgumentException("Offset exceeds segment capacity: " + offset);
+                throw new IllegalStateException("Offset exceeds segment capacity: " + offset);
             }
         } finally {
             lock.writeLock().unlock();
@@ -168,7 +175,7 @@ public class SegmentWriter implements AutoCloseable {
                 this.buffer = channel.map(FileChannel.MapMode.READ_WRITE, 0, newSize);
                 this.buffer.order(ByteOrder.LITTLE_ENDIAN);
             } catch (IOException e) {
-                throw new RuntimeException("Failed to remap segment buffer", e);
+                throw new SegmentOverflowException("Failed to remap segment buffer", e);
             }
         }
     }

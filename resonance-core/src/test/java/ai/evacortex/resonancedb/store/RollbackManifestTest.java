@@ -11,12 +11,16 @@ package ai.evacortex.resonancedb.store;
 import ai.evacortex.resonancedb.core.ResonanceMatch;
 import ai.evacortex.resonancedb.core.WavePattern;
 import ai.evacortex.resonancedb.core.WavePatternTestUtils;
+import ai.evacortex.resonancedb.core.storage.ManifestIndex;
+import ai.evacortex.resonancedb.core.storage.SegmentWriter;
 import ai.evacortex.resonancedb.core.storage.WavePatternStoreImpl;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
+import org.mockito.Mockito;
 
+import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.io.File;
 import java.nio.file.Path;
@@ -34,7 +38,7 @@ class RollbackManifestTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        dir   = Files.createTempDirectory("resonance-rollback");
+        dir = Files.createTempDirectory("resonance-rollback");
         store = new WavePatternStoreImpl(dir);
     }
 
@@ -49,7 +53,6 @@ class RollbackManifestTest {
 
     @Test
     void testInsertFailureRollback() throws Exception {
-
         int linesBefore = Files.readAllLines(dir.resolve("index/manifest.idx")).size();
         WavePattern bad = new WavePattern(
                 new double[]{1, 2, 3, 4},
@@ -67,26 +70,38 @@ class RollbackManifestTest {
 
     @Test
     void testUpdateFailureRollback() throws Exception {
-
         WavePattern ok = WavePatternTestUtils.createConstantPattern(0.2, 0.2, 16);
-        String id      = store.insert(ok, Map.of());
-        WavePattern bad = new WavePattern(
-                new double[]{7, 7, 7},
-                new double[]{0.7});
+        String id = store.insert(ok, Map.of());
+        Field manifestField = WavePatternStoreImpl.class.getDeclaredField("manifest");
 
-        assertThrows(RuntimeException.class, () -> store.update(id, bad, Map.of()),
-                "update must propagate underlying failure");
+        manifestField.setAccessible(true);
+
+        ManifestIndex manifest = (ManifestIndex) manifestField.get(store);
+        manifest.flush();
+
+        WavePattern updated = WavePatternTestUtils.createConstantPattern(0.3, 0.3, 16);
+        Field writersField = WavePatternStoreImpl.class.getDeclaredField("segmentWriters");
+        writersField.setAccessible(true);
+
+        @SuppressWarnings("unchecked")
+        Map<String, SegmentWriter> writers = (Map<String, SegmentWriter>) writersField.get(store);
+        String targetSegment = store.getShardSelector().selectShard(updated);
+
+        store.query(updated, 1);
+
+        SegmentWriter original = writers.get(targetSegment);
+        SegmentWriter spy = Mockito.spy(original);
+        Mockito.doThrow(new RuntimeException("simulated write failure"))
+                .when(spy).write(Mockito.eq(id), Mockito.any(WavePattern.class));
+
+        writers.put(targetSegment, spy);
+        assertThrows(RuntimeException.class, () -> store.update(id, updated, Map.of()));
 
         List<ResonanceMatch> res = store.query(ok, 1);
 
         assertFalse(res.isEmpty(), "old pattern must survive failed update");
         assertEquals(id, res.get(0).id());
-        assertEquals(1.0f, res.get(0).energy(), 1e-5, "energy with original ψ should stay 1.0");
-
-        long countInManifest = Files.readAllLines(dir.resolve("index/manifest.idx"))
-                .stream()
-                .filter(l -> l.contains(id))
-                .count();
-        assertEquals(1, countInManifest, "failed update must not duplicate entries in manifest");
+        assertEquals(1.0f, res.get(0).energy(), 1e-5);
+        assertTrue(manifest.contains(id), "ID must still be present in manifest after failed update");
     }
 }

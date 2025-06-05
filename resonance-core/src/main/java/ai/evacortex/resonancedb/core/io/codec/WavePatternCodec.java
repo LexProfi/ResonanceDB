@@ -9,6 +9,7 @@
 package ai.evacortex.resonancedb.core.io.codec;
 
 import ai.evacortex.resonancedb.core.WavePattern;
+import ai.evacortex.resonancedb.core.exceptions.InvalidWavePatternException;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -34,11 +35,11 @@ public class WavePatternCodec {
         int len = amp.length;
 
         if (pattern.amplitude().length != pattern.phase().length) {
-            throw new IllegalArgumentException("Amplitude and phase arrays must be of equal length.");
+            throw new InvalidWavePatternException("Amplitude and phase arrays must be of equal length.");
         }
 
         if (len <= 0 || len > MAX_SUPPORTED_LENGTH) {
-            throw new IllegalArgumentException("Unsupported WavePattern length: " + len);
+            throw new InvalidWavePatternException("Unsupported WavePattern length: " + len);
         }
 
         buf.order(ORDER);
@@ -58,21 +59,21 @@ public class WavePatternCodec {
         buf.order(ORDER);
 
         if (withMagic) {
-            if (buf.remaining() < 4) throw new IllegalArgumentException("No space for MAGIC");
+            if (buf.remaining() < 4) throw new InvalidWavePatternException("No space for MAGIC");
             int magic = buf.getInt();
-            if (magic != MAGIC) throw new IllegalArgumentException("Invalid MAGIC header");
+            if (magic != MAGIC) throw new InvalidWavePatternException("Invalid MAGIC header");
         }
 
-        if (buf.remaining() < 4) throw new IllegalArgumentException("No space for length header");
+        if (buf.remaining() < 4) throw new InvalidWavePatternException("No space for length header");
         int len = buf.getInt();
 
         if (len <= 0 || len > MAX_SUPPORTED_LENGTH) {
-            throw new IllegalArgumentException("Suspicious pattern length: " + len);
+            throw new InvalidWavePatternException("Suspicious pattern length: " + len);
         }
 
         int required = 8 * len * 2;
         if (buf.remaining() < required) {
-            throw new IllegalArgumentException("Buffer underflow: need " + required + " bytes, found " + buf.remaining());
+            throw new InvalidWavePatternException("Buffer underflow: need " + required + " bytes, found " + buf.remaining());
         }
 
         double[] amp = new double[len];
@@ -117,7 +118,7 @@ public class WavePatternCodec {
      */
     public static int estimateSize(int length, boolean withMagic) {
         if (length <= 0 || length > MAX_SUPPORTED_LENGTH) {
-            throw new IllegalArgumentException("Invalid length for size estimation: " + length);
+            throw new InvalidWavePatternException("Invalid length for size estimation: " + length);
         }
         int base = 4 + (8 * 2 * length);
         return withMagic ? base + 4 : base;

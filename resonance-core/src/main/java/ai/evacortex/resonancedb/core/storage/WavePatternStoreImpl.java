@@ -13,7 +13,9 @@ import ai.evacortex.resonancedb.core.ResonanceStore;
 import ai.evacortex.resonancedb.core.WavePattern;
 import ai.evacortex.resonancedb.core.engine.ResonanceEngine;
 import ai.evacortex.resonancedb.core.exceptions.DuplicatePatternException;
+import ai.evacortex.resonancedb.core.exceptions.InvalidWavePatternException;
 import ai.evacortex.resonancedb.core.exceptions.PatternNotFoundException;
+import ai.evacortex.resonancedb.core.exceptions.SegmentOverflowException;
 import ai.evacortex.resonancedb.core.metadata.PatternMetaStore;
 import ai.evacortex.resonancedb.core.sharding.PhaseShardSelector;
 
@@ -75,9 +77,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     }
 
     @Override
-    public String insert(WavePattern psi,
-                         Map<String, String> metadata)
-            throws DuplicatePatternException, IllegalArgumentException {
+    public String insert(WavePattern psi, Map<String, String> metadata)
+            throws DuplicatePatternException, InvalidWavePatternException {
 
         String idKey = HashingUtil.computeContentHash(psi);
         HashingUtil.parseAndValidateMd5(idKey);
@@ -117,7 +118,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             rebuildShardSelector();
             return idKey;
 
-        } catch (DuplicatePatternException | IllegalArgumentException e) {
+        } catch (SegmentOverflowException | DuplicatePatternException | InvalidWavePatternException e) {
             throw e;
         } catch (Exception e) {
             manifest.remove(idKey);
@@ -129,7 +130,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     }
 
     @Override
-    public void delete(String idKey) throws PatternNotFoundException, IllegalArgumentException {
+    public void delete(String idKey) throws PatternNotFoundException {
         globalLock.writeLock().lock();
         try {
             HashingUtil.parseAndValidateMd5(idKey);
@@ -141,14 +142,12 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 writer.markDeleted(loc.offset());
             } catch (PatternNotFoundException e) {
                 throw e;
-            } catch (IllegalArgumentException e) {
-                throw new IllegalArgumentException(e);
             } catch (Exception e) {
                 throw new RuntimeException("Failed to mark deleted: " + idKey, e);
             }
 
-            manifest.remove(idKey);
-            metaStore.remove(idKey);
+            if (manifest.contains(idKey)) manifest.remove(idKey);
+            if (metaStore.contains(idKey)) metaStore.remove(idKey);
 
             rebuildShardSelector();
         } finally {
@@ -156,11 +155,11 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         }
     }
 
-    @Override
     public void update(String id, WavePattern psi, Map<String, String> meta)
-            throws IllegalArgumentException, PatternNotFoundException {
+            throws InvalidWavePatternException, PatternNotFoundException {
+
         if (psi.amplitude().length != psi.phase().length) {
-            throw new IllegalArgumentException("Amplitude / phase length mismatch");
+            throw new InvalidWavePatternException("Amplitude / phase length mismatch");
         }
 
         globalLock.writeLock().lock();
@@ -170,25 +169,21 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             if (old == null) throw new PatternNotFoundException(id);
             double newPhase = Arrays.stream(psi.phase()).average().orElse(0.0);
             String newSegment = shardSelectorRef.get().selectShard(psi);
-            SegmentWriter newWriter = getOrCreateWriter(newSegment);
+            SegmentWriter newWriter = getOrCreateWriter(newSegment);;
             long newOffset = newWriter.write(id, psi);
+            manifest.replace(id, old.segmentName(), old.offset(), newSegment, newOffset, newPhase);
             getOrCreateWriter(old.segmentName()).markDeleted(old.offset());
-            manifest.remove(id);
-            manifest.add(id, newSegment, newOffset, newPhase);
             if (!meta.isEmpty()) {
                 metaStore.put(id, meta);
-                metaStore.flush();
             }
-
+            manifest.flush();
+            metaStore.flush();
             rebuildShardSelector();
-        }
-        catch (PatternNotFoundException | IllegalArgumentException e) {
+        } catch (SegmentOverflowException | InvalidWavePatternException | PatternNotFoundException e) {
             throw e;
-        }
-        catch (Exception e) {
+        } catch (Exception e) {
             throw new RuntimeException("Update failed: " + id, e);
-        }
-        finally {
+        } finally {
             globalLock.writeLock().unlock();
         }
     }
@@ -299,5 +294,9 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         } finally {
             globalLock.writeLock().unlock();
         }
+    }
+
+    public PhaseShardSelector getShardSelector() {
+        return shardSelectorRef.get();
     }
 }
