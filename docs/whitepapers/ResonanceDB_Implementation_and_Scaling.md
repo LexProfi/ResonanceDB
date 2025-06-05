@@ -56,6 +56,7 @@ Each `.segment` contains a flat binary serialization of WavePatterns:
 * pattern count (int32)
 * for each pattern:
 
+  * id hash (16 bytes)
   * amplitude\[] (double \* N)
   * phase\[] (double \* N)
 
