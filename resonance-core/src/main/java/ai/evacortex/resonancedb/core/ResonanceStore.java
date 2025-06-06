@@ -15,6 +15,9 @@ public interface ResonanceStore {
     String insert(WavePattern psi, Map<String, String> metadata);
     void delete(String id);
     void update(String id, WavePattern psi, Map<String, String> metadata);
-    List<ResonanceMatch> query(WavePattern query, int topK);
     float compare(WavePattern a, WavePattern b);
+    List<ResonanceMatch> query(WavePattern query, int topK);
+    List<ResonanceMatchDetailed> queryDetailed(WavePattern query, int topK);
+    InterferenceMap queryInterference(WavePattern query, int topK);
+    List<InterferenceEntry> queryInterferenceMap(WavePattern query, int topK);
 }

@@ -89,9 +89,13 @@ public class WavePatternCodec {
      * Serializes pattern with MAGIC header into byte array.
      */
     public static byte[] serialize(WavePattern pattern) {
-        ByteBuffer buf = ByteBuffer.allocateDirect(estimateSize(pattern, true)).order(ORDER);
+        int size = estimateSize(pattern, true);
+        ByteBuffer buf = ByteBuffer.allocateDirect(size).order(ORDER);
         writeTo(buf, pattern, true);
-        return buf.array();
+        buf.flip();
+        byte[] result = new byte[buf.remaining()];
+        buf.get(result);
+        return result;
     }
 
     /**

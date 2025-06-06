@@ -8,9 +8,7 @@
  */
 package ai.evacortex.resonancedb.store;
 
-import ai.evacortex.resonancedb.core.ResonanceMatch;
-import ai.evacortex.resonancedb.core.WavePattern;
-import ai.evacortex.resonancedb.core.WavePatternTestUtils;
+import ai.evacortex.resonancedb.core.*;
 import ai.evacortex.resonancedb.core.exceptions.DuplicatePatternException;
 import ai.evacortex.resonancedb.core.exceptions.PatternNotFoundException;
 import ai.evacortex.resonancedb.core.storage.HashingUtil;
@@ -65,7 +63,7 @@ public class WavePatternStoreImplTest {
         List<ResonanceMatch> results = store.query(psi, 1);
         assertEquals(1, results.size());
 
-        ResonanceMatch match = results.get(0);
+        ResonanceMatch match = results.getFirst();
         assertArrayEquals(amp, match.pattern().amplitude(), 1e-9);
         assertArrayEquals(phase, match.pattern().phase(), 1e-9);
 
@@ -82,7 +80,7 @@ public class WavePatternStoreImplTest {
         List<ResonanceMatch> results = store.query(psi, 1);
 
         assertEquals(1, results.size());
-        assertEquals(id, results.get(0).id());
+        assertEquals(id, results.getFirst().id());
 
         store.delete(id);
         assertThrows(PatternNotFoundException.class, () -> store.delete(id));
@@ -97,12 +95,12 @@ public class WavePatternStoreImplTest {
         store.update(id, updated, Map.of());
         List<ResonanceMatch> matches = store.query(updated, 1);
         assertFalse(matches.isEmpty(), "updated pattern must be found");
-        assertEquals(id, matches.get(0).id(), "ID should remain unchanged after update");
-        assertTrue(matches.get(0).energy() > 0.95f, "energy with itself must stay high");
+        assertEquals(id, matches.getFirst().id(), "ID should remain unchanged after update");
+        assertTrue(matches.getFirst().energy() > 0.95f, "energy with itself must stay high");
         List<ResonanceMatch> oldMatch = store.query(original, 1);
         assertFalse(oldMatch.isEmpty(), "query should still return a match");
-        assertEquals(id, oldMatch.get(0).id(), "same business object, so same ID");
-        assertTrue(oldMatch.get(0).energy() < 0.95f,
+        assertEquals(id, oldMatch.getFirst().id(), "same business object, so same ID");
+        assertTrue(oldMatch.getFirst().energy() < 0.95f,
                 "energy for outdated waveform must drop below threshold");
     }
 
@@ -144,7 +142,7 @@ public class WavePatternStoreImplTest {
 
         for (WavePattern pattern : patterns) {
             String insertedId = store.insert(pattern, Map.of());
-            String matchedId = store.query(pattern, 1).get(0).id();
+            String matchedId = store.query(pattern, 1).getFirst().id();
             assertEquals(insertedId, matchedId);
         }
     }
@@ -195,8 +193,8 @@ public class WavePatternStoreImplTest {
             List<ResonanceMatch> hits = reopened.query(psi, 1);
 
             assertFalse(hits.isEmpty(), "pattern must survive reopen");
-            assertEquals(id,  hits.get(0).id(), "ID must match");
-            assertEquals(1.0f, hits.get(0).energy(), 1e-5,
+            assertEquals(id,  hits.getFirst().id(), "ID must match");
+            assertEquals(1.0f, hits.getFirst().energy(), 1e-5,
                     "energy with identical ψ must be 1");
 
             String metaJson = Files.readString(dir.resolve("metadata/pattern-meta.json"));
@@ -215,26 +213,24 @@ public class WavePatternStoreImplTest {
     @Test
     void testDeleteRemovesFromQuery() throws Exception {
         Path dir = Files.createTempDirectory("resonance-delete");
-        WavePatternStoreImpl localStore = new WavePatternStoreImpl(dir);
 
-        try {
+        try (WavePatternStoreImpl localStore = new WavePatternStoreImpl(dir)) {
             WavePattern psi = WavePatternTestUtils.createConstantPattern(0.42, 0.13, 32);
-            String id       = localStore.insert(psi, Map.of());
-            assertEquals(id, localStore.query(psi, 1).get(0).id());
+            String id = localStore.insert(psi, Map.of());
+            assertEquals(id, localStore.query(psi, 1).getFirst().id());
             localStore.delete(id);
             List<ResonanceMatch> hits = localStore.query(psi, 3);
             boolean idStillPresent = hits.stream().anyMatch(m -> m.id().equals(id));
             assertFalse(idStillPresent, "deleted pattern must not appear in subsequent query results");
 
             if (!hits.isEmpty()) {
-                assertTrue(hits.get(0).energy() < 0.95f,
+                assertTrue(hits.getFirst().energy() < 0.95f,
                         "energy with deleted ψ must drop below similarity threshold");
             }
 
             assertThrows(PatternNotFoundException.class, () -> localStore.delete(id));
 
         } finally {
-            localStore.close();
             Files.walk(dir)
                     .sorted(Comparator.reverseOrder())
                     .map(Path::toFile)
@@ -261,11 +257,166 @@ public class WavePatternStoreImplTest {
         int TOP_K = 5;
         List<ResonanceMatch> hits = store.query(query, TOP_K);
         assertEquals(TOP_K, hits.size(), "must return exactly top-K results");
-        assertEquals(ids[targetIdx], hits.get(0).id(), "self-match should have highest priority");
+        assertEquals(ids[targetIdx], hits.getFirst().id(), "self-match should have highest priority");
         for (int i = 1; i < hits.size(); i++) {
             assertTrue(hits.get(i-1).energy() >= hits.get(i).energy(),
                     "energies must be sorted in descending order");
         }
-        assertEquals(1.0f, hits.get(0).energy(), 1e-5, "self-match energy should be 1");
+        assertEquals(1.0f, hits.getFirst().energy(), 1e-5, "self-match energy should be 1");
+    }
+
+    @Test
+    void testQueryDetailedWithZonesAndPhaseShift() {
+        WavePattern core = WavePatternTestUtils.createConstantPattern(1.0, 0.0, 16);       // точно совпадает
+        WavePattern fringe = WavePatternTestUtils.createConstantPattern(1.0, 0.5, 16);     // частичное совпадение
+        WavePattern shadow = WavePatternTestUtils.createConstantPattern(1.0, Math.PI, 16); // противоположная фаза
+
+        String idCore = store.insert(core, Map.of("label", "core"));
+        String idFringe = store.insert(fringe, Map.of("label", "fringe"));
+        String idShadow = store.insert(shadow, Map.of("label", "shadow"));
+
+        InterferenceMap map = store.queryInterference(core, 5);
+        List<ResonanceMatchDetailed> matches = map.matches();
+
+        assertEquals(core, map.query(), "query pattern must be preserved");
+
+        boolean foundCore = false, foundFringe = false, foundShadow = false;
+
+        for (ResonanceMatchDetailed match : matches) {
+            System.out.printf("Match ID: %s | Energy: %.4f | Δφ: %.3f | Zone: %s%n",
+                    match.id(), match.energy(), match.phaseDelta(), match.zone());
+
+            if (match.id().equals(idCore)) {
+                foundCore = true;
+                assertEquals(ResonanceZone.CORE, match.zone(), "Expected CORE match");
+                assertEquals(0.0, match.phaseDelta(), 1e-6, "Expected phase shift near zero");
+            }
+
+            if (match.id().equals(idFringe)) {
+                foundFringe = true;
+                assertEquals(ResonanceZone.FRINGE, match.zone(), "Expected FRINGE match");
+                assertTrue(match.phaseDelta() > 0.1 && match.phaseDelta() < 1.0,
+                        "Expected moderate phase delta");
+            }
+
+            if (match.id().equals(idShadow)) {
+                foundShadow = true;
+                assertEquals(ResonanceZone.SHADOW, match.zone(), "Expected SHADOW match");
+                assertTrue(match.phaseDelta() > 2.5, "Expected large phase shift");
+            }
+        }
+
+        assertTrue(foundCore, "Core match must be present");
+        assertTrue(foundFringe, "Fringe match must be present");
+        assertTrue(foundShadow, "Shadow match must be present");
+    }
+
+    @Test
+    void testZoneScoreMonotonicityByZone() {
+        WavePattern core = WavePatternTestUtils.createConstantPattern(
+                1.0, 0.0 + Math.random() * 1e-4, 32);
+        WavePattern fringe = WavePatternTestUtils.createConstantPattern(
+                1.0, 0.5 + Math.random() * 1e-4, 32);
+        WavePattern shadow = WavePatternTestUtils.createConstantPattern(
+                1.0, Math.PI + Math.random() * 1e-4, 32);
+
+        String idCore = store.insert(core, Map.of());
+        String idFringe = store.insert(fringe, Map.of());
+        String idShadow = store.insert(shadow, Map.of());
+
+        InterferenceMap map = store.queryInterference(core, 5);
+        List<ResonanceMatchDetailed> matches = map.matches();
+
+        double scoreCore = -1, scoreFringe = -1, scoreShadow = -1;
+
+        for (ResonanceMatchDetailed m : matches) {
+            if (m.id().equals(idCore))   scoreCore = m.zoneScore();
+            if (m.id().equals(idFringe)) scoreFringe = m.zoneScore();
+            if (m.id().equals(idShadow)) scoreShadow = m.zoneScore();
+        }
+
+        System.out.printf("Zone scores: CORE=%.4f | FRINGE=%.4f | SHADOW=%.4f%n", scoreCore, scoreFringe, scoreShadow);
+
+        assertTrue(scoreCore >= 0.9, "core should have very high score");
+        assertTrue(scoreFringe > 0.1 && scoreFringe < scoreCore, "fringe should be intermediate");
+        assertTrue(scoreShadow < 0.05, "shadow should be near zero");
+    }
+
+    @Test
+    void testCoreZoneWithIdenticalPattern() throws Exception {
+        Path tempDir = Files.createTempDirectory("resonance-test");
+        try (WavePatternStoreImpl store = new WavePatternStoreImpl(tempDir)) {
+            WavePattern pattern = WavePatternTestUtils.createConstantPattern(1.0, 0.0, 128);
+            String id = store.insert(pattern, Map.of("kind", "test"));
+
+            List<InterferenceEntry> results = store.queryInterferenceMap(pattern, 1);
+            assertEquals(1, results.size());
+
+            InterferenceEntry entry = results.getFirst();
+            assertEquals(id, entry.id());
+            assertEquals(ResonanceZone.CORE, entry.zone());
+            assertTrue(entry.phaseShift() < 1e-6, "Phase shift should be ≈ 0 for identical pattern");
+            assertTrue(entry.energy() > 0.99f);
+        } finally {
+            TestUtils.deleteDirectoryRecursive(tempDir);
+        }
+    }
+
+    @Test
+    void testFringeZoneWithShiftedPhase() throws Exception {
+        Path tempDir = Files.createTempDirectory("resonance-test");
+        try (WavePatternStoreImpl store = new WavePatternStoreImpl(tempDir)) {
+
+            WavePattern pattern = WavePatternTestUtils.createConstantPattern(1.0, 0.0, 128);
+            WavePattern slightlyShifted = WavePatternTestUtils.createConstantPattern(1.0, 0.399, 128);
+
+            store.insert(pattern, Map.of());
+            List<InterferenceEntry> results = store.queryInterferenceMap(slightlyShifted, 1);
+            assertEquals(1, results.size());
+
+            InterferenceEntry entry = results.getFirst();
+            assertEquals(ResonanceZone.FRINGE, entry.zone());
+            assertTrue(entry.phaseShift() > 0.1 && entry.phaseShift() < Math.PI);
+        } finally {
+            TestUtils.deleteDirectoryRecursive(tempDir);
+        }
+    }
+
+    @Test
+    void testShadowZoneWithOppositePhase() throws Exception {
+        Path tempDir = Files.createTempDirectory("resonance-test");
+        try (WavePatternStoreImpl store = new WavePatternStoreImpl(tempDir)) {
+
+            WavePattern pattern = WavePatternTestUtils.createConstantPattern(1.0, 0.0, 128);
+            WavePattern opposite = WavePatternTestUtils.createConstantPattern(1.0, Math.PI, 128);
+
+            store.insert(pattern, Map.of());
+            List<InterferenceEntry> results = store.queryInterferenceMap(opposite, 1);
+            assertEquals(1, results.size());
+
+            InterferenceEntry entry = results.getFirst();
+            assertEquals(ResonanceZone.SHADOW, entry.zone());
+            assertTrue(entry.energy() < 0.1f, "Energy should be near zero in destructive interference");
+        } finally {
+            TestUtils.deleteDirectoryRecursive(tempDir);
+        }
+    }
+
+    @Test
+    void testInterferenceMapSizeRespectsTopK() throws Exception {
+        Path tempDir = Files.createTempDirectory("resonance-test");
+        try (WavePatternStoreImpl store = new WavePatternStoreImpl(tempDir)) {
+
+            for (int i = 0; i < 10; i++) {
+                WavePattern p = WavePatternTestUtils.createConstantPattern(1.0, i * 0.1, 64);
+                store.insert(p, Map.of("index", String.valueOf(i)));
+            }
+
+            WavePattern query = WavePatternTestUtils.createConstantPattern(1.0, 0.0, 64);
+            List<InterferenceEntry> results = store.queryInterferenceMap(query, 5);
+            assertEquals(5, results.size());
+        } finally {
+            TestUtils.deleteDirectoryRecursive(tempDir);
+        }
     }
 }

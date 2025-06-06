@@ -17,10 +17,6 @@ public final class Complex {
     public final double real;
     public final double imag;
 
-    public static final Complex ZERO = new Complex(0.0, 0.0);
-    public static final Complex ONE = new Complex(1.0, 0.0);
-    public static final Complex I   = new Complex(0.0, 1.0);
-
     public Complex(double real, double imag) {
         this.real = real;
         this.imag = imag;
@@ -58,6 +54,10 @@ public final class Complex {
 
     public Complex negate() {
         return new Complex(-this.real, -this.imag);
+    }
+
+    public double phase() {
+        return Math.atan2(imag, real);
     }
 
     @Override
