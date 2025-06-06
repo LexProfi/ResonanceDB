@@ -22,7 +22,9 @@ import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 
 /**
@@ -97,7 +99,7 @@ public final class SegmentReader implements AutoCloseable {
     }
 
     public List<PatternWithId> readAllWithId() {
-        List<PatternWithId> result = new ArrayList<>();
+        Map<String, PatternWithId> latest = new LinkedHashMap<>(); // сохраняем последнюю версию ID
         ByteBuffer buf = mmap.duplicate().order(ByteOrder.LITTLE_ENDIAN);
         buf.position(BinaryHeader.SIZE);
 
@@ -110,18 +112,16 @@ public final class SegmentReader implements AutoCloseable {
 
             byte firstByte = buf.get(entryStart);
             if (firstByte == 0x00) {
-                // Tombstone entry — skip
+                // Tombstone — skip
                 buf.position(entryStart + ID_SIZE);
                 if (buf.remaining() < 8) {
-                    throw new InvalidWavePatternException("Corrupted tombstone: can't read length at offset " + entryStart);
+                    throw new InvalidWavePatternException("Corrupted tombstone at offset " + entryStart);
                 }
-
                 int len = buf.getInt();
                 buf.getInt(); // skip tombstone marker
                 if (len <= 0 || len > MAX_LENGTH) {
-                    throw new InvalidWavePatternException("Invalid pattern length in tombstone at offset " + entryStart + ": " + len);
+                    throw new InvalidWavePatternException("Invalid length in tombstone at " + entryStart);
                 }
-
                 int skip = align(HEADER_SIZE + WavePatternCodec.estimateSize(len, false));
                 buf.position(entryStart + skip);
                 continue;
@@ -132,7 +132,7 @@ public final class SegmentReader implements AutoCloseable {
             byte[] idBytes = new byte[ID_SIZE];
             buf.get(idBytes);
             int len = buf.getInt();
-            buf.getInt(); // tombstone marker, must be -1
+            buf.getInt(); // skip tombstone marker, should be -1
 
             if (len <= 0 || len > MAX_LENGTH) {
                 throw new InvalidWavePatternException("Invalid pattern length at offset " + entryStart + ": " + len);
@@ -140,7 +140,7 @@ public final class SegmentReader implements AutoCloseable {
 
             int patternSize = WavePatternCodec.estimateSize(len, false);
             if (buf.remaining() < patternSize) {
-                throw new InvalidWavePatternException("Insufficient bytes for pattern at offset " + entryStart + ": need " + patternSize + ", found " + buf.remaining());
+                throw new InvalidWavePatternException("Insufficient bytes at offset " + entryStart);
             }
 
             ByteBuffer patternSlice = buf.slice();
@@ -150,11 +150,13 @@ public final class SegmentReader implements AutoCloseable {
             int skip = align(HEADER_SIZE + patternSize);
             buf.position(entryStart + skip);
 
-            result.add(new PatternWithId(bytesToHex(idBytes), pattern, entryStart));
+            String id = bytesToHex(idBytes);
+            // 🔁 Переопределяем предыдущую версию — сохраняется только последняя
+            latest.put(id, new PatternWithId(id, pattern, entryStart));
         }
 
-        System.out.println("OK readAllWithId returned " + result.size() + " entries");
-        return result;
+        System.out.println("OK readAllWithId returned " + latest.size() + " entries");
+        return new ArrayList<>(latest.values());
     }
 
     public BinaryHeader getHeader() {

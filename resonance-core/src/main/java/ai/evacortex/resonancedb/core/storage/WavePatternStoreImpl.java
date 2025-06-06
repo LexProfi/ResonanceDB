@@ -169,7 +169,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             if (old == null) throw new PatternNotFoundException(id);
             double newPhase = Arrays.stream(psi.phase()).average().orElse(0.0);
             String newSegment = shardSelectorRef.get().selectShard(psi);
-            SegmentWriter newWriter = getOrCreateWriter(newSegment);;
+            SegmentWriter newWriter = getOrCreateWriter(newSegment);
             long newOffset = newWriter.write(id, psi);
             manifest.replace(id, old.segmentName(), old.offset(), newSegment, newOffset, newPhase);
             getOrCreateWriter(old.segmentName()).markDeleted(old.offset());
@@ -195,7 +195,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             String queryId = HashingUtil.computeContentHash(query);
 
             PriorityQueue<HeapItem> heap = new PriorityQueue<>(
-                    topK, Comparator.comparingDouble(HeapItem::priority));   // min-heap
+                    topK, Comparator.comparingDouble(HeapItem::priority)); // min-heap
 
             Set<String> scanned = new HashSet<>();
             PhaseShardSelector selector = shardSelectorRef.get();
@@ -204,6 +204,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 scanned.add(shard);
                 collectMatchesFromShard(shard, query, queryId, topK, heap);
             }
+
             for (String shard : segmentWriters.keySet()) {
                 if (scanned.contains(shard)) continue;
                 collectMatchesFromShard(shard, query, queryId, topK, heap);
@@ -224,6 +225,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         }
     }
 
+
     private void collectMatchesFromShard(String shard,
                                          WavePattern query,
                                          String queryId,
@@ -234,13 +236,20 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         if (writer == null) return;
 
         try (SegmentReader reader = new SegmentReader(writer.getPath())) {
+
+            // Map ID → valid (offset-matching) entry (оставляем только ту, что реально в манифесте)
+            Map<String, SegmentReader.PatternWithId> latestValidEntries = new HashMap<>();
+
             for (SegmentReader.PatternWithId entry : reader.readAllWithId()) {
+                ManifestIndex.PatternLocation loc = manifest.get(entry.id());
+                if (loc == null) continue;
+                if (!loc.segmentName().equals(shard)) continue;
+                if (loc.offset() != entry.offset()) continue;
 
-                ManifestIndex.PatternLocation live = manifest.get(entry.id());
-                if (live == null || !live.segmentName().equals(shard) || live.offset() != entry.offset()) {
-                    continue;
-                }
+                latestValidEntries.put(entry.id(), entry);
+            }
 
+            for (SegmentReader.PatternWithId entry : latestValidEntries.values()) {
                 WavePattern cand = entry.pattern();
                 if (cand.amplitude().length != query.amplitude().length) continue;
 
@@ -248,7 +257,9 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 boolean idEq = entry.id().equals(queryId);
                 boolean exactEq = base > 1.0f - EXACT_MATCH_EPS;
                 float priority = base + (idEq ? 1.0f : 0.0f) + (exactEq ? 0.5f : 0.0f);
+
                 tracer.trace(entry.id(), query, cand, base);
+
                 HeapItem item = new HeapItem(new ResonanceMatch(entry.id(), base, cand), priority);
                 if (heap.size() < topK) {
                     heap.add(item);
@@ -257,6 +268,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                     heap.add(item);
                 }
             }
+
         } catch (IOException e) {
             throw new RuntimeException("Failed to read segment: " + shard, e);
         }

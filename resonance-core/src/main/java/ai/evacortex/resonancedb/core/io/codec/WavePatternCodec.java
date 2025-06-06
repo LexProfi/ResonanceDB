@@ -18,7 +18,7 @@ public class WavePatternCodec {
 
     private static final int MAGIC = 0x57565750; // 'WWWP'
     private static final ByteOrder ORDER = ByteOrder.LITTLE_ENDIAN;
-    private static final int MAX_SUPPORTED_LENGTH = 8192; // architectural sanity limit
+    private static final int MAX_SUPPORTED_LENGTH = 65_536; // architectural sanity limit
 
     /**
      * Serializes a WavePattern into the given ByteBuffer.
@@ -89,7 +89,7 @@ public class WavePatternCodec {
      * Serializes pattern with MAGIC header into byte array.
      */
     public static byte[] serialize(WavePattern pattern) {
-        ByteBuffer buf = ByteBuffer.allocate(estimateSize(pattern, true)).order(ORDER);
+        ByteBuffer buf = ByteBuffer.allocateDirect(estimateSize(pattern, true)).order(ORDER);
         writeTo(buf, pattern, true);
         return buf.array();
     }
