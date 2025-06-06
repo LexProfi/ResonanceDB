@@ -8,8 +8,6 @@
  */
 package ai.evacortex.resonancedb.core.math;
 
-import ai.evacortex.resonancedb.core.ResonanceZone;
-
 /**
  * Classifies resonance matches into semantic zones based on energy and phase alignment.
  */

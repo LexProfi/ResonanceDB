@@ -8,7 +8,8 @@
  */
 package ai.evacortex.resonancedb.core;
 
-import ai.evacortex.resonancedb.core.io.codec.WavePatternCodec;
+import ai.evacortex.resonancedb.core.storage.WavePattern;
+import ai.evacortex.resonancedb.core.storage.io.codec.WavePatternCodec;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;

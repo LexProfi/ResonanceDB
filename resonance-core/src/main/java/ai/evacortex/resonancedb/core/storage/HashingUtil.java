@@ -8,8 +8,6 @@
  */
 package ai.evacortex.resonancedb.core.storage;
 
-import ai.evacortex.resonancedb.core.WavePattern;
-
 import java.nio.ByteBuffer;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;

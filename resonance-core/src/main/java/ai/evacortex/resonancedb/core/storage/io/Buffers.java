@@ -6,7 +6,7 @@
  * Patent notice: The authors intend to seek patent protection for this software.
  * Commercial use >30 days → license@evacortex.ai
  */
-package ai.evacortex.resonancedb.core.storage;
+package ai.evacortex.resonancedb.core.storage.io;
 
 import sun.misc.Unsafe;
 
@@ -14,8 +14,10 @@ import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
 
 /**  Utility — safe explicit unmap for a MappedByteBuffer.  */
+@SuppressWarnings({"removal", "UnsafeUsage"})
 final class Buffers {
 
+    //TODO wait JEP 454
     private static final Unsafe UNSAFE;
     private static final java.lang.reflect.Method INVOKE_CLEANER;
 

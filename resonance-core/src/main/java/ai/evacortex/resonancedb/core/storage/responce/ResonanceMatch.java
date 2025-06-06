@@ -6,12 +6,8 @@
  * Patent notice: The authors intend to seek patent protection for this software.
  * Commercial use >30 days → license@evacortex.ai
  */
-package ai.evacortex.resonancedb.core;
+package ai.evacortex.resonancedb.core.storage.responce;
 
-public record InterferenceEntry(
-        String id,
-        float energy,
-        double phaseShift,
-        ResonanceZone zone,
-        WavePattern pattern
-) {}
+import ai.evacortex.resonancedb.core.storage.WavePattern;
+
+public record ResonanceMatch(String id, float energy, WavePattern pattern) {}

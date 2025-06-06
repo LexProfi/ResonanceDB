@@ -8,10 +8,10 @@
  */
 package ai.evacortex.resonancedb.core.engine;
 
-import ai.evacortex.resonancedb.core.WavePattern;
+import ai.evacortex.resonancedb.core.storage.responce.ComparisonResult;
+import ai.evacortex.resonancedb.core.storage.WavePattern;
 
 import java.util.List;
-
 /**
  * {@code ResonanceKernel} defines the interface for computing similarity between two {@link WavePattern}
  * instances using the principle of constructive interference between complex-valued waveforms.
@@ -37,12 +37,18 @@ import java.util.List;
  *     A = 2 · √(E₁ · E₂) / (E₁ + E₂)
  * </pre>
  *
- * <p>Implementations must be deterministic, symmetric, and free of side effects.
- * They may support advanced options via {@link CompareOptions}, including:</p>
+ * <p>Implementations must be:</p>
  * <ul>
- *     <li>{@code ignorePhase} — disable phase sensitivity</li>
- *     <li>{@code normalizeAmplitude} — adjust for amplitude scale</li>
- *     <li>{@code allowGlobalPhaseShift} — align global φ offset (future)</li>
+ *     <li>Deterministic (same input yields same result)</li>
+ *     <li>Symmetric (compare(a, b) == compare(b, a))</li>
+ *     <li>Side-effect free (pure computation)</li>
+ * </ul>
+ *
+ * <p>Advanced comparison behavior can be configured using {@link CompareOptions}, including:</p>
+ * <ul>
+ *     <li>{@code ignorePhase} — disable phase sensitivity (amplitude-only match)</li>
+ *     <li>{@code normalizeAmplitude} — normalize amplitudes before comparison</li>
+ *     <li>{@code allowGlobalPhaseShift} — allow phase offset correction (not yet implemented)</li>
  * </ul>
  *
  * @see WavePattern
@@ -58,7 +64,7 @@ public interface ResonanceKernel {
      * <ul>
      *     <li>Phase sensitivity is enabled</li>
      *     <li>No amplitude normalization</li>
-     *     <li>No phase alignment</li>
+     *     <li>No global phase alignment</li>
      * </ul>
      *
      * @param a the first wave pattern (ψ₁)
@@ -90,12 +96,12 @@ public interface ResonanceKernel {
     /**
      * Computes similarity scores between a query wave pattern and a list of candidate patterns.
      *
-     * <p>This is a batch variant of {@link #compare(WavePattern, WavePattern)}.</p>
+     * <p>This is a batch variant of {@link #compare(WavePattern, WavePattern)} using default options.</p>
      *
      * @param query the reference/query pattern
      * @param candidates list of candidates to compare with
      * @return array of similarity scores, one per candidate
-     * @throws IllegalArgumentException if lengths mismatch
+     * @throws IllegalArgumentException if any pattern length differs
      * @throws NullPointerException if any argument is {@code null}
      */
     float[] compareMany(WavePattern query, List<WavePattern> candidates);
@@ -109,8 +115,31 @@ public interface ResonanceKernel {
      * @param candidates list of candidates to compare with
      * @param options comparison configuration flags
      * @return array of similarity scores in [0.0 ... 1.0]
-     * @throws IllegalArgumentException if any pattern is invalid
+     * @throws IllegalArgumentException if any pattern is invalid or has mismatched length
      * @throws NullPointerException if any input is {@code null}
      */
     float[] compareMany(WavePattern query, List<WavePattern> candidates, CompareOptions options);
+
+    /**
+     * Computes the raw resonance energy and signed average phase difference (Δφ) between two wave patterns.
+     *
+     * <p>Amplitude compensation is <strong>not</strong> applied. This method is intended for
+     * diagnostic and zone classification purposes where phase alignment matters independently
+     * of normalization.</p>
+     *
+     * <p>The result includes:</p>
+     * <ul>
+     *     <li>{@link ComparisonResult#energy()} — normalized energy without amplitude factor</li>
+     *     <li>{@link ComparisonResult#phaseDelta()} — signed average phase shift in radians ∈ [–π, +π]</li>
+     * </ul>
+     *
+     * <p>Note: Use {@code Math.abs(result.phaseDelta())} when only magnitude is relevant (e.g., zone thresholds).</p>
+     *
+     * @param a the first wave pattern
+     * @param b the second wave pattern
+     * @return {@code ComparisonResult} with raw energy and Δφ
+     * @throws IllegalArgumentException if lengths differ
+     * @throws NullPointerException if inputs are {@code null}
+     */
+    ComparisonResult compareWithPhaseDelta(WavePattern a, WavePattern b);
 }

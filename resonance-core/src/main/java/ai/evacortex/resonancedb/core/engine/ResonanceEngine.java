@@ -8,7 +8,8 @@
  */
 package ai.evacortex.resonancedb.core.engine;
 
-import ai.evacortex.resonancedb.core.WavePattern;
+import ai.evacortex.resonancedb.core.storage.responce.ComparisonResult;
+import ai.evacortex.resonancedb.core.storage.WavePattern;
 
 /**
  * Delegates resonance comparison to backend (Java or Native).
@@ -23,5 +24,9 @@ public class ResonanceEngine {
 
     public static float compare(WavePattern a, WavePattern b) {
         return backend.compare(a, b);
+    }
+
+    public static ComparisonResult compareWithPhaseDelta(WavePattern a, WavePattern b) {
+        return backend.compareWithPhaseDelta(a, b);
     }
 }

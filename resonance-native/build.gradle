@@ -10,7 +10,7 @@ dependencies {
     implementation project(':resonance-core')
 }
 
-def nativeLibName = "libresonance.so" // подставь под ОС: .dll, .dylib
+def nativeLibName = "libresonance.so"
 
 tasks.register('buildNativeLib', Exec) {
     workingDir = file("src/main/c")

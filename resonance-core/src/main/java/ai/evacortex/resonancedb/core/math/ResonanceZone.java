@@ -6,7 +6,7 @@
  * Patent notice: The authors intend to seek patent protection for this software.
  * Commercial use >30 days → license@evacortex.ai
  */
-package ai.evacortex.resonancedb.core;
+package ai.evacortex.resonancedb.core.math;
 
 /**
  * Represents a semantic resonance zone in the interference field.

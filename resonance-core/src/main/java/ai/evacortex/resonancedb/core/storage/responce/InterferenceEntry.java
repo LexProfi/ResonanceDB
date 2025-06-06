@@ -6,16 +6,15 @@
  * Patent notice: The authors intend to seek patent protection for this software.
  * Commercial use >30 days → license@evacortex.ai
  */
-package ai.evacortex.resonancedb.core;
+package ai.evacortex.resonancedb.core.storage.responce;
 
-/**
- * Represents a detailed match result including phase alignment and semantic zone.
- */
-public record ResonanceMatchDetailed(
+import ai.evacortex.resonancedb.core.math.ResonanceZone;
+import ai.evacortex.resonancedb.core.storage.WavePattern;
+
+public record InterferenceEntry(
         String id,
         float energy,
-        WavePattern pattern,
-        double phaseDelta,
+        double phaseShift,
         ResonanceZone zone,
-        double zoneScore
+        WavePattern pattern
 ) {}

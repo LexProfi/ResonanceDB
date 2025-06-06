@@ -6,7 +6,7 @@
  * Patent notice: The authors intend to seek patent protection for this software.
  * Commercial use >30 days → license@evacortex.ai
  */
-package ai.evacortex.resonancedb.core.io.format;
+package ai.evacortex.resonancedb.core.storage.io.format;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;

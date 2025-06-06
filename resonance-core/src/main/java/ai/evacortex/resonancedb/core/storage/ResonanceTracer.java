@@ -8,8 +8,6 @@
  */
 package ai.evacortex.resonancedb.core.storage;
 
-import ai.evacortex.resonancedb.core.WavePattern;
-
 public interface ResonanceTracer {
     void trace(String id, WavePattern query, WavePattern matched, float score);
 }

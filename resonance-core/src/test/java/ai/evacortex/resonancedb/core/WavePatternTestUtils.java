@@ -8,6 +8,8 @@
  */
 package ai.evacortex.resonancedb.core;
 
+import ai.evacortex.resonancedb.core.storage.WavePattern;
+
 import java.util.Arrays;
 
 

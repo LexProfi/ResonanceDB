@@ -8,7 +8,7 @@
  */
 package ai.evacortex.resonancedb.core.sharding;
 
-import ai.evacortex.resonancedb.core.WavePattern;
+import ai.evacortex.resonancedb.core.storage.WavePattern;
 import ai.evacortex.resonancedb.core.storage.ManifestIndex;
 
 import java.util.*;

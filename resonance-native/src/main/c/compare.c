@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Prosperity-3.0
  *
  * Patent notice: The authors intend to seek patent protection for this software.
- * Commercial use >30 days → license@evacortex.com
+ * Commercial use >30 days → license@evacortex.ai
  */
 #include <math.h>
 #include <immintrin.h>
@@ -113,4 +113,46 @@ EXPORT void compare_many(const float* ampQ, const float* phaseQ,
     for (int i = 0; i < count; ++i) {
         out[i] = compare_wave_patterns(ampQ, phaseQ, ampList[i], phaseList[i], len);
     }
+}
+
+/**
+ * Computes energy and average phase delta between two wave patterns.
+ * Output: out[0] = energy, out[1] = avg_phase_delta (radians, ∈ [–π, +π])
+ */
+EXPORT void compare_with_phase_delta(const float* amp1, const float* phase1,
+                                     const float* amp2, const float* phase2,
+                                     int len, float* out) {
+    float energyA = 0.0f, energyB = 0.0f, interference = 0.0f, deltaSum = 0.0f;
+
+    for (int i = 0; i < len; ++i) {
+        float a1 = amp1[i], p1 = phase1[i];
+        float a2 = amp2[i], p2 = phase2[i];
+
+        float r1 = a1 * cosf(p1);
+        float i1 = a1 * sinf(p1);
+        float r2 = a2 * cosf(p2);
+        float i2 = a2 * sinf(p2);
+
+        float re = r1 + r2;
+        float im = i1 + i2;
+
+        interference += re * re + im * im;
+        energyA += r1 * r1 + i1 * i1;
+        energyB += r2 * r2 + i2 * i2;
+
+        float dphi = p2 - p1;
+        while (dphi <= -M_PI) dphi += 2 * M_PI;
+        while (dphi > M_PI)   dphi -= 2 * M_PI;
+
+        deltaSum += dphi;
+    }
+
+    float energySum = energyA + energyB;
+    float base = (energySum == 0.0f) ? 0.0f : 0.5f * interference / energySum;
+    float ampFactor = (energyA > 0.0f && energyB > 0.0f)
+                      ? 2.0f * sqrtf(energyA * energyB) / energySum
+                      : 0.0f;
+
+    out[0] = base * ampFactor;
+    out[1] = deltaSum / (float) len;
 }

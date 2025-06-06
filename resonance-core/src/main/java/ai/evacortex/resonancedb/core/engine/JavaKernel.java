@@ -8,7 +8,8 @@
  */
 package ai.evacortex.resonancedb.core.engine;
 
-import ai.evacortex.resonancedb.core.WavePattern;
+import ai.evacortex.resonancedb.core.storage.responce.ComparisonResult;
+import ai.evacortex.resonancedb.core.storage.WavePattern;
 import ai.evacortex.resonancedb.core.math.Complex;
 
 import java.util.List;
@@ -107,6 +108,14 @@ public final class JavaKernel implements ResonanceKernel {
         return results;
     }
 
+    /**
+     * Converts a {@link WavePattern} to an array of {@link Complex} values, applying comparison options.
+     * If {@code ignorePhase} is enabled, phases are set to zero (amplitude-only representation).
+     *
+     * @param pattern the input wave pattern
+     * @param options comparison configuration
+     * @return array of complex values
+     */
     private Complex[] toComplexWithOptions(WavePattern pattern, CompareOptions options) {
         Complex[] complex = pattern.toComplex();
 
@@ -118,5 +127,47 @@ public final class JavaKernel implements ResonanceKernel {
         }
 
         return complex;
+    }
+
+    @Override
+    public ComparisonResult compareWithPhaseDelta(WavePattern a, WavePattern b) {
+        Complex[] wave1 = a.toComplex();
+        Complex[] wave2 = b.toComplex();
+
+        if (wave1.length != wave2.length)
+            throw new IllegalArgumentException("Pattern length mismatch");
+
+        double phaseDeltaSum = 0.0;
+        double energyNumerator = 0.0;
+        double energyDenominator = 0.0;
+
+        for (int i = 0; i < wave1.length; i++) {
+            Complex c1 = wave1[i];
+            Complex c2 = wave2[i];
+
+            Complex sum = c1.add(c2);
+            energyNumerator += sum.absSquared();
+
+            double e1 = c1.absSquared();
+            double e2 = c2.absSquared();
+            energyDenominator += e1 + e2;
+
+            double delta = normalizePhase(c2.phase() - c1.phase());
+            phaseDeltaSum += delta;
+        }
+
+        float energy = (energyDenominator == 0.0)
+                ? 0.0f
+                : (float)(0.5 * energyNumerator / energyDenominator);
+
+        double avgPhaseDelta = phaseDeltaSum / wave1.length;
+
+        return new ComparisonResult(energy, avgPhaseDelta);
+    }
+
+    private static double normalizePhase(double delta) {
+        while (delta <= -Math.PI) delta += 2 * Math.PI;
+        while (delta > Math.PI) delta -= 2 * Math.PI;
+        return delta;
     }
 }

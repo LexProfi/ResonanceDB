@@ -10,6 +10,7 @@ package ai.evacortex.resonancedb.core.storage;
 
 import ai.evacortex.resonancedb.core.*;
 import ai.evacortex.resonancedb.core.engine.ResonanceEngine;
+import ai.evacortex.resonancedb.core.math.ResonanceZone;
 import ai.evacortex.resonancedb.core.math.ResonanceZoneClassifier;
 import ai.evacortex.resonancedb.core.exceptions.DuplicatePatternException;
 import ai.evacortex.resonancedb.core.exceptions.InvalidWavePatternException;
@@ -17,6 +18,9 @@ import ai.evacortex.resonancedb.core.exceptions.PatternNotFoundException;
 import ai.evacortex.resonancedb.core.exceptions.SegmentOverflowException;
 import ai.evacortex.resonancedb.core.metadata.PatternMetaStore;
 import ai.evacortex.resonancedb.core.sharding.PhaseShardSelector;
+import ai.evacortex.resonancedb.core.storage.io.SegmentReader;
+import ai.evacortex.resonancedb.core.storage.io.SegmentWriter;
+import ai.evacortex.resonancedb.core.storage.responce.*;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -344,8 +348,9 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 WavePattern cand = entry.pattern();
                 if (cand.amplitude().length != query.amplitude().length) continue;
 
-                float energy = ResonanceEngine.compare(query, cand);
-                double phaseShift = avgPhaseDelta(query.phase(), cand.phase());
+                ComparisonResult result = ResonanceEngine.compareWithPhaseDelta(query, cand);
+                float energy = result.energy();
+                double phaseShift = result.phaseDelta();
                 ResonanceZone zone = ResonanceZoneClassifier.classify(energy, phaseShift);
                 double zoneScore = ResonanceZoneClassifier.computeScore(energy, phaseShift);
 
@@ -364,14 +369,6 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         } catch (IOException e) {
             throw new RuntimeException("Failed to read segment: " + shard, e);
         }
-    }
-
-    private static double avgPhaseDelta(double[] a, double[] b) {
-        double sum = 0.0;
-        for (int i = 0; i < a.length; i++) {
-            sum += Math.abs(a[i] - b[i]);
-        }
-        return sum / a.length;
     }
 
     private void collectMatchesFromShard(String shard,

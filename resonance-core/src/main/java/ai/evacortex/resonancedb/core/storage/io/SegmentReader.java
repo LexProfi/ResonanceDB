@@ -6,13 +6,13 @@
  * Patent notice: The authors intend to seek patent protection for this software.
  * Commercial use >30 days → license@evacortex.ai
  */
-package ai.evacortex.resonancedb.core.storage;
+package ai.evacortex.resonancedb.core.storage.io;
 
-import ai.evacortex.resonancedb.core.WavePattern;
 import ai.evacortex.resonancedb.core.exceptions.InvalidWavePatternException;
 import ai.evacortex.resonancedb.core.exceptions.PatternNotFoundException;
-import ai.evacortex.resonancedb.core.io.codec.WavePatternCodec;
-import ai.evacortex.resonancedb.core.io.format.BinaryHeader;
+import ai.evacortex.resonancedb.core.storage.WavePattern;
+import ai.evacortex.resonancedb.core.storage.io.codec.WavePatternCodec;
+import ai.evacortex.resonancedb.core.storage.io.format.BinaryHeader;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -99,7 +99,7 @@ public final class SegmentReader implements AutoCloseable {
     }
 
     public List<PatternWithId> readAllWithId() {
-        Map<String, PatternWithId> latest = new LinkedHashMap<>(); // сохраняем последнюю версию ID
+        Map<String, PatternWithId> latest = new LinkedHashMap<>();
         ByteBuffer buf = mmap.duplicate().order(ByteOrder.LITTLE_ENDIAN);
         buf.position(BinaryHeader.SIZE);
 
@@ -151,11 +151,8 @@ public final class SegmentReader implements AutoCloseable {
             buf.position(entryStart + skip);
 
             String id = bytesToHex(idBytes);
-            // 🔁 Переопределяем предыдущую версию — сохраняется только последняя
             latest.put(id, new PatternWithId(id, pattern, entryStart));
         }
-
-        System.out.println("OK readAllWithId returned " + latest.size() + " entries");
         return new ArrayList<>(latest.values());
     }
 

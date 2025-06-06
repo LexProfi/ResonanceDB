@@ -12,5 +12,5 @@ dependencies {
 }
 
 application {
-    mainClass = 'cli.Main' // создашь этот класс позже
+    mainClass = 'cli.Main'
 }

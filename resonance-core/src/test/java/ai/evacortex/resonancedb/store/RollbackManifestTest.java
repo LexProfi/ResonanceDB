@@ -8,11 +8,11 @@
  */
 package ai.evacortex.resonancedb.store;
 
-import ai.evacortex.resonancedb.core.ResonanceMatch;
-import ai.evacortex.resonancedb.core.WavePattern;
+import ai.evacortex.resonancedb.core.storage.responce.ResonanceMatch;
+import ai.evacortex.resonancedb.core.storage.WavePattern;
 import ai.evacortex.resonancedb.core.WavePatternTestUtils;
 import ai.evacortex.resonancedb.core.storage.ManifestIndex;
-import ai.evacortex.resonancedb.core.storage.SegmentWriter;
+import ai.evacortex.resonancedb.core.storage.io.SegmentWriter;
 import ai.evacortex.resonancedb.core.storage.WavePatternStoreImpl;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;

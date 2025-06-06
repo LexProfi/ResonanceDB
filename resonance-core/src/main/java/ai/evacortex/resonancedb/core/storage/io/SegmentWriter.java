@@ -6,13 +6,13 @@
  * Patent notice: The authors intend to seek patent protection for this software.
  * Commercial use >30 days → license@evacortex.ai
  */
-package ai.evacortex.resonancedb.core.storage;
+package ai.evacortex.resonancedb.core.storage.io;
 
-import ai.evacortex.resonancedb.core.WavePattern;
 import ai.evacortex.resonancedb.core.exceptions.InvalidWavePatternException;
 import ai.evacortex.resonancedb.core.exceptions.SegmentOverflowException;
-import ai.evacortex.resonancedb.core.io.codec.WavePatternCodec;
-import ai.evacortex.resonancedb.core.io.format.BinaryHeader;
+import ai.evacortex.resonancedb.core.storage.WavePattern;
+import ai.evacortex.resonancedb.core.storage.io.codec.WavePatternCodec;
+import ai.evacortex.resonancedb.core.storage.io.format.BinaryHeader;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
@@ -120,7 +120,6 @@ public class SegmentWriter implements AutoCloseable {
             buffer.putInt(recordCount);
             buffer.putLong(writeOffset.get());
             buffer.force(0, BinaryHeader.SIZE);
-            System.out.printf("Writing at offset %d (cap=%d)%n", offset, buffer.capacity());
             return offset;
         } finally {
             lock.writeLock().unlock();

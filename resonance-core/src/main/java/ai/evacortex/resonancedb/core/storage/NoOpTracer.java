@@ -8,8 +8,6 @@
  */
 package ai.evacortex.resonancedb.core.storage;
 
-import ai.evacortex.resonancedb.core.WavePattern;
-
 public class NoOpTracer implements ResonanceTracer {
     @Override
     public void trace(String id, WavePattern query, WavePattern matched, float score) {

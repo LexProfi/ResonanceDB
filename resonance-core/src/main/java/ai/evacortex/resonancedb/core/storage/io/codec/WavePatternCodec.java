@@ -6,9 +6,9 @@
  * Patent notice: The authors intend to seek patent protection for this software.
  * Commercial use >30 days → license@evacortex.ai
  */
-package ai.evacortex.resonancedb.core.io.codec;
+package ai.evacortex.resonancedb.core.storage.io.codec;
 
-import ai.evacortex.resonancedb.core.WavePattern;
+import ai.evacortex.resonancedb.core.storage.WavePattern;
 import ai.evacortex.resonancedb.core.exceptions.InvalidWavePatternException;
 
 import java.nio.ByteBuffer;

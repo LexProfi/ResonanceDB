@@ -8,10 +8,11 @@
  */
 package ai.evacortex.resonancedb.core;
 
-import ai.evacortex.resonancedb.core.io.format.BinaryHeader;
+import ai.evacortex.resonancedb.core.storage.WavePattern;
+import ai.evacortex.resonancedb.core.storage.io.format.BinaryHeader;
 import ai.evacortex.resonancedb.core.storage.HashingUtil;
-import ai.evacortex.resonancedb.core.storage.SegmentReader;
-import ai.evacortex.resonancedb.core.storage.SegmentWriter;
+import ai.evacortex.resonancedb.core.storage.io.SegmentReader;
+import ai.evacortex.resonancedb.core.storage.io.SegmentWriter;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 

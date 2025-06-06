@@ -33,6 +33,12 @@ public final class NativeCompare {
             ADDRESS, ADDRESS, ADDRESS, ADDRESS, JAVA_INT, JAVA_INT, ADDRESS
     );
 
+    private static final FunctionDescriptor deltaDesc = FunctionDescriptor.ofVoid(
+            ADDRESS, ADDRESS, ADDRESS, ADDRESS, JAVA_INT, ADDRESS
+    );
+
+    private static final MethodHandle deltaHandle;
+
     private static final MethodHandle scalarHandle;
     private static final MethodHandle batchHandle;
 
@@ -49,6 +55,12 @@ public final class NativeCompare {
                 lookup.find("compare_many").orElseThrow(() ->
                         new UnsatisfiedLinkError("Native symbol 'compare_many' not found")),
                 batchDesc
+        );
+
+        deltaHandle = linker.downcallHandle(
+                lookup.find("compare_with_phase_delta").orElseThrow(() ->
+                        new UnsatisfiedLinkError("Native symbol 'compare_with_phase_delta' not found")),
+                deltaDesc
         );
     }
 
@@ -109,6 +121,28 @@ public final class NativeCompare {
             }
 
             return result;
+        }
+    }
+
+    public static float[] compareWithPhaseDelta(float[] amp1, float[] phase1,
+                                                float[] amp2, float[] phase2) throws Throwable {
+        if (amp1.length != amp2.length || phase1.length != phase2.length || amp1.length != phase1.length) {
+            throw new IllegalArgumentException("All arrays must be of equal length");
+        }
+
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment a1 = toMemorySegment(amp1, arena);
+            MemorySegment p1 = toMemorySegment(phase1, arena);
+            MemorySegment a2 = toMemorySegment(amp2, arena);
+            MemorySegment p2 = toMemorySegment(phase2, arena);
+            MemorySegment out = arena.allocate(JAVA_FLOAT, 2);
+
+            deltaHandle.invoke(a1, p1, a2, p2, amp1.length, out);
+
+            return new float[]{
+                    out.getAtIndex(JAVA_FLOAT, 0),
+                    out.getAtIndex(JAVA_FLOAT, 1)
+            };
         }
     }
 
