@@ -18,6 +18,13 @@
       "updated": "2025-06-08T19:30:37Z",
       "sha256": "97e667f6b312de4729d4c2006cff45f15b440a09c956bf181404679295270566"
     }
+  ,
+    {
+      "version": "1.0.3",
+      "created": "2025-06-03T17:52:41Z",
+      "updated": "2025-06-08T19:53:33Z",
+      "sha256": "b0db98b0a5cbd9e0dee6d450ac24d27f3540943e79e1a52f4a5ca1600512810d"
+    }
   ],
   "ResonanceDB_Implementation_and_Scaling.md": [
     {
@@ -49,6 +56,12 @@
       "created": "2025-06-03T17:52:41Z",
       "updated": "2025-06-08T19:30:37Z",
       "sha256": "782f7454bdd73d9e146232c205e8cb80c782c24472192125ff3d38c7ecf85c71"
+    },
+    {
+      "version": "1.0.5",
+      "created": "2025-06-03T17:52:41Z",
+      "updated": "2025-06-08T19:53:33Z",
+      "sha256": "ffe602789317507125e4fb568b91ee58eb280f5bcb37a137b10db994cc3549d1"
     }
   ],
   "Applications-of-ResonanceDB-in-AGI-Memory-and-Affective-Modeling.md": [
@@ -63,6 +76,12 @@
       "created": "2025-06-03T17:52:41Z",
       "updated": "2025-06-08T19:30:37Z",
       "sha256": "c3da1f0b50eea1fcebf7feba69d8d87064f149a02e3367d5e8c3bd5d8fe32d79"
+    },
+    {
+      "version": "1.0.2",
+      "created": "2025-06-03T17:52:41Z",
+      "updated": "2025-06-08T19:53:33Z",
+      "sha256": "791871a6d17f5d298d58515f671a877b0990b2baaf3ed4daebdddf77ab0fa60a"
     }
   ]
 }

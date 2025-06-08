@@ -5,7 +5,7 @@
 
 # 🧱 ResonanceDB: Implementation and Scaling
 > ⚠ Patent Notice
-> This document describes technical methods and systems that are covered by pending and/or granted patents. No license to implement or use these methods is granted by this document or its license. For licensing inquiries, contact (mailto:license@evacortex.ai).
+> This document describes technical methods and systems that are covered by pending and/or granted patents. No license to implement or use these methods is granted by this document or its license. For licensing inquiries, contact [license@evacortex.ai](mailto:license@evacortex.ai).
 ### *Architectural Design, Storage Format, and Horizontal Expansion*
 
 ---
