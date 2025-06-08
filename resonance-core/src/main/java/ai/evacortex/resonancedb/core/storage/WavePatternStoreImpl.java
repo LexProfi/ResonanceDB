@@ -16,6 +16,7 @@ import ai.evacortex.resonancedb.core.exceptions.DuplicatePatternException;
 import ai.evacortex.resonancedb.core.exceptions.InvalidWavePatternException;
 import ai.evacortex.resonancedb.core.exceptions.PatternNotFoundException;
 import ai.evacortex.resonancedb.core.exceptions.SegmentOverflowException;
+import ai.evacortex.resonancedb.core.math.WavePatternUtils;
 import ai.evacortex.resonancedb.core.metadata.PatternMetaStore;
 import ai.evacortex.resonancedb.core.sharding.PhaseShardSelector;
 import ai.evacortex.resonancedb.core.storage.io.SegmentReader;
@@ -286,6 +287,24 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     }
 
     @Override
+    public List<ResonanceMatch> queryComposite(List<WavePattern> patterns, List<Double> weights, int topK) {
+        Objects.requireNonNull(patterns, "patterns must not be null");
+        if (patterns.isEmpty()) throw new InvalidWavePatternException("Empty pattern list in composite query");
+
+        WavePattern superposed = WavePatternUtils.superpose(patterns, weights);
+        return query(superposed, topK);
+    }
+
+    @Override
+    public List<ResonanceMatchDetailed> queryCompositeDetailed(List<WavePattern> patterns, List<Double> weights, int topK) {
+        Objects.requireNonNull(patterns, "patterns must not be null");
+        if (patterns.isEmpty()) throw new InvalidWavePatternException("Empty pattern list in composite query");
+
+        WavePattern superposed = WavePatternUtils.superpose(patterns, weights);
+        return queryDetailed(superposed, topK);
+    }
+
+    @Override
     public float compare(WavePattern a, WavePattern b) {
         return ResonanceEngine.compare(a, b);
     }
@@ -407,9 +426,12 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 HeapItem item = new HeapItem(new ResonanceMatch(entry.id(), base, cand), priority);
                 if (heap.size() < topK) {
                     heap.add(item);
-                } else if (priority > heap.peek().priority()) {
-                    heap.poll();
-                    heap.add(item);
+                } else {
+                    HeapItem head = heap.peek();
+                    if (head != null && priority > head.priority()) {
+                        heap.poll();
+                        heap.add(item);
+                    }
                 }
             }
 

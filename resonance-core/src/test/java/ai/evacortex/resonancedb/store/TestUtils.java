@@ -15,6 +15,7 @@ import java.nio.file.Path;
 import java.util.Comparator;
 
 
+@SuppressWarnings("resource, ResultOfMethodCallIgnored")
 public class TestUtils {
     public static void deleteDirectoryRecursive(Path dir) throws IOException {
         Files.walk(dir)

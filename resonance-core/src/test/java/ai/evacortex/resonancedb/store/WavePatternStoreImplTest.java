@@ -27,9 +27,9 @@ import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.Comparator;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -45,6 +45,7 @@ public class WavePatternStoreImplTest {
         store = new WavePatternStoreImpl(tempDir);
     }
 
+    @SuppressWarnings("resource, ResultOfMethodCallIgnored")
     @AfterAll
     void cleanup() throws Exception {
         if (store != null) store.close();
@@ -155,8 +156,11 @@ public class WavePatternStoreImplTest {
             WavePattern psi = WavePatternTestUtils.createConstantPattern(1.0, i * 0.5, 64);
             store.insert(psi, Map.of("index", String.valueOf(i)));
         }
-        long segmentCount = Files.list(tempDir.resolve("segments")).count();
-        assertTrue(segmentCount >= 2);
+
+        try (Stream<Path> stream = Files.list(tempDir.resolve("segments"))) {
+            long segmentCount = stream.count();
+            assertTrue(segmentCount >= 2);
+        }
     }
 
     @Test
@@ -204,18 +208,13 @@ public class WavePatternStoreImplTest {
             assertTrue(metaJson.contains("\"case\""));
 
         } finally {
-            reopened.close();
-            Files.walk(dir)
-                    .sorted(Comparator.reverseOrder())
-                    .map(Path::toFile)
-                    .forEach(File::delete);
+            TestUtils.deleteDirectoryRecursive(tempDir);
         }
     }
 
     @Test
     void testDeleteRemovesFromQuery() throws Exception {
         Path dir = Files.createTempDirectory("resonance-delete");
-
         try (WavePatternStoreImpl localStore = new WavePatternStoreImpl(dir)) {
             WavePattern psi = WavePatternTestUtils.createConstantPattern(0.42, 0.13, 32);
             String id = localStore.insert(psi, Map.of());
@@ -233,10 +232,7 @@ public class WavePatternStoreImplTest {
             assertThrows(PatternNotFoundException.class, () -> localStore.delete(id));
 
         } finally {
-            Files.walk(dir)
-                    .sorted(Comparator.reverseOrder())
-                    .map(Path::toFile)
-                    .forEach(File::delete);
+            TestUtils.deleteDirectoryRecursive(tempDir);
         }
     }
 
@@ -467,6 +463,85 @@ public class WavePatternStoreImplTest {
             assertTrue(seenFringe, "FRINGE match must be present");
             assertTrue(seenShadow, "SHADOW match must be present");
 
+        } finally {
+            TestUtils.deleteDirectoryRecursive(tempDir);
+        }
+    }
+
+    @Test
+    void testQueryCompositeBasic() throws Exception {
+        Path tempDir = Files.createTempDirectory("resonance-query-composite-basic");
+        try (WavePatternStoreImpl store = new WavePatternStoreImpl(tempDir)) {
+            WavePattern p1 = WavePatternTestUtils.createConstantPattern(1.0, 0.0, 32);
+            WavePattern p2 = WavePatternTestUtils.createConstantPattern(1.0, Math.PI, 32);
+            WavePattern p3 = WavePatternTestUtils.createConstantPattern(1.0, 0.5, 32);
+
+            String id1 = store.insert(p1, Map.of("label", "core"));
+            String id2 = store.insert(p2, Map.of("label", "shadow"));
+            String id3 = store.insert(p3, Map.of("label", "fringe"));
+
+            List<WavePattern> components = List.of(p1, p3);
+            List<Double> weights = List.of(0.6, 0.4);
+
+            List<ResonanceMatch> results = store.queryComposite(components, weights, 3);
+
+            assertEquals(3, results.size());
+            Set<String> foundIds = results.stream().map(ResonanceMatch::id).collect(Collectors.toSet());
+
+            assertTrue(foundIds.contains(id1), "should include core component");
+            assertTrue(foundIds.contains(id3), "should include fringe component");
+            Optional<ResonanceMatch> shadowMatch = results.stream()
+                    .filter(m -> m.id().equals(id2))
+                    .findFirst();
+
+            shadowMatch.ifPresent(resonanceMatch -> assertTrue(resonanceMatch.energy() < 0.2f,
+                    "Shadow pattern should have low energy, not " + resonanceMatch.energy()));
+        } finally {
+            TestUtils.deleteDirectoryRecursive(tempDir);
+        }
+    }
+
+    @Test
+    void testQueryCompositeDetailedZones() throws Exception {
+        Path tempDir = Files.createTempDirectory("resonance-query-composite-detailed-zones");
+        try (WavePatternStoreImpl store = new WavePatternStoreImpl(tempDir)) {
+            WavePattern core = WavePatternTestUtils.createConstantPattern(1.0, 0.0, 64);
+            WavePattern fringe = WavePatternTestUtils.createConstantPattern(1.0, 0.5, 64);
+            WavePattern shadow = WavePatternTestUtils.createConstantPattern(1.0, Math.PI, 64);
+
+            String idCore = store.insert(core, Map.of("zone", "core"));
+            String idFringe = store.insert(fringe, Map.of("zone", "fringe"));
+            String idShadow = store.insert(shadow, Map.of("zone", "shadow"));
+
+            List<WavePattern> composite = List.of(core, fringe);
+            List<Double> weights = List.of(0.5, 0.5);
+
+            List<ResonanceMatchDetailed> matches = store.queryCompositeDetailed(composite, weights, 5);
+
+            boolean seenCore = false, seenFringe = false, seenShadow = false;
+
+            for (ResonanceMatchDetailed match : matches) {
+                if (match.id().equals(idCore)) {
+                    seenCore = true;
+                    assertEquals(ResonanceZone.CORE, match.zone());
+                }
+                if (match.id().equals(idFringe)) {
+                    seenFringe = true;
+                    assertTrue(
+                            match.zone() == ResonanceZone.FRINGE || match.zone() == ResonanceZone.CORE,
+                            "Expected FRINGE or CORE zone for fringe match, got " + match.zone()
+                    );
+                }
+                if (match.id().equals(idShadow)) {
+                    seenShadow = true;
+                    assertEquals(ResonanceZone.SHADOW, match.zone());
+                    assertTrue(match.energy() < 0.15f, "Shadow should have low energy");
+                }
+            }
+
+            assertTrue(seenCore, "CORE must appear in composite query");
+            assertTrue(seenFringe, "FRINGE must appear in composite query");
+            assertTrue(seenShadow, "SHADOW must still be detectable");
         } finally {
             TestUtils.deleteDirectoryRecursive(tempDir);
         }

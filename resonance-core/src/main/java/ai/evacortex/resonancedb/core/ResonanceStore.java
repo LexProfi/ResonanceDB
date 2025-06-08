@@ -121,4 +121,28 @@ public interface ResonanceStore {
      * @return list of {@link InterferenceEntry} instances
      */
     List<InterferenceEntry> queryInterferenceMap(WavePattern query, int topK);
+
+    /**
+     * Performs a composite query by superposing multiple wave patterns into a single
+     * interference wave and returning top-K matches.
+     *
+     * @param patterns list of input wave patterns to combine
+     * @param weights  optional list of weights for each pattern (null = equal weights)
+     * @param topK     number of matches to return
+     * @return list of {@link ResonanceMatch} results
+     */
+    List<ResonanceMatch> queryComposite(List<WavePattern> patterns, List<Double> weights, int topK);
+
+    /**
+     * Performs a detailed composite query, returning phase deltas, resonance zones, and scores.
+     *
+     * <p>This is useful for reasoning systems requiring fine-grained interpretability
+     * of resonance across multiple semantic vectors.</p>
+     *
+     * @param patterns list of input wave patterns to combine
+     * @param weights  optional weights (null = uniform)
+     * @param topK     number of matches to return
+     * @return list of {@link ResonanceMatchDetailed} with zone analysis
+     */
+    List<ResonanceMatchDetailed> queryCompositeDetailed(List<WavePattern> patterns, List<Double> weights, int topK);
 }
