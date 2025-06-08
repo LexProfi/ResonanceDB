@@ -3,7 +3,8 @@
 > This document is part of the ResonanceDB documentation set.  
 > This license applies to documentation only — not to the software, which is covered by the Prosperity Public License 3.0.
 # 🎯 Applications of ResonanceDB in AGI, Memory, and Affective Modeling
-
+> ⚠ Patent Notice
+> This document describes technical methods and systems that are covered by pending and/or granted patents. No license to implement or use these methods is granted by this document or its license. For licensing inquiries, contact (mailto:license@evacortex.ai).
 ### *Use Cases of Wave-Based Semantic Storage Beyond Symbolic AI*
 
 ---

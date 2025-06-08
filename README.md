@@ -91,7 +91,7 @@ public class Main {
     * You are on a supported OS (Linux/macOS); Windows requires `.dll`
 * When using **`JavaKernel`**, no native code is needed
 
-## 📦 Data Layout
+## 📦 Binary Segment Format
 
 Each `.segment` file stores `WavePattern` entries in binary format:
 
@@ -127,7 +127,7 @@ This enables scalable partitioning of stored waveforms and parallelized queries.
 * [x] `query(WavePattern, topK)` with scoring and self-match boost
 * [x] Shard-aware routing and phase-based segment indexing
 * [ ] CLI interface for insert/update/query
-* [ ] Thread-safe in-memory caches
+* [x] Thread-safe in-memory caches
 * [ ] Optional RocksDB index support
 * [ ] Patent filing and export control compliance
 
@@ -139,10 +139,12 @@ This enables scalable partitioning of stored waveforms and parallelized queries.
   which permits **non-commercial use only**.
 
 > 🔒 **Commercial use beyond a 30-day evaluation period requires a paid license.**
-> To obtain a commercial license, contact: `license@evacortex.com`
+> To obtain a commercial license, contact: `license@evacortex.ai`
 
 * All **whitepapers and documentation** located in the `docs/` directory are licensed under the
   [Creative Commons Attribution-NoDerivatives 4.0 International (CC BY-ND 4.0)](./LICENSE-docs) license.
+> 📄 The **whitepapers** may describe techniques or algorithms that are part of a pending patent application.  
+> Use of those methods in commercial products requires proper licensing, even if the implementation differs.
 ---
 
 
@@ -156,7 +158,7 @@ License terms will be updated upon filing.
 
 ## 📫 Contact
 
-* Author: [Aleksandr Listopad](mailto:license@evacortex.com)
-* Security & Licensing: `license@evacortex.com`
+* Author: [Aleksandr Listopad](mailto:license@evacortex.ai)
+* Security & Licensing: `license@evacortex.ai`
 * SPDX Identifier: `SPDX-License-Identifier: Prosperity-3.0`
 

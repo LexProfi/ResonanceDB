@@ -4,7 +4,8 @@
 > This license applies to documentation only — not to the software, which is covered by the Prosperity Public License 3.0.
 
 # 🧠 Cognitive Resonance as a Field-Based Semantic Substrate
-
+> ⚠ Patent Notice
+> This document describes technical methods and systems that are covered by pending and/or granted patents. No license to implement or use these methods is granted by this document or its license. For licensing inquiries, contact (mailto:license@evacortex.ai).
 ### *From Isometry of Meaning to Wave-Based Reasoning*
 
 ---
@@ -206,7 +207,7 @@ This concept is part of a pending patent covering:
 The software is dual-licensed under:
 
 * **Prosperity Public License 3.0** (non-commercial use),
-* commercial licensing via **[license@evacortex.com](mailto:license@evacortex.com)**.
+* commercial licensing via **[license@evacortex.ai](mailto:license@evacortex.ai)**.
 
 ---
 
@@ -220,7 +221,7 @@ ResonanceDB is not just a database. It is a **semantic substrate** for storing, 
 
 We propose further papers to complement this whitepaper:
 
-### 1. **ResonanceDB: Implementation and Scaling**
+### 1. [**ResonanceDB: Implementation and Scaling**](./ResonanceDB_Implementation_and_Scaling.md)
 
 > Practical engineering of the segment-based wave pattern store, sharding strategies, and memory performance.
 
@@ -228,6 +229,6 @@ We propose further papers to complement this whitepaper:
 
 > Exploration of multiple compare() kernels: strict, fuzzy, emotional, multimodal.
 
-### 3. **Applications of Wave-Based Memory in AGI**
+### 3. [**Applications of Wave-Based Memory in AGI**](./Applications-of-ResonanceDB-in-AGI-Memory-and-Affective-Modeling.md)
 
 > Use cases in self-reflective agents, episodic memory, and emotion-aligned decisions.
