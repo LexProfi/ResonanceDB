@@ -21,7 +21,7 @@ Where the first whitepaper introduced the ontological and theoretical foundation
 
 ```java
 public record WavePattern(double[] amplitude, double[] phase) {
-    public Complex[] toComplex() { ... }
+  public Complex[] toComplex() { ... }
 }
 ```
 
@@ -84,15 +84,21 @@ This index allows:
 
 ```java
 public interface ResonanceStore {
-    String insert(WavePattern psi, Map<String, String> metadata);
-    void delete(String id);
-    void update(String id, WavePattern psi, Map<String, String> metadata);
-    List<ResonanceMatch> query(WavePattern query, int topK);
-    float compare(WavePattern a, WavePattern b);
+  String insert(WavePattern psi, Map<String, String> metadata);
+  void delete(String id);
+  void update(String id, WavePattern psi, Map<String, String> metadata);
+  List<ResonanceMatch> query(WavePattern query, int topK);
+  float compare(WavePattern a, WavePattern b);
+  List<ResonanceMatchDetailed> queryDetailed(WavePattern query, int topK);
+  InterferenceMap queryInterference(WavePattern query, int topK);
+  List<InterferenceEntry> queryInterferenceMap(WavePattern query, int topK);
+  List<ResonanceMatch> queryComposite(List<WavePattern> patterns, List<Double> weights, int topK);
+  List<ResonanceMatchDetailed> queryCompositeDetailed(List<WavePattern> patterns, List<Double> weights, int topK);
 }
 ```
 
 ### Requirements:
+
 * All methods are thread-safe.
 * `compare()` is deterministic and stateless.
 
@@ -102,24 +108,27 @@ public interface ResonanceStore {
 
 ### 6.1 Resonance Equation
 
-Given two ψ-patterns, the resonance energy is computed as:
+Each wave pattern is interpreted as:
 
 $$
-R(\psi_1, \psi_2) = \frac{1}{2} \cdot \frac{|\psi_1(x) + \psi_2(x)|^2}{|\psi_1(x)|^2 + |\psi_2(x)|^2} \cdot \left( \frac{2 \cdot \sqrt{E_1 \cdot E_2}}{E_1 + E_2} \right)
+\psi(x) = A(x) \cdot e^{i\varphi(x)}
 $$
 
-Steps:
+Similarity is computed as normalized interference energy:
 
-* Convert both patterns to complex\[]
-* Pointwise sum
-* Compute squared magnitude of interference
-* Normalize by combined energy
-* Apply amplitude balance factor
+$$
+R(\psi_1, \psi_2) = \frac{1}{2} \cdot \frac{|\psi_1 + \psi_2|^2}{|\psi_1|^2 + |\psi_2|^2} \cdot \left( \frac{2 \cdot \sqrt{E_1 E_2}}{E_1 + E_2} \right)
+$$
 
-This formula yields a result in \[0.0 ... 1.0], where:
+Where:
 
-* 1.0 = full constructive interference (equal amplitude and phase)
-* 0.0 = full destructive interference (opposite phase)
+* $|\psi|^2$ — total energy  
+* $E_1$, $E_2$ — input energies
+* result is normalized in \[0.0 .. 1.0].
+
+Additional diagnostics include:
+
+* `compareWithPhaseDelta()` — returns energy + signed phase delta $\Delta\varphi \in [-\pi, +\pi]$
 
 ---
 
@@ -200,3 +209,4 @@ Routing based on phase topology enables field-localized query acceleration.
 This architecture enables a performant, field-oriented, scalable system for storing and retrieving waveform-encoded semantic patterns. It combines deterministic semantics with memory-mapped speed and prepares for distributed cognitive reasoning.
 
 Future expansions include pluggable interference models, distributed query fabric, and hybrid symbolic-wavefront orchestration.
+
