@@ -203,16 +203,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             PriorityQueue<HeapItem> heap = new PriorityQueue<>(
                     topK, Comparator.comparingDouble(HeapItem::priority)); // min-heap
 
-            Set<String> scanned = new HashSet<>();
-            PhaseShardSelector selector = shardSelectorRef.get();
-
-            for (String shard : selector.getRelevantShards(query)) {
-                scanned.add(shard);
-                collectMatchesFromShard(shard, query, queryId, topK, heap);
-            }
-
             for (String shard : segmentWriters.keySet()) {
-                if (scanned.contains(shard)) continue;
                 collectMatchesFromShard(shard, query, queryId, topK, heap);
             }
 
@@ -240,16 +231,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             PriorityQueue<HeapItemDetailed> heap = new PriorityQueue<>(
                     topK, Comparator.comparingDouble(HeapItemDetailed::priority));
 
-            Set<String> scanned = new HashSet<>();
-            PhaseShardSelector selector = shardSelectorRef.get();
-
-            for (String shard : selector.getRelevantShards(query)) {
-                scanned.add(shard);
-                collectDetailedFromShard(shard, query, queryId, topK, heap);
-            }
-
             for (String shard : segmentWriters.keySet()) {
-                if (scanned.contains(shard)) continue;
                 collectDetailedFromShard(shard, query, queryId, topK, heap);
             }
 

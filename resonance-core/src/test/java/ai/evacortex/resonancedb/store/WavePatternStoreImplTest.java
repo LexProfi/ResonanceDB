@@ -26,7 +26,6 @@ import java.io.IOException;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -56,20 +55,19 @@ public class WavePatternStoreImplTest {
     }
 
     @Test
-    void testInsertAndQuery() throws IOException {
+    void testInsertAndQuery() {
         double[] amp = {0.37454012, 0.9507143, 0.7319939, 0.5986584};
         double[] phase = {0.0, 0.1, 0.2, 0.3};
         WavePattern psi = new WavePattern(amp, phase);
 
-        store.insert(psi, Map.of());
-        Files.readAllLines(Paths.get(tempDir + "/index/manifest.idx"));
+        String id = store.insert(psi, Map.of());
         List<ResonanceMatch> results = store.query(psi, 1);
         assertEquals(1, results.size());
 
         ResonanceMatch match = results.getFirst();
+        assertEquals(id, match.id());
         assertArrayEquals(amp, match.pattern().amplitude(), 1e-9);
         assertArrayEquals(phase, match.pattern().phase(), 1e-9);
-
         assertEquals(1.0f, match.energy(), 1e-5);
     }
 
@@ -152,14 +150,26 @@ public class WavePatternStoreImplTest {
 
     @Test
     void testMultipleSegmentsCreated() throws IOException {
-        for (int i = 0; i < 20; i++) {
-            WavePattern psi = WavePatternTestUtils.createConstantPattern(1.0, i * 0.5, 64);
+        int count = 20;
+        int dim = 64;
+
+        for (int i = 0; i < count; i++) {
+            double phaseShift = i * 0.15;
+            double ampBase = 1.0 + (i * 0.001);
+
+            double[] amp = new double[dim];
+            double[] phase = new double[dim];
+            for (int j = 0; j < dim; j++) {
+                amp[j] = ampBase;
+                phase[j] = phaseShift;
+            }
+
+            WavePattern psi = new WavePattern(amp, phase);
             store.insert(psi, Map.of("index", String.valueOf(i)));
         }
-
         try (Stream<Path> stream = Files.list(tempDir.resolve("segments"))) {
             long segmentCount = stream.count();
-            assertTrue(segmentCount >= 2);
+            assertTrue(segmentCount >= 2, "Expected at least 2 segments to be created");
         }
     }
 
@@ -545,5 +555,66 @@ public class WavePatternStoreImplTest {
         } finally {
             TestUtils.deleteDirectoryRecursive(tempDir);
         }
+    }
+
+    @Test
+    void testQueryReturnsMatchesFromMultiplePhases() {
+        WavePattern p1 = WavePatternTestUtils.createConstantPattern(1.0, 0.1, 64); // Phase group A
+        WavePattern p2 = WavePatternTestUtils.createConstantPattern(1.0, 2.5, 64); // Phase group B
+
+        store.insert(p1, Map.of("label", "phaseA"));
+        store.insert(p2, Map.of("label", "phaseB"));
+
+        WavePattern query = WavePatternTestUtils.createConstantPattern(1.0, 1.0, 64);
+        List<ResonanceMatch> results = store.query(query, 2);
+
+        Set<String> phases = results.stream()
+                .map(r -> Arrays.stream(r.pattern().phase()).average().orElse(0.0))
+                .map(p -> p < Math.PI / 2 ? "A" : "B")
+                .collect(Collectors.toSet());
+
+        assertTrue(phases.size() > 1, "Should match from multiple phase groups");
+    }
+
+    @Test
+    void testSegmentDistributionByPhase() throws IOException {
+        int dim = 64;
+        double[] phaseCenters = {0.1, 1.0, 2.0, 2.9};
+
+        for (int i = 0; i < phaseCenters.length; i++) {
+            double[] amp = new double[dim];
+            double[] phase = new double[dim];
+            Arrays.fill(amp, 1.0 + i * 0.001);
+            Arrays.fill(phase, phaseCenters[i]);
+
+            WavePattern psi = new WavePattern(amp, phase);
+            store.insert(psi, Map.of("index", String.valueOf(i)));
+        }
+
+        Path segmentsDir = tempDir.resolve("segments");
+        try (Stream<Path> files = Files.list(segmentsDir)) {
+            long count = files.filter(f -> f.getFileName().toString().endsWith(".segment")).count();
+            assertTrue(count >= 2, "Expected at least 2 segments for phase diversity");
+        }
+    }
+
+    @Test
+    void testQueryDetailedEnergyAccuracy() {
+        WavePattern a = WavePatternTestUtils.createConstantPattern(1.0, 0.3, 64);
+        WavePattern b = WavePatternTestUtils.createConstantPattern(1.0, 0.9, 64);
+
+        String idB = store.insert(b, Map.of("label", "b"));
+
+        float expected = store.compare(a, b);
+
+        List<ResonanceMatchDetailed> matches = store.queryDetailed(a, 5);
+        Optional<ResonanceMatchDetailed> bMatch = matches.stream()
+                .filter(m -> m.id().equals(idB))
+                .findFirst();
+
+        assertTrue(bMatch.isPresent(), "Expected pattern b in detailed query results");
+        float actual = bMatch.get().energy();
+
+        assertEquals(expected, actual, 1e-5, "Detailed match energy must match direct compare()");
     }
 }
