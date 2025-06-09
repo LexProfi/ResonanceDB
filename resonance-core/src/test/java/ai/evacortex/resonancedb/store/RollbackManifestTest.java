@@ -78,7 +78,6 @@ class RollbackManifestTest {
         String newId = HashingUtil.computeContentHash(updated);
         String segment = store.getShardSelector().selectShard(updated);
 
-        // Spy на SegmentWriter
         Field writersField = WavePatternStoreImpl.class.getDeclaredField("segmentWriters");
         writersField.setAccessible(true);
         @SuppressWarnings("unchecked")
@@ -92,13 +91,11 @@ class RollbackManifestTest {
 
         assertThrows(RuntimeException.class, () -> store.replace(oldId, updated, Map.of()));
 
-        // Проверка, что старый паттерн остался
         List<ResonanceMatch> matches = store.query(original, 1);
         assertFalse(matches.isEmpty(), "original pattern must still be queryable");
         assertEquals(oldId, matches.get(0).id());
         assertEquals(1.0f, matches.get(0).energy(), 1e-5);
 
-        // Проверка состояния manifest
         Field manifestField = WavePatternStoreImpl.class.getDeclaredField("manifest");
         manifestField.setAccessible(true);
         ManifestIndex manifest = (ManifestIndex) manifestField.get(store);

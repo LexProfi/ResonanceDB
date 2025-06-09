@@ -560,19 +560,15 @@ public class WavePatternStoreImplTest {
 
     @Test
     void testQueryReturnsMatchesFromMultiplePhases() {
-        // Создаём два паттерна с фазами по разные стороны от фазы запроса
-        WavePattern phaseA = WavePatternTestUtils.createConstantPattern(1.0, 0.3, 64); // < π/2
-        WavePattern phaseB = WavePatternTestUtils.createConstantPattern(1.0, 1.7, 64); // > π/2
-        WavePattern query = WavePatternTestUtils.createConstantPattern(1.0, 1.0, 64);  // между ними
+        WavePattern phaseA = WavePatternTestUtils.createConstantPattern(1.0, 0.3, 64);
+        WavePattern phaseB = WavePatternTestUtils.createConstantPattern(1.0, 1.7, 64);
+        WavePattern query = WavePatternTestUtils.createConstantPattern(1.0, 1.0, 64);
 
-        // Вставка обоих в хранилище
         String idA = store.insert(phaseA, Map.of("label", "phaseA"));
         String idB = store.insert(phaseB, Map.of("label", "phaseB"));
 
-        // Выполняем query, берём top-2 — этого достаточно
         List<ResonanceMatch> results = store.query(query, 2);
 
-        // Гарантируем, что в результатах оба ID
         Set<String> returnedIds = results.stream()
                 .map(ResonanceMatch::id)
                 .collect(Collectors.toSet());

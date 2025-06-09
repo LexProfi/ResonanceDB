@@ -94,7 +94,6 @@ class WavePatternStoreConcurrencyTest {
         Assertions.assertTrue(pool.awaitTermination(90, TimeUnit.SECONDS),
                 "Threads did not finish in time");
 
-        // Проверка финального состояния
         for (Map.Entry<String, WavePattern> e : finalRevision.entrySet()) {
             WavePattern pat = e.getValue();
             List<ResonanceMatch> hits = store.query(pat, 1);
@@ -105,7 +104,6 @@ class WavePatternStoreConcurrencyTest {
                     "Pattern match is not exact (energy=" + energy + ')');
         }
 
-        // Проверка того, что некоторые старые паттерны (возможно) уже не найдены
         for (Map.Entry<String, WavePattern> e : initialRevision.entrySet()) {
             String oldId = e.getKey();
             WavePattern old = e.getValue();
