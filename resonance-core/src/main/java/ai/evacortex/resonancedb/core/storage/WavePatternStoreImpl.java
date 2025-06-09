@@ -28,7 +28,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -51,6 +54,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     private final ReadWriteLock globalLock = new ReentrantReadWriteLock();
     private record HeapItem(ResonanceMatch match, float priority) {}
     private record HeapItemDetailed(ResonanceMatchDetailed match, double priority) {}
+    private final ExecutorService executor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
 
     public WavePatternStoreImpl(Path dbRoot) {
         this.rootDir = dbRoot;
@@ -217,22 +221,23 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         try {
             String queryId = HashingUtil.computeContentHash(query);
 
-            PriorityQueue<HeapItem> heap = new PriorityQueue<>(
-                    topK, Comparator.comparingDouble(HeapItem::priority));
-
-            for (String shard : segmentWriters.keySet()) {
-                collectMatchesFromShard(shard, query, queryId, topK, heap);
-            }
-
             Comparator<HeapItem> order = Comparator
                     .comparingDouble(HeapItem::priority).reversed()
                     .thenComparing((HeapItem h) -> h.match().energy(), Comparator.reverseOrder())
                     .thenComparing(h -> h.match().id());
 
-            return heap.stream()
-                    .sorted(order)
-                    .map(HeapItem::match)
+            List<CompletableFuture<List<HeapItem>>> futures = segmentWriters.keySet().stream()
+                    .map(shard -> CompletableFuture.supplyAsync(() ->
+                            collectMatchesFromShard(shard, query, queryId, topK), executor))
                     .toList();
+
+            List<HeapItem> all = futures.stream()
+                    .flatMap(future -> future.join().stream())
+                    .sorted(order)
+                    .limit(topK)
+                    .toList();
+
+            return all.stream().map(HeapItem::match).toList();
 
         } finally {
             globalLock.readLock().unlock();
@@ -245,22 +250,23 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         try {
             String queryId = HashingUtil.computeContentHash(query);
 
-            PriorityQueue<HeapItemDetailed> heap = new PriorityQueue<>(
-                    topK, Comparator.comparingDouble(HeapItemDetailed::priority));
-
-            for (String shard : segmentWriters.keySet()) {
-                collectDetailedFromShard(shard, query, queryId, topK, heap);
-            }
-
             Comparator<HeapItemDetailed> order = Comparator
                     .comparingDouble(HeapItemDetailed::priority).reversed()
                     .thenComparing((HeapItemDetailed h) -> h.match().energy(), Comparator.reverseOrder())
                     .thenComparing(h -> h.match().id());
 
-            return heap.stream()
-                    .sorted(order)
-                    .map(HeapItemDetailed::match)
+            List<CompletableFuture<List<HeapItemDetailed>>> futures = segmentWriters.keySet().stream()
+                    .map(shard -> CompletableFuture.supplyAsync(() ->
+                            collectDetailedFromShard(shard, query, queryId, topK), executor))
                     .toList();
+
+            List<HeapItemDetailed> all = futures.stream()
+                    .flatMap(future -> future.join().stream())
+                    .sorted(order)
+                    .limit(topK)
+                    .toList();
+
+            return all.stream().map(HeapItemDetailed::match).toList();
 
         } finally {
             globalLock.readLock().unlock();
@@ -341,14 +347,12 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         return shardSelectorRef.get();
     }
 
-    private void collectDetailedFromShard(String shard,
-                                          WavePattern query,
-                                          String queryId,
-                                          int topK,
-                                          PriorityQueue<HeapItemDetailed> heap) {
-
+    private List<HeapItem> collectMatchesFromShard(String shard,
+                                                   WavePattern query,
+                                                   String queryId,
+                                                   int topK) {
         SegmentWriter writer = segmentWriters.get(shard);
-        if (writer == null) return;
+        if (writer == null) return List.of();
 
         try (SegmentReader reader = new SegmentReader(writer.getPath())) {
 
@@ -361,6 +365,56 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 if (loc.offset() != entry.offset()) continue;
                 latestValidEntries.put(entry.id(), entry);
             }
+
+            PriorityQueue<HeapItem> localHeap = new PriorityQueue<>(topK, Comparator.comparingDouble(HeapItem::priority));
+
+            for (SegmentReader.PatternWithId entry : latestValidEntries.values()) {
+                WavePattern cand = entry.pattern();
+                if (cand.amplitude().length != query.amplitude().length) continue;
+
+                float base = ResonanceEngine.compare(query, cand);
+                boolean idEq = entry.id().equals(queryId);
+                boolean exactEq = base > 1.0f - EXACT_MATCH_EPS;
+                float priority = base + (idEq ? 1.0f : 0.0f) + (exactEq ? 0.5f : 0.0f);
+
+                tracer.trace(entry.id(), query, cand, base);
+
+                HeapItem item = new HeapItem(new ResonanceMatch(entry.id(), base, cand), priority);
+                HeapItem head = localHeap.peek();
+                if (head == null || priority > head.priority()) {
+                    if (head != null) localHeap.poll();
+                    localHeap.add(item);
+                }
+            }
+
+            return new ArrayList<>(localHeap);
+
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to read segment: " + shard, e);
+        }
+    }
+
+    private List<HeapItemDetailed> collectDetailedFromShard(String shard,
+                                                            WavePattern query,
+                                                            String queryId,
+                                                            int topK) {
+
+        SegmentWriter writer = segmentWriters.get(shard);
+        if (writer == null) return List.of();
+
+        try (SegmentReader reader = new SegmentReader(writer.getPath())) {
+
+            Map<String, SegmentReader.PatternWithId> latestValidEntries = new HashMap<>();
+
+            for (SegmentReader.PatternWithId entry : reader.readAllWithId()) {
+                ManifestIndex.PatternLocation loc = manifest.get(entry.id());
+                if (loc == null) continue;
+                if (!loc.segmentName().equals(shard)) continue;
+                if (loc.offset() != entry.offset()) continue;
+                latestValidEntries.put(entry.id(), entry);
+            }
+
+            PriorityQueue<HeapItemDetailed> localHeap = new PriorityQueue<>(topK, Comparator.comparingDouble(HeapItemDetailed::priority));
 
             for (SegmentReader.PatternWithId entry : latestValidEntries.values()) {
                 WavePattern cand = entry.pattern();
@@ -380,59 +434,15 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 boolean exactEq = energy > 1.0f - EXACT_MATCH_EPS;
                 double priority = energy + (idEq ? 1.0 : 0.0) + (exactEq ? 0.5 : 0.0);
 
-                heap.add(new HeapItemDetailed(match, priority));
-                if (heap.size() > topK) heap.poll();
-            }
-
-        } catch (IOException e) {
-            throw new RuntimeException("Failed to read segment: " + shard, e);
-        }
-    }
-
-    private void collectMatchesFromShard(String shard,
-                                         WavePattern query,
-                                         String queryId,
-                                         int topK,
-                                         PriorityQueue<HeapItem> heap) {
-
-        SegmentWriter writer = segmentWriters.get(shard);
-        if (writer == null) return;
-
-        try (SegmentReader reader = new SegmentReader(writer.getPath())) {
-
-            Map<String, SegmentReader.PatternWithId> latestValidEntries = new HashMap<>();
-
-            for (SegmentReader.PatternWithId entry : reader.readAllWithId()) {
-                ManifestIndex.PatternLocation loc = manifest.get(entry.id());
-                if (loc == null) continue;
-                if (!loc.segmentName().equals(shard)) continue;
-                if (loc.offset() != entry.offset()) continue;
-
-                latestValidEntries.put(entry.id(), entry);
-            }
-
-            for (SegmentReader.PatternWithId entry : latestValidEntries.values()) {
-                WavePattern cand = entry.pattern();
-                if (cand.amplitude().length != query.amplitude().length) continue;
-
-                float base = ResonanceEngine.compare(query, cand);
-                boolean idEq = entry.id().equals(queryId);
-                boolean exactEq = base > 1.0f - EXACT_MATCH_EPS;
-                float priority = base + (idEq ? 1.0f : 0.0f) + (exactEq ? 0.5f : 0.0f);
-
-                tracer.trace(entry.id(), query, cand, base);
-
-                HeapItem item = new HeapItem(new ResonanceMatch(entry.id(), base, cand), priority);
-                if (heap.size() < topK) {
-                    heap.add(item);
-                } else {
-                    HeapItem head = heap.peek();
-                    if (head != null && priority > head.priority()) {
-                        heap.poll();
-                        heap.add(item);
-                    }
+                HeapItemDetailed item = new HeapItemDetailed(match, priority);
+                HeapItemDetailed head = localHeap.peek();
+                if (head == null || priority > head.priority()) {
+                    if (head != null) localHeap.poll();
+                    localHeap.add(item);
                 }
             }
+
+            return new ArrayList<>(localHeap);
 
         } catch (IOException e) {
             throw new RuntimeException("Failed to read segment: " + shard, e);
