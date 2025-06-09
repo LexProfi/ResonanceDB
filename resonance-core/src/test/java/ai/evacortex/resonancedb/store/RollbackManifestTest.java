@@ -8,6 +8,7 @@
  */
 package ai.evacortex.resonancedb.store;
 
+import ai.evacortex.resonancedb.core.storage.HashingUtil;
 import ai.evacortex.resonancedb.core.storage.responce.ResonanceMatch;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
 import ai.evacortex.resonancedb.core.WavePatternTestUtils;
@@ -69,39 +70,40 @@ class RollbackManifestTest {
     }
 
     @Test
-    void testUpdateFailureRollback() throws Exception {
-        WavePattern ok = WavePatternTestUtils.createConstantPattern(0.2, 0.2, 16);
-        String id = store.insert(ok, Map.of());
-        Field manifestField = WavePatternStoreImpl.class.getDeclaredField("manifest");
-
-        manifestField.setAccessible(true);
-
-        ManifestIndex manifest = (ManifestIndex) manifestField.get(store);
-        manifest.flush();
+    void testReplaceFailureRollback() throws Exception {
+        WavePattern original = WavePatternTestUtils.createConstantPattern(0.2, 0.2, 16);
+        String oldId = store.insert(original, Map.of());
 
         WavePattern updated = WavePatternTestUtils.createConstantPattern(0.3, 0.3, 16);
+        String newId = HashingUtil.computeContentHash(updated);
+        String segment = store.getShardSelector().selectShard(updated);
+
+        // Spy на SegmentWriter
         Field writersField = WavePatternStoreImpl.class.getDeclaredField("segmentWriters");
         writersField.setAccessible(true);
-
         @SuppressWarnings("unchecked")
         Map<String, SegmentWriter> writers = (Map<String, SegmentWriter>) writersField.get(store);
-        String targetSegment = store.getShardSelector().selectShard(updated);
 
-        store.query(updated, 1);
+        SegmentWriter originalWriter = writers.get(segment);
+        SegmentWriter spy = Mockito.spy(originalWriter);
+        Mockito.doThrow(new RuntimeException("simulated insert failure"))
+                .when(spy).write(Mockito.eq(newId), Mockito.any(WavePattern.class));
+        writers.put(segment, spy);
 
-        SegmentWriter original = writers.get(targetSegment);
-        SegmentWriter spy = Mockito.spy(original);
-        Mockito.doThrow(new RuntimeException("simulated write failure"))
-                .when(spy).write(Mockito.eq(id), Mockito.any(WavePattern.class));
+        assertThrows(RuntimeException.class, () -> store.replace(oldId, updated, Map.of()));
 
-        writers.put(targetSegment, spy);
-        assertThrows(RuntimeException.class, () -> store.update(id, updated, Map.of()));
+        // Проверка, что старый паттерн остался
+        List<ResonanceMatch> matches = store.query(original, 1);
+        assertFalse(matches.isEmpty(), "original pattern must still be queryable");
+        assertEquals(oldId, matches.get(0).id());
+        assertEquals(1.0f, matches.get(0).energy(), 1e-5);
 
-        List<ResonanceMatch> res = store.query(ok, 1);
+        // Проверка состояния manifest
+        Field manifestField = WavePatternStoreImpl.class.getDeclaredField("manifest");
+        manifestField.setAccessible(true);
+        ManifestIndex manifest = (ManifestIndex) manifestField.get(store);
 
-        assertFalse(res.isEmpty(), "old pattern must survive failed update");
-        assertEquals(id, res.get(0).id());
-        assertEquals(1.0f, res.get(0).energy(), 1e-5);
-        assertTrue(manifest.contains(id), "ID must still be present in manifest after failed update");
+        assertTrue(manifest.contains(oldId), "old ID must still be present in manifest");
+        assertFalse(manifest.contains(newId), "new ID must not be present after failed replace");
     }
 }

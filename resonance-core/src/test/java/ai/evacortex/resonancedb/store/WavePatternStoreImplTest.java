@@ -17,13 +17,10 @@ import ai.evacortex.resonancedb.core.math.ResonanceZone;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
 import ai.evacortex.resonancedb.core.storage.WavePatternStoreImpl;
 import ai.evacortex.resonancedb.core.storage.responce.*;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.TestInstance;
+import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
-import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
@@ -32,26 +29,22 @@ import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+@TestInstance(TestInstance.Lifecycle.PER_METHOD)
 public class WavePatternStoreImplTest {
 
-    private Path tempDir;
     private WavePatternStoreImpl store;
 
-    @BeforeAll
-    void setup() throws Exception {
-        tempDir = Files.createTempDirectory("resonance-test");
+    @TempDir
+    Path tempDir;
+
+    @BeforeEach
+    void setup() {
         store = new WavePatternStoreImpl(tempDir);
     }
 
-    @SuppressWarnings("resource, ResultOfMethodCallIgnored")
-    @AfterAll
+    @AfterEach
     void cleanup() throws Exception {
         if (store != null) store.close();
-        Files.walk(tempDir)
-                .sorted(Comparator.reverseOrder())
-                .map(Path::toFile)
-                .forEach(File::delete);
     }
 
     @Test
@@ -88,21 +81,29 @@ public class WavePatternStoreImplTest {
     }
 
     @Test
-    void testUpdate() {
+    void testReplace() {
         WavePattern original = WavePatternTestUtils.createConstantPattern(0.3, 0.1, 8);
-        String id = HashingUtil.computeContentHash(original);
-        store.insert(original, Map.of());
+        String oldId = store.insert(original, Map.of("rev", "1"));
+
         WavePattern updated = WavePatternTestUtils.createConstantPattern(0.9, 1.2, 8);
-        store.update(id, updated, Map.of());
-        List<ResonanceMatch> matches = store.query(updated, 1);
-        assertFalse(matches.isEmpty(), "updated pattern must be found");
-        assertEquals(id, matches.getFirst().id(), "ID should remain unchanged after update");
-        assertTrue(matches.getFirst().energy() > 0.95f, "energy with itself must stay high");
-        List<ResonanceMatch> oldMatch = store.query(original, 1);
-        assertFalse(oldMatch.isEmpty(), "query should still return a match");
-        assertEquals(id, oldMatch.getFirst().id(), "same business object, so same ID");
-        assertTrue(oldMatch.getFirst().energy() < 0.95f,
-                "energy for outdated waveform must drop below threshold");
+        String newId = store.replace(oldId, updated, Map.of("rev", "2"));
+
+        assertEquals(HashingUtil.computeContentHash(updated), newId);
+        assertNotEquals(oldId, newId, "ID must change after content replacement");
+
+        List<ResonanceMatch> newMatch = store.query(updated, 1);
+        assertFalse(newMatch.isEmpty(), "Replaced pattern must be found");
+        assertEquals(newId, newMatch.getFirst().id(), "Query must return new ID");
+        assertEquals(1.0f, store.compare(updated, newMatch.getFirst().pattern()), 1e-5);
+
+        assertThrows(PatternNotFoundException.class, () -> store.delete(oldId),
+                "Old ID must no longer exist");
+
+        List<ResonanceMatch> residual = store.query(original, 1);
+        if (!residual.isEmpty()) {
+            assertNotEquals(oldId, residual.getFirst().id(), "Old ID must not appear in results");
+            assertTrue(residual.getFirst().energy() < 0.95f, "Old waveform should not match strongly");
+        }
     }
 
     @Test
@@ -559,21 +560,25 @@ public class WavePatternStoreImplTest {
 
     @Test
     void testQueryReturnsMatchesFromMultiplePhases() {
-        WavePattern p1 = WavePatternTestUtils.createConstantPattern(1.0, 0.1, 64); // Phase group A
-        WavePattern p2 = WavePatternTestUtils.createConstantPattern(1.0, 2.5, 64); // Phase group B
+        // Создаём два паттерна с фазами по разные стороны от фазы запроса
+        WavePattern phaseA = WavePatternTestUtils.createConstantPattern(1.0, 0.3, 64); // < π/2
+        WavePattern phaseB = WavePatternTestUtils.createConstantPattern(1.0, 1.7, 64); // > π/2
+        WavePattern query = WavePatternTestUtils.createConstantPattern(1.0, 1.0, 64);  // между ними
 
-        store.insert(p1, Map.of("label", "phaseA"));
-        store.insert(p2, Map.of("label", "phaseB"));
+        // Вставка обоих в хранилище
+        String idA = store.insert(phaseA, Map.of("label", "phaseA"));
+        String idB = store.insert(phaseB, Map.of("label", "phaseB"));
 
-        WavePattern query = WavePatternTestUtils.createConstantPattern(1.0, 1.0, 64);
+        // Выполняем query, берём top-2 — этого достаточно
         List<ResonanceMatch> results = store.query(query, 2);
 
-        Set<String> phases = results.stream()
-                .map(r -> Arrays.stream(r.pattern().phase()).average().orElse(0.0))
-                .map(p -> p < Math.PI / 2 ? "A" : "B")
+        // Гарантируем, что в результатах оба ID
+        Set<String> returnedIds = results.stream()
+                .map(ResonanceMatch::id)
                 .collect(Collectors.toSet());
 
-        assertTrue(phases.size() > 1, "Should match from multiple phase groups");
+        assertTrue(returnedIds.contains(idA), "Result must contain phase A pattern");
+        assertTrue(returnedIds.contains(idB), "Result must contain phase B pattern");
     }
 
     @Test

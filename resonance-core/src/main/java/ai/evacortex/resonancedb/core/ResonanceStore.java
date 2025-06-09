@@ -19,17 +19,23 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * {@code ResonanceStore} defines the contract for interacting with a persistent cognitive
- * waveform database that supports insertions, deletions, updates, and semantic queries
- * over {@link WavePattern} instances.
+ * {@code ResonanceStore} defines the contract for interacting with a persistent,
+ * phase-aware cognitive waveform database. It supports content-addressable insertions,
+ * deletions, replacements, and semantic resonance queries over {@link WavePattern} instances.
  *
- * <p>Each stored pattern is uniquely identified by a deterministic MD5 hash computed
- * from its contents. Queries are evaluated using the principle of constructive interference
- * between waveforms.</p>
+ * <p>Each stored pattern is uniquely identified by a deterministic 16-byte MD5 hash
+ * computed from its contents. This ID remains immutable and guarantees deduplication,
+ * idempotent storage, and consistent referencing across sessions.</p>
  *
- * <p>Implementations must ensure thread safety and atomicity of updates, and support
- * concurrent read/write access. All results are expected to be deterministic and
- * reproducible under stable inputs.</p>
+ * <p>Queries are evaluated using the principle of constructive interference between waveforms,
+ * enabling phase-sensitive similarity, superposition-based composite reasoning,
+ * and energy-weighted semantic retrieval. The system operates on ψ(x)-encoded patterns
+ * and does not rely on symbolic keys.</p>
+ *
+ * <p>Implementations must ensure full thread safety and atomicity of insert, replace, and delete
+ * operations. Read/write concurrency must be handled via lock-isolated mutation.
+ * All comparison and query operations must be deterministic and reproducible
+ * under identical input conditions.</p>
  *
  * @see WavePattern
  * @see ResonanceMatch
@@ -43,7 +49,7 @@ public interface ResonanceStore {
      *
      * @param psi      the wave pattern to store
      * @param metadata optional metadata associated with the pattern
-     * @return unique MD5-based identifier for the pattern
+     * @return the 16-byte content-derived MD5 hash that serves as the unique identifier
      * @throws DuplicatePatternException     if a pattern with the same content already exists
      * @throws InvalidWavePatternException  if the pattern structure is invalid
      */
@@ -52,38 +58,44 @@ public interface ResonanceStore {
     /**
      * Deletes a previously stored pattern by its ID.
      *
-     * @param id the content-based ID of the pattern
+     * @param id the 16-byte MD5 content hash of the pattern to delete
      * @throws PatternNotFoundException if no such pattern exists
      */
     void delete(String id);
 
     /**
-     * Updates an existing pattern with a new waveform and metadata.
+     * Replaces an existing pattern by deleting the pattern associated with the given ID
+     * and inserting a new waveform pattern with updated metadata.
      *
-     * <p>The ID must match an existing pattern, and the content will be
-     * completely replaced (not merged).</p>
+     * <p>The original ID is used to locate and remove the existing pattern.
+     * The new pattern is then inserted as a completely separate entry,
+     * and its ID is computed from its content (MD5 hash).</p>
      *
-     * @param id       the content hash ID of the existing pattern
-     * @param psi      the new pattern to replace the old one
-     * @param metadata updated metadata to associate
-     * @throws PatternNotFoundException     if no such ID exists
+     * <p>This method ensures consistency in content-addressable storage,
+     * where the ID always reflects the actual content of the pattern.</p>
+     *
+     * @param id the ID of the existing pattern to remove (must match an existing entry)
+     * @param psi the new {@link WavePattern} to insert
+     * @return the 16-byte content-derived MD5 hash that serves as the unique identifier
+     * @throws PatternNotFoundException     if no pattern exists for the given ID
      * @throws InvalidWavePatternException  if the new pattern is invalid
+     * @throws DuplicatePatternException if the new pattern already exists in the store
      */
-    void update(String id, WavePattern psi, Map<String, String> metadata);
+    String replace(String id, WavePattern psi, Map<String, String> metadata);
 
     /**
      * Compares two wave patterns using the currently active resonance kernel.
      *
      * @param a first pattern
      * @param b second pattern
-     * @return similarity score in [0.0 .. 1.0] according to resonance metrics
+     * @return similarity score in [0.0 .. 1.0], where 1.0 indicates perfect constructive resonance
      */
     float compare(WavePattern a, WavePattern b);
 
     /**
      * Queries the store for the top-K most resonant matches to the given pattern.
      *
-     * <p>Uses default comparison options and returns lightweight match results.</p>
+     * <p>Uses default comparison kernel and returns non-detailed match results optimized for ranking.</p>
      *
      * @param query the input pattern
      * @param topK  the number of top matches to return
@@ -127,7 +139,7 @@ public interface ResonanceStore {
      * interference wave and returning top-K matches.
      *
      * @param patterns list of input wave patterns to combine
-     * @param weights  optional list of weights for each pattern (null = equal weights)
+     * @param weights  optional list of weights; if {@code null}, uniform weighting is applied
      * @param topK     number of matches to return
      * @return list of {@link ResonanceMatch} results
      */

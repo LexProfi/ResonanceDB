@@ -161,34 +161,51 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     }
 
     @Override
-    public void update(String id, WavePattern psi, Map<String, String> meta)
-            throws InvalidWavePatternException, PatternNotFoundException {
+    public String replace(String oldId, WavePattern newPattern, Map<String, String> newMetadata)
+            throws PatternNotFoundException, InvalidWavePatternException {
 
-        if (psi.amplitude().length != psi.phase().length) {
+        if (newPattern.amplitude().length != newPattern.phase().length) {
             throw new InvalidWavePatternException("Amplitude / phase length mismatch");
         }
 
         globalLock.writeLock().lock();
         try {
-            HashingUtil.parseAndValidateMd5(id);
-            ManifestIndex.PatternLocation old = manifest.get(id);
-            if (old == null) throw new PatternNotFoundException(id);
-            double newPhase = Arrays.stream(psi.phase()).average().orElse(0.0);
-            String newSegment = shardSelectorRef.get().selectShard(psi);
-            SegmentWriter newWriter = getOrCreateWriter(newSegment);
-            long newOffset = newWriter.write(id, psi);
-            manifest.replace(id, old.segmentName(), old.offset(), newSegment, newOffset, newPhase);
-            getOrCreateWriter(old.segmentName()).markDeleted(old.offset());
-            if (!meta.isEmpty()) {
-                metaStore.put(id, meta);
+            HashingUtil.parseAndValidateMd5(oldId);
+            ManifestIndex.PatternLocation oldLoc = manifest.get(oldId);
+            if (oldLoc == null) throw new PatternNotFoundException(oldId);
+
+            String newId = HashingUtil.computeContentHash(newPattern);
+            HashingUtil.parseAndValidateMd5(newId);
+            if (manifest.contains(newId)) {
+                throw new DuplicatePatternException("Replacement target would collide with existing pattern: " + newId);
             }
+
+            double phaseCenter = Arrays.stream(newPattern.phase()).average().orElse(0.0);
+            String newSegment = shardSelectorRef.get().selectShard(newPattern);
+            SegmentWriter newWriter = getOrCreateWriter(newSegment);
+            long newOffset = newWriter.write(newId, newPattern);
+            newWriter.flush();
+            manifest.add(newId, newSegment, newOffset, phaseCenter);
+            if (!newMetadata.isEmpty()) {
+                metaStore.put(newId, newMetadata);
+                metaStore.flush();
+            }
+
+            SegmentWriter oldWriter = getOrCreateWriter(oldLoc.segmentName());
+            oldWriter.markDeleted(oldLoc.offset());
+            manifest.remove(oldId);
+            metaStore.remove(oldId);
+
             manifest.flush();
-            metaStore.flush();
             rebuildShardSelector();
-        } catch (SegmentOverflowException | InvalidWavePatternException | PatternNotFoundException e) {
+
+            return newId;
+
+        } catch (SegmentOverflowException | DuplicatePatternException |
+                 InvalidWavePatternException | PatternNotFoundException e) {
             throw e;
         } catch (Exception e) {
-            throw new RuntimeException("Update failed: " + id, e);
+            throw new RuntimeException("Replace failed: " + oldId, e);
         } finally {
             globalLock.writeLock().unlock();
         }
@@ -201,7 +218,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             String queryId = HashingUtil.computeContentHash(query);
 
             PriorityQueue<HeapItem> heap = new PriorityQueue<>(
-                    topK, Comparator.comparingDouble(HeapItem::priority)); // min-heap
+                    topK, Comparator.comparingDouble(HeapItem::priority));
 
             for (String shard : segmentWriters.keySet()) {
                 collectMatchesFromShard(shard, query, queryId, topK, heap);
