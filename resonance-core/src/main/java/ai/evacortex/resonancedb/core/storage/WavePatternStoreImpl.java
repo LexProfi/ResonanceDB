@@ -19,19 +19,17 @@ import ai.evacortex.resonancedb.core.exceptions.SegmentOverflowException;
 import ai.evacortex.resonancedb.core.math.WavePatternUtils;
 import ai.evacortex.resonancedb.core.metadata.PatternMetaStore;
 import ai.evacortex.resonancedb.core.sharding.PhaseShardSelector;
+import ai.evacortex.resonancedb.core.storage.compactor.DefaultSegmentCompactor;
+import ai.evacortex.resonancedb.core.storage.compactor.SegmentCompactor;
 import ai.evacortex.resonancedb.core.storage.io.SegmentReader;
 import ai.evacortex.resonancedb.core.storage.io.SegmentWriter;
 import ai.evacortex.resonancedb.core.storage.responce.*;
 
 import java.io.Closeable;
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -47,7 +45,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     private static final float EXACT_MATCH_EPS = 1e-6f;
     private final ManifestIndex manifest;
     private final PatternMetaStore metaStore;
-    private final Map<String, SegmentWriter> segmentWriters;
+    private final Map<String, PhaseSegmentGroup> segmentGroups;
     private final Path rootDir;
     private final AtomicReference<PhaseShardSelector> shardSelectorRef;
     private final ResonanceTracer tracer;
@@ -55,21 +53,31 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     private record HeapItem(ResonanceMatch match, float priority) {}
     private record HeapItemDetailed(ResonanceMatchDetailed match, double priority) {}
     private final ExecutorService executor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+    private final SegmentCompactor compactor;
 
     public WavePatternStoreImpl(Path dbRoot) {
         this.rootDir = dbRoot;
         this.manifest = ManifestIndex.loadOrCreate(dbRoot.resolve("index/manifest.idx"));
         this.manifest.ensureFileExists();
         this.metaStore = PatternMetaStore.loadOrCreate(dbRoot.resolve("metadata/pattern-meta.json"));
-        this.segmentWriters = new ConcurrentHashMap<>();
+        this.segmentGroups = new ConcurrentHashMap<>();
         this.tracer = new NoOpTracer();
+        this.compactor = new DefaultSegmentCompactor(manifest, metaStore, rootDir.resolve("segments"), globalLock);
 
         for (String segmentName : manifest.getAllSegmentNames()) {
-            Path segPath = dbRoot.resolve("segments/" + segmentName);
-            segmentWriters.put(segmentName, new SegmentWriter(segPath));
+            String base = segmentName.split("-")[0];
+            segmentGroups.computeIfAbsent(base,
+                    key -> new PhaseSegmentGroup(key, rootDir.resolve("segments"), compactor));
         }
 
         this.shardSelectorRef = new AtomicReference<>(createShardSelector());
+
+        scheduler.scheduleAtFixedRate(() -> {
+            for (String phase : segmentGroups.keySet()) {
+                compactPhase(phase);
+            }
+        }, 10, 300, TimeUnit.SECONDS);
     }
 
     private PhaseShardSelector createShardSelector() {
@@ -97,37 +105,38 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             if (manifest.contains(idKey)) {
                 throw new DuplicatePatternException(idKey);
             }
-
             double phaseCenter = Arrays.stream(psi.phase()).average().orElse(0.0);
-            PhaseShardSelector selector = shardSelectorRef.get();
-            String segmentName = selector.selectShard(psi);
-            String finalSegmentName = segmentName;
+            String selectedShard = shardSelectorRef.get().selectShard(psi);
+            String baseName = selectedShard.split("-")[0];
+
+            PhaseSegmentGroup group = getOrCreateGroup(baseName);
+
             double existingCenter = manifest.getAllLocations().stream()
-                    .filter(loc -> loc.segmentName().equals(finalSegmentName))
+                    .filter(l -> l.segmentName().startsWith(baseName))
                     .mapToDouble(ManifestIndex.PatternLocation::phaseCenter)
                     .average()
                     .orElse(phaseCenter);
 
-            double EPS = 0.1;
+            SegmentWriter writer = (Math.abs(phaseCenter - existingCenter) > 0.1)
+                    ? group.createAndRegisterNewSegment()
+                    : group.getWritable();
 
-            if (Math.abs(phaseCenter - existingCenter) > EPS) {
-                segmentName = "phase-" + manifest.getAllSegmentNames().size() + ".segment";
-            }
-
-            SegmentWriter writer = getOrCreateWriter(segmentName);
-
+            String segmentName = writer.getSegmentName();
             long offset = writer.write(idKey, psi);
             writer.flush();
+            writer.sync();
             manifest.add(idKey, segmentName, offset, phaseCenter);
             if (!metadata.isEmpty()) {
                 metaStore.put(idKey, metadata);
-                metaStore.flush();
             }
-
+            manifest.flush();
+            metaStore.flush();
             rebuildShardSelector();
             return idKey;
 
-        } catch (SegmentOverflowException | DuplicatePatternException | InvalidWavePatternException e) {
+        } catch (SegmentOverflowException |
+                 DuplicatePatternException |
+                 InvalidWavePatternException e) {
             throw e;
         } catch (Exception e) {
             manifest.remove(idKey);
@@ -158,6 +167,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             if (manifest.contains(idKey)) manifest.remove(idKey);
             if (metaStore.contains(idKey)) metaStore.remove(idKey);
 
+            metaStore.flush();
             rebuildShardSelector();
         } finally {
             globalLock.writeLock().unlock();
@@ -165,35 +175,70 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     }
 
     @Override
-    public String replace(String oldId, WavePattern newPattern, Map<String, String> newMetadata)
+    public String replace(String oldId,
+                          WavePattern newPattern,
+                          Map<String, String> newMetadata)
             throws PatternNotFoundException, InvalidWavePatternException {
 
         if (newPattern.amplitude().length != newPattern.phase().length) {
             throw new InvalidWavePatternException("Amplitude / phase length mismatch");
         }
 
+        HashingUtil.parseAndValidateMd5(oldId);
+        ManifestIndex.PatternLocation oldLoc;
+        globalLock.readLock().lock();
+        try {
+            oldLoc = manifest.get(oldId);
+            if (oldLoc == null) throw new PatternNotFoundException(oldId);
+        } finally {
+            globalLock.readLock().unlock();
+        }
+        String newId = HashingUtil.computeContentHash(newPattern);
+        HashingUtil.parseAndValidateMd5(newId);
+        if (oldId.equals(newId)) {
+            SegmentWriter writer = getOrCreateWriter(oldLoc.segmentName());
+            long offset = writer.write(newId, newPattern);
+            writer.flush();
+            writer.sync();
+
+            globalLock.writeLock().lock();
+            try {
+                manifest.add(newId, writer.getSegmentName(), offset, oldLoc.phaseCenter());
+                if (!newMetadata.isEmpty()) metaStore.put(newId, newMetadata);
+                manifest.flush();
+                metaStore.flush();
+                rebuildShardSelector();
+            } finally {
+                globalLock.writeLock().unlock();
+            }
+            return newId;
+        }
+
+        globalLock.readLock().lock();
+        try {
+            if (manifest.contains(newId)) {
+                throw new DuplicatePatternException("Replacement would collide: " + newId);
+            }
+        } finally {
+            globalLock.readLock().unlock();
+        }
+
+        double phaseCenter = Arrays.stream(newPattern.phase()).average().orElse(0.0);
+        String shard = shardSelectorRef.get().selectShard(newPattern);
+        String baseName = shard.split("-")[0];
+        PhaseSegmentGroup group = getOrCreateGroup(baseName);
+        SegmentWriter writer = group.getWritable();
+
+        long offset = writer.write(newId, newPattern);
+        writer.flush();
+        writer.sync();
+
         globalLock.writeLock().lock();
         try {
-            HashingUtil.parseAndValidateMd5(oldId);
-            ManifestIndex.PatternLocation oldLoc = manifest.get(oldId);
-            if (oldLoc == null) throw new PatternNotFoundException(oldId);
+            group.registerIfAbsent(writer);
 
-            String newId = HashingUtil.computeContentHash(newPattern);
-            HashingUtil.parseAndValidateMd5(newId);
-            if (manifest.contains(newId)) {
-                throw new DuplicatePatternException("Replacement target would collide with existing pattern: " + newId);
-            }
-
-            double phaseCenter = Arrays.stream(newPattern.phase()).average().orElse(0.0);
-            String newSegment = shardSelectorRef.get().selectShard(newPattern);
-            SegmentWriter newWriter = getOrCreateWriter(newSegment);
-            long newOffset = newWriter.write(newId, newPattern);
-            newWriter.flush();
-            manifest.add(newId, newSegment, newOffset, phaseCenter);
-            if (!newMetadata.isEmpty()) {
-                metaStore.put(newId, newMetadata);
-                metaStore.flush();
-            }
+            manifest.add(newId, writer.getSegmentName(), offset, phaseCenter);
+            if (!newMetadata.isEmpty()) metaStore.put(newId, newMetadata);
 
             SegmentWriter oldWriter = getOrCreateWriter(oldLoc.segmentName());
             oldWriter.markDeleted(oldLoc.offset());
@@ -201,42 +246,38 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             metaStore.remove(oldId);
 
             manifest.flush();
+            metaStore.flush();
             rebuildShardSelector();
-
-            return newId;
-
-        } catch (SegmentOverflowException | DuplicatePatternException |
-                 InvalidWavePatternException | PatternNotFoundException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new RuntimeException("Replace failed: " + oldId, e);
         } finally {
             globalLock.writeLock().unlock();
         }
+
+        return newId;
     }
+
 
     @Override
     public List<ResonanceMatch> query(WavePattern query, int topK) {
         globalLock.readLock().lock();
         try {
             String queryId = HashingUtil.computeContentHash(query);
-
             Comparator<HeapItem> order = Comparator
                     .comparingDouble(HeapItem::priority).reversed()
                     .thenComparing((HeapItem h) -> h.match().energy(), Comparator.reverseOrder())
                     .thenComparing(h -> h.match().id());
 
-            List<CompletableFuture<List<HeapItem>>> futures = segmentWriters.keySet().stream()
-                    .map(shard -> CompletableFuture.supplyAsync(() ->
-                            collectMatchesFromShard(shard, query, queryId, topK), executor))
+            List<CompletableFuture<List<HeapItem>>> futures = segmentGroups.values().stream()
+                    .flatMap(group -> group.getAll().stream())
+                    .map(writer -> CompletableFuture.supplyAsync(() ->
+                            collectMatchesFromWriter(writer, query, queryId, topK), executor))
                     .toList();
 
             List<HeapItem> all = futures.stream()
-                    .flatMap(future -> future.join().stream())
+                    .peek(_ -> Thread.yield())
+                    .flatMap(f -> f.join().stream())
                     .sorted(order)
                     .limit(topK)
                     .toList();
-
             return all.stream().map(HeapItem::match).toList();
 
         } finally {
@@ -255,9 +296,10 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                     .thenComparing((HeapItemDetailed h) -> h.match().energy(), Comparator.reverseOrder())
                     .thenComparing(h -> h.match().id());
 
-            List<CompletableFuture<List<HeapItemDetailed>>> futures = segmentWriters.keySet().stream()
-                    .map(shard -> CompletableFuture.supplyAsync(() ->
-                            collectDetailedFromShard(shard, query, queryId, topK), executor))
+            List<CompletableFuture<List<HeapItemDetailed>>> futures = segmentGroups.values().stream()
+                    .flatMap(group -> group.getAll().stream())
+                    .map(writer -> CompletableFuture.supplyAsync(() ->
+                            collectDetailedFromWriter(writer, query, queryId, topK), executor))
                     .toList();
 
             List<HeapItemDetailed> all = futures.stream()
@@ -315,43 +357,29 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     }
 
     private SegmentWriter getOrCreateWriter(String segmentName) {
-        return segmentWriters.computeIfAbsent(segmentName, name -> {
-            try {
-                Path path = rootDir.resolve("segments/" + name);
-                Files.createDirectories(path.getParent());
-                if (Files.notExists(path)) {
-                    Files.createFile(path);
-                }
-                return new SegmentWriter(path);
-            } catch (IOException e) {
-                throw new RuntimeException("Failed to create segment writer: " + name, e);
-            }
-        });
-    }
+        String groupKey = segmentName.contains("-") ?
+                segmentName.split("-")[0] : segmentName.replace(".segment", "");
 
-    @Override
-    public void close() {
-        globalLock.writeLock().lock();
-        try {
-            for (SegmentWriter writer : segmentWriters.values()) {
-                writer.close();
-            }
-            manifest.flush();
-            metaStore.flush();
-        } finally {
-            globalLock.writeLock().unlock();
-        }
+        PhaseSegmentGroup group = segmentGroups.computeIfAbsent(groupKey, key ->
+                new PhaseSegmentGroup(
+                        key,
+                        rootDir.resolve("segments"),
+                        this.compactor
+                )
+        );
+
+        return group.getWritable();
     }
 
     public PhaseShardSelector getShardSelector() {
         return shardSelectorRef.get();
     }
 
-    private List<HeapItem> collectMatchesFromShard(String shard,
-                                                   WavePattern query,
-                                                   String queryId,
-                                                   int topK) {
-        SegmentWriter writer = segmentWriters.get(shard);
+    private List<HeapItem> collectMatchesFromWriter(SegmentWriter writer,
+                                                    WavePattern query,
+                                                    String queryId,
+                                                    int topK) {
+
         if (writer == null) return List.of();
 
         try (SegmentReader reader = new SegmentReader(writer.getPath())) {
@@ -361,7 +389,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             for (SegmentReader.PatternWithId entry : reader.readAllWithId()) {
                 ManifestIndex.PatternLocation loc = manifest.get(entry.id());
                 if (loc == null) continue;
-                if (!loc.segmentName().equals(shard)) continue;
+                if (!loc.segmentName().equals(writer.getSegmentName())) continue;
                 if (loc.offset() != entry.offset()) continue;
                 latestValidEntries.put(entry.id(), entry);
             }
@@ -380,28 +408,28 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 tracer.trace(entry.id(), query, cand, base);
 
                 HeapItem item = new HeapItem(new ResonanceMatch(entry.id(), base, cand), priority);
-                HeapItem head = localHeap.peek();
-                if (head == null || priority > head.priority()) {
-                    if (head != null) localHeap.poll();
+                if (localHeap.size() < topK) {
                     localHeap.add(item);
+                } else {
+                    HeapItem head = localHeap.peek();
+                    if (head == null || priority > head.priority()) {
+                        localHeap.poll();
+                        localHeap.add(item);
+                    }
                 }
             }
-
             return new ArrayList<>(localHeap);
 
         } catch (IOException e) {
-            throw new RuntimeException("Failed to read segment: " + shard, e);
+            throw new RuntimeException("Failed to read segment: " + writer.getSegmentName(), e);
         }
     }
 
-    private List<HeapItemDetailed> collectDetailedFromShard(String shard,
-                                                            WavePattern query,
-                                                            String queryId,
-                                                            int topK) {
-
-        SegmentWriter writer = segmentWriters.get(shard);
+    private List<HeapItemDetailed> collectDetailedFromWriter(SegmentWriter writer,
+                                                             WavePattern query,
+                                                             String queryId,
+                                                             int topK) {
         if (writer == null) return List.of();
-
         try (SegmentReader reader = new SegmentReader(writer.getPath())) {
 
             Map<String, SegmentReader.PatternWithId> latestValidEntries = new HashMap<>();
@@ -409,7 +437,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             for (SegmentReader.PatternWithId entry : reader.readAllWithId()) {
                 ManifestIndex.PatternLocation loc = manifest.get(entry.id());
                 if (loc == null) continue;
-                if (!loc.segmentName().equals(shard)) continue;
+                if (!loc.segmentName().equals(writer.getSegmentName())) continue;
                 if (loc.offset() != entry.offset()) continue;
                 latestValidEntries.put(entry.id(), entry);
             }
@@ -435,17 +463,83 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 double priority = energy + (idEq ? 1.0 : 0.0) + (exactEq ? 0.5 : 0.0);
 
                 HeapItemDetailed item = new HeapItemDetailed(match, priority);
-                HeapItemDetailed head = localHeap.peek();
-                if (head == null || priority > head.priority()) {
-                    if (head != null) localHeap.poll();
+                if (localHeap.size() < topK) {
                     localHeap.add(item);
+                } else {
+                    HeapItemDetailed head = localHeap.peek();
+                    if (head == null || priority > head.priority()) {
+                        localHeap.poll();
+                        localHeap.add(item);
+                    }
                 }
             }
-
             return new ArrayList<>(localHeap);
 
         } catch (IOException e) {
-            throw new RuntimeException("Failed to read segment: " + shard, e);
+            throw new RuntimeException("Failed to read segment: " + writer.getSegmentName(), e);
         }
+    }
+
+    private PhaseSegmentGroup getOrCreateGroup(String baseName) {
+        return segmentGroups.computeIfAbsent(baseName,
+                name -> new PhaseSegmentGroup(
+                        name,
+                        rootDir.resolve("segments"),
+                        this.compactor
+                ));
+    }
+
+    public void compactPhase(String baseName) {
+        PhaseSegmentGroup group = segmentGroups.get(baseName);
+        if (group != null && group.maybeCompact()) {
+            rebuildShardSelector();
+        }
+    }
+
+    @Override
+    public void close() {
+        globalLock.writeLock().lock();
+        try {
+            for (PhaseSegmentGroup group : segmentGroups.values()) {
+                for (SegmentWriter writer : group.getAll()) {
+                    try {
+                        writer.close();
+                    } catch (Exception e) {
+                        System.err.println("Failed to close writer: " + writer.getSegmentName());
+                    }
+                }
+            }
+
+            manifest.flush();
+            metaStore.flush();
+
+            executor.shutdown();
+            try {
+                if (!executor.awaitTermination(30, TimeUnit.SECONDS)) {
+                    System.err.println("Executor did not terminate in time, forcing shutdown...");
+                    executor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                executor.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+            scheduler.shutdown();
+            try {
+                if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+                    scheduler.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                scheduler.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+
+        } finally {
+            globalLock.writeLock().unlock();
+        }
+    }
+
+    public boolean containsExactPattern(WavePattern pattern) {
+        String id = HashingUtil.computeContentHash(pattern);
+        return manifest.contains(id);
     }
 }

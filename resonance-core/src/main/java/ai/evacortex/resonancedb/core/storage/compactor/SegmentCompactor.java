@@ -6,13 +6,10 @@
  * Patent notice: The authors intend to seek patent protection for this software.
  * Commercial use >30 days → license@evacortex.ai
  */
-package ai.evacortex.resonancedb.core.sharding;
+package ai.evacortex.resonancedb.core.storage.compactor;
 
-import ai.evacortex.resonancedb.core.storage.io.SegmentReader;
+import ai.evacortex.resonancedb.core.storage.PhaseSegmentGroup;
 
-import java.util.List;
-
-public class PhaseSegmentGroup {
-    PhaseRange range;
-    List<SegmentReader> segments;
+public interface SegmentCompactor {
+    void compact(PhaseSegmentGroup group);
 }

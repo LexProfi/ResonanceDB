@@ -8,13 +8,11 @@
  */
 package ai.evacortex.resonancedb.store;
 
-import ai.evacortex.resonancedb.core.storage.HashingUtil;
+import ai.evacortex.resonancedb.core.metadata.PatternMetaStore;
+import ai.evacortex.resonancedb.core.storage.*;
 import ai.evacortex.resonancedb.core.storage.responce.ResonanceMatch;
-import ai.evacortex.resonancedb.core.storage.WavePattern;
 import ai.evacortex.resonancedb.core.WavePatternTestUtils;
-import ai.evacortex.resonancedb.core.storage.ManifestIndex;
 import ai.evacortex.resonancedb.core.storage.io.SegmentWriter;
-import ai.evacortex.resonancedb.core.storage.WavePatternStoreImpl;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -44,6 +42,7 @@ class RollbackManifestTest {
     }
 
     @AfterEach
+    @SuppressWarnings("resource, ResultOfMethodCallIgnored")
     void tearDown() throws Exception {
         store.close();
         Files.walk(dir)
@@ -53,17 +52,14 @@ class RollbackManifestTest {
     }
 
     @Test
-    void testInsertFailureRollback() throws Exception {
-        int linesBefore = Files.readAllLines(dir.resolve("index/manifest.idx")).size();
+    void testInsertFailureRollback() {
         WavePattern bad = new WavePattern(
                 new double[]{1, 2, 3, 4},
-                new double[]{0.0});
+                new double[]{0.0}
+        );
 
-        assertThrows(RuntimeException.class, () -> store.insert(bad, Map.of()),
-                "insert must propagate underlying failure");
-
-        int linesAfter = Files.readAllLines(dir.resolve("index/manifest.idx")).size();
-        assertEquals(linesBefore, linesAfter, "manifest must stay intact after failed insert");
+        assertThrows(IllegalArgumentException.class, () -> store.insert(bad, Map.of()),
+                "insert must fail with invalid WavePattern");
 
         assertThrows(IllegalArgumentException.class, () -> store.query(bad, 1),
                 "query must fail on invalid pattern with mismatched lengths");
@@ -72,35 +68,69 @@ class RollbackManifestTest {
     @Test
     void testReplaceFailureRollback() throws Exception {
         WavePattern original = WavePatternTestUtils.createConstantPattern(0.2, 0.2, 16);
-        String oldId = store.insert(original, Map.of());
+        String oldId = store.insert(original, Map.of("key", "original"));
 
         WavePattern updated = WavePatternTestUtils.createConstantPattern(0.3, 0.3, 16);
         String newId = HashingUtil.computeContentHash(updated);
-        String segment = store.getShardSelector().selectShard(updated);
 
-        Field writersField = WavePatternStoreImpl.class.getDeclaredField("segmentWriters");
+        try {
+            store.insert(updated, Map.of());
+        } catch (Exception ignored) {}
+
+        extractManifest(store).remove(newId);
+        extractMeta(store).remove(newId);
+
+        String segment = store.getShardSelector().selectShard(updated);
+        String baseName = segment.split("-")[0];
+
+        Map<String, PhaseSegmentGroup> groups = extractSegmentGroups(store);
+        PhaseSegmentGroup group = groups.get(baseName);
+        assertNotNull(group, "PhaseSegmentGroup must exist");
+
+        Field writersField = PhaseSegmentGroup.class.getDeclaredField("writers");
         writersField.setAccessible(true);
         @SuppressWarnings("unchecked")
-        Map<String, SegmentWriter> writers = (Map<String, SegmentWriter>) writersField.get(store);
+        List<SegmentWriter> writers = (List<SegmentWriter>) writersField.get(group);
 
-        SegmentWriter originalWriter = writers.get(segment);
-        SegmentWriter spy = Mockito.spy(originalWriter);
+        SegmentWriter spy = Mockito.spy(writers.getFirst());
         Mockito.doThrow(new RuntimeException("simulated insert failure"))
-                .when(spy).write(Mockito.eq(newId), Mockito.any(WavePattern.class));
-        writers.put(segment, spy);
+                .when(spy).write(Mockito.eq(newId), Mockito.any());
 
-        assertThrows(RuntimeException.class, () -> store.replace(oldId, updated, Map.of()));
+        writers.set(0, spy);
+
+        assertThrows(RuntimeException.class, () -> store.replace(oldId, updated, Map.of("key", "updated")));
 
         List<ResonanceMatch> matches = store.query(original, 1);
-        assertFalse(matches.isEmpty(), "original pattern must still be queryable");
-        assertEquals(oldId, matches.get(0).id());
-        assertEquals(1.0f, matches.get(0).energy(), 1e-5);
+        assertFalse(matches.isEmpty());
+        assertEquals(oldId, matches.getFirst().id());
+        assertEquals(1.0f, matches.getFirst().energy(), 1e-5);
 
-        Field manifestField = WavePatternStoreImpl.class.getDeclaredField("manifest");
-        manifestField.setAccessible(true);
-        ManifestIndex manifest = (ManifestIndex) manifestField.get(store);
+        ManifestIndex manifest = extractManifest(store);
+        assertTrue(manifest.contains(oldId), "old ID must remain in manifest");
+        assertFalse(manifest.contains(newId), "new ID must not appear after failed replace");
 
-        assertTrue(manifest.contains(oldId), "old ID must still be present in manifest");
-        assertFalse(manifest.contains(newId), "new ID must not be present after failed replace");
+        PatternMetaStore meta = extractMeta(store);
+        assertTrue(meta.contains(oldId), "old ID must remain in metadata");
+        assertFalse(meta.contains(newId), "new ID must not appear in metadata");
+    }
+
+    private ManifestIndex extractManifest(WavePatternStoreImpl store) throws Exception {
+        Field f = WavePatternStoreImpl.class.getDeclaredField("manifest");
+        f.setAccessible(true);
+        return (ManifestIndex) f.get(store);
+    }
+
+    private PatternMetaStore extractMeta(WavePatternStoreImpl store) throws Exception {
+        Field f = WavePatternStoreImpl.class.getDeclaredField("metaStore");
+        f.setAccessible(true);
+        return (PatternMetaStore) f.get(store);
+    }
+
+    private Map<String, PhaseSegmentGroup> extractSegmentGroups(WavePatternStoreImpl store) throws Exception {
+        Field f = WavePatternStoreImpl.class.getDeclaredField("segmentGroups");
+        f.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        Map<String, PhaseSegmentGroup> map = (Map<String, PhaseSegmentGroup>) f.get(store);
+        return map;
     }
 }

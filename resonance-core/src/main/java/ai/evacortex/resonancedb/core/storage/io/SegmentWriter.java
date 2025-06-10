@@ -187,6 +187,22 @@ public class SegmentWriter implements AutoCloseable {
         return path;
     }
 
+    public boolean willOverflow(WavePattern pattern) {
+        int patternSize = WavePatternCodec.estimateSize(pattern, false);
+        int blockSize = 16 + 4 + 4 + patternSize;
+        int aligned = ((blockSize + 7) / 8) * 8;
+        return writeOffset.get() + aligned > buffer.capacity();
+    }
+
+    public boolean isOverflow() {
+        long remaining = buffer.capacity() - writeOffset.get();
+        return remaining < 32 * 1024;
+    }
+
+    public double getFillRatio() {
+        return (double) writeOffset.get() / buffer.capacity();
+    }
+
     @Override
     public void close() {
         lock.writeLock().lock();
@@ -202,6 +218,18 @@ public class SegmentWriter implements AutoCloseable {
             }
         } catch (IOException e) {
             throw new RuntimeException("Failed to close segment writer", e);
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    public void sync() {
+        lock.writeLock().lock();
+        try {
+            buffer.force();
+            channel.force(true);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to sync segment to disk", e);
         } finally {
             lock.writeLock().unlock();
         }

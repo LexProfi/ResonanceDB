@@ -157,12 +157,12 @@ public class ManifestIndex implements Closeable {
     }
 
     public void flush() {
-        lock.readLock().lock();
+        lock.writeLock().lock();
         try {
             persistToFile();
             dirty = false;
         } finally {
-            lock.readLock().unlock();
+            lock.writeLock().unlock();
         }
     }
 

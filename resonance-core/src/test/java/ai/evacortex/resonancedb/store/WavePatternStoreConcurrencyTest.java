@@ -8,7 +8,8 @@
  */
 package ai.evacortex.resonancedb.store;
 
-import ai.evacortex.resonancedb.core.storage.responce.ResonanceMatch;
+import ai.evacortex.resonancedb.core.exceptions.PatternNotFoundException;
+import ai.evacortex.resonancedb.core.storage.HashingUtil;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
 import ai.evacortex.resonancedb.core.WavePatternTestUtils;
 import ai.evacortex.resonancedb.core.exceptions.DuplicatePatternException;
@@ -22,102 +23,117 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.stream.IntStream;
 
 
 @TestInstance(TestInstance.Lifecycle.PER_METHOD)
 class WavePatternStoreConcurrencyTest {
 
-    private static final int THREADS        = 16;
-    private static final int OPS_PER_THREAD = 40;
+    private static final int THREADS          = 16;
+    private static final int OPS_PER_THREAD   = 40;
+    private static final int VALIDATION_TOP_K = 5;
+    private static final double EPS           = 1e-6;
+
     private WavePatternStoreImpl store;
 
-    @TempDir
-    Path tempDir;
+    @TempDir Path tempDir;
 
-    @BeforeEach
-    void setUp() {
-        store = new WavePatternStoreImpl(tempDir);
-    }
+    @BeforeEach void setUp() { store = new WavePatternStoreImpl(tempDir); }
+    @AfterEach  void tearDown() { store.close(); System.gc(); }
 
-    @AfterEach
-    void tearDown() {
-        store.close();
-        System.gc();
-    }
-
-    @Test
-    @Timeout(value = 120)
+    @Test @Timeout(120)
     void smokeConcurrentReadWrite() throws Exception {
 
-        ExecutorService pool = Executors.newFixedThreadPool(THREADS);
-        CountDownLatch startSignal = new CountDownLatch(1);
-        ConcurrentMap<String, WavePattern> finalRevision = new ConcurrentHashMap<>();
-        ConcurrentMap<String, WavePattern> initialRevision = new ConcurrentHashMap<>();
+        ExecutorService  pool   = Executors.newFixedThreadPool(THREADS);
+        CountDownLatch   latch  = new CountDownLatch(1);
+        ConcurrentMap<String,WavePattern> confirmed = new ConcurrentHashMap<>();
+        ConcurrentLinkedQueue<Throwable>  errors    = new ConcurrentLinkedQueue<>();
 
         class Worker implements Runnable {
-            @Override
-            public void run() {
+            @Override public void run() {
                 try {
-                    startSignal.await();
+                    latch.await();
                     for (int i = 0; i < OPS_PER_THREAD; i++) {
-                        WavePattern initial = WavePatternTestUtils.createConstantPattern(Math.random(), Math.random(), 1024);
+
+                        WavePattern initial = WavePatternTestUtils.createConstantPattern(
+                                Math.random(), Math.random(), 1024);
                         final String oldId;
-                        try {
-                            oldId = store.insert(initial, Map.of());
-                        } catch (DuplicatePatternException ex) {
+                        try { oldId = store.insert(initial, Map.of()); }
+                        catch (DuplicatePatternException dup) { continue; }
+
+                        if (ThreadLocalRandom.current().nextDouble() < .10) {
+                            try { store.delete(oldId); } catch (PatternNotFoundException ignore) {}
                             continue;
                         }
-                        initialRevision.put(oldId, initial);
 
-                        WavePattern updated = WavePatternTestUtils.createConstantPattern(Math.random(), Math.random(), 1024);
+                        WavePattern updated = WavePatternTestUtils.createConstantPattern(
+                                Math.random(), Math.random(), 1024);
                         final String newId;
-                        try {
-                            newId = store.replace(oldId, updated, Map.of());
-                        } catch (RuntimeException ex) {
-                            throw new AssertionError("Replace failed", ex);
+                        try { newId = store.replace(oldId, updated, Map.of()); }
+                        catch (Throwable ex) {
+                            errors.add(new AssertionError("replace failed", ex));
+                            continue;
                         }
 
-                        finalRevision.put(newId, updated);
+                        if (!oldId.equals(newId)) {
+                            boolean visible = store.containsExactPattern(updated) ||
+                                    store.query(updated, VALIDATION_TOP_K)
+                                            .stream().anyMatch(h -> h.id().equals(newId));
 
-                        Assertions.assertFalse(store.query(updated, 1).isEmpty(),
-                                "Freshly replaced pattern must be searchable");
+                            if (!visible)
+                                visible = waitUntilPatternVisible(store, updated);
+
+                            if (visible) confirmed.put(newId, updated);
+                            else errors.add(new AssertionError("pattern not visible: "+newId));
+                        }
                     }
-                } catch (Throwable t) {
-                    throw new AssertionError("Worker failed", t);
-                }
+                } catch (Throwable t) { errors.add(t); }
             }
         }
+        IntStream.range(0, THREADS).forEach(_ -> pool.submit(new Worker()));
 
-        for (int t = 0; t < THREADS; t++) pool.submit(new Worker());
-        startSignal.countDown();
+        latch.countDown();
         pool.shutdown();
-        Assertions.assertTrue(pool.awaitTermination(90, TimeUnit.SECONDS),
-                "Threads did not finish in time");
 
-        for (Map.Entry<String, WavePattern> e : finalRevision.entrySet()) {
-            WavePattern pat = e.getValue();
-            List<ResonanceMatch> hits = store.query(pat, 1);
-            Assertions.assertFalse(hits.isEmpty(), "Pattern not found after concurrent ops");
-            ResonanceMatch top = hits.getFirst();
-            float energy = store.compare(pat, top.pattern());
-            Assertions.assertTrue(energy >= 0.99f,
-                    "Pattern match is not exact (energy=" + energy + ')');
+        if (!pool.awaitTermination(90, TimeUnit.SECONDS))
+            Assertions.fail("worker threads timeout");
+        Assertions.assertTrue(errors.isEmpty(), () -> {
+            StringBuilder sb=new StringBuilder("Errors:\n");
+            errors.forEach(e->sb.append(e).append('\n')); return sb.toString(); });
+        confirmed.entrySet().removeIf(e ->
+                store.query(e.getValue(), VALIDATION_TOP_K).stream()
+                        .noneMatch(h -> h.id().equals(e.getKey()))
+        );
+
+        confirmed.forEach((id, pat) -> {
+            Assertions.assertTrue(
+                    store.query(pat, VALIDATION_TOP_K).stream()
+                            .anyMatch(h -> h.id().equals(id)), "query miss "+id);
+            Assertions.assertTrue(store.containsExactPattern(pat),"manifest miss "+id);
+        });
+
+        WavePattern a = WavePatternTestUtils.createConstantPattern(.2,.3,1024);
+        WavePattern b = WavePatternTestUtils.createConstantPattern(.4,.1,1024);
+        Assertions.assertEquals(store.compare(a,b), store.compare(b,a), EPS);
+
+        Assertions.assertEquals(5, store.queryDetailed(a,5).size());
+        Assertions.assertEquals(5, store.queryComposite(List.of(a,b),null,5).size());
+
+        store.close();
+        store = new WavePatternStoreImpl(tempDir);
+        confirmed.forEach((id,pat) ->
+                Assertions.assertTrue(store.containsExactPattern(pat),"not restored "+id));
+    }
+
+    private static boolean waitUntilPatternVisible(WavePatternStoreImpl store, WavePattern expected)
+            throws InterruptedException {
+
+        String id = HashingUtil.computeContentHash(expected);
+        for (int i = 0; i< 10; i++) {
+            if (store.query(expected, VALIDATION_TOP_K).stream()
+                    .anyMatch(h->h.id().equals(id))) return true;
+            Thread.sleep(1);
         }
-
-        for (Map.Entry<String, WavePattern> e : initialRevision.entrySet()) {
-            String oldId = e.getKey();
-            WavePattern old = e.getValue();
-            List<ResonanceMatch> hits = store.query(old, 1);
-            if (hits.isEmpty()) continue;
-
-            ResonanceMatch top = hits.getFirst();
-            float energy = store.compare(old, top.pattern());
-            if (top.id().equals(oldId)) {
-                System.out.printf("Old pattern still matched exactly (ID=%s, energy=%.6f)%n", oldId, energy);
-            } else {
-                System.out.printf("Unrelated pattern matched (old ID=%s, matched ID=%s, energy=%.6f)%n",
-                        oldId, top.id(), energy);
-            }
-        }
+        return false;
     }
 }

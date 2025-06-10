@@ -8,8 +8,6 @@
  */
 package ai.evacortex.resonancedb.core.storage;
 
-import ai.evacortex.resonancedb.core.sharding.PhaseSegmentGroup;
-
 import java.util.Collection;
 
 interface PhaseSegmentRegistry {

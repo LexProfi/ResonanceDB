@@ -54,6 +54,7 @@ public final class SegmentReader implements AutoCloseable {
         this.path = path;
         try {
             this.channel = FileChannel.open(path, StandardOpenOption.READ);
+
             this.mmap = channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size());
 
             ByteBuffer hdrBuf = mmap.duplicate().order(ByteOrder.LITTLE_ENDIAN);
@@ -112,7 +113,6 @@ public final class SegmentReader implements AutoCloseable {
 
             byte firstByte = buf.get(entryStart);
             if (firstByte == 0x00) {
-                // Tombstone — skip
                 buf.position(entryStart + ID_SIZE);
                 if (buf.remaining() < 8) {
                     throw new InvalidWavePatternException("Corrupted tombstone at offset " + entryStart);
@@ -127,12 +127,11 @@ public final class SegmentReader implements AutoCloseable {
                 continue;
             }
 
-            // Live entry
             buf.position(entryStart);
             byte[] idBytes = new byte[ID_SIZE];
             buf.get(idBytes);
             int len = buf.getInt();
-            buf.getInt(); // skip tombstone marker, should be -1
+            buf.getInt();
 
             if (len <= 0 || len > MAX_LENGTH) {
                 throw new InvalidWavePatternException("Invalid pattern length at offset " + entryStart + ": " + len);
