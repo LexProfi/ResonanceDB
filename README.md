@@ -128,8 +128,7 @@ This enables scalable partitioning of stored waveforms and parallelized queries.
 * [x] Shard-aware routing and phase-based segment indexing
 * [ ] CLI interface for insert/update/query
 * [x] Thread-safe in-memory caches
-* [ ] Optional RocksDB index support
-* [ ] Patent filing and export control compliance
+* [ ] Optional: Index caching (pluggable; not yet integrated)
 
 ---
 

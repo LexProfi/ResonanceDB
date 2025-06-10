@@ -62,6 +62,12 @@
       "created": "2025-06-03T17:52:41Z",
       "updated": "2025-06-08T19:53:33Z",
       "sha256": "ffe602789317507125e4fb568b91ee58eb280f5bcb37a137b10db994cc3549d1"
+    },
+    {
+      "version": "1.0.6",
+      "created": "2025-06-03T17:52:41Z",
+      "updated": "2025-06-10T17:33:28Z",
+      "sha256": "19e2245cecf19ea18b1a5b2d4f9cbba3e60041c60deecd2b02cc8f9a8601a7d1"
     }
   ],
   "Applications-of-ResonanceDB-in-AGI-Memory-and-Affective-Modeling.md": [

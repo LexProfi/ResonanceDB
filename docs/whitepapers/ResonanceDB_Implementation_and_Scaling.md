@@ -38,30 +38,96 @@ public record WavePattern(double[] amplitude, double[] phase) {
 
 ### 3.1 File Structure
 
+ResonanceDB uses a segmented file layout to store wave patterns in binary form. Each segment file corresponds to a **phase-local shard**, allowing parallel reads and dynamic expansion.
+
 ```
 /resonance-db/
 ├── segments/
-│   ├── phase-0.segment        # mmap binary file
-│   ├── phase-1.segment
+│   ├── phase-0.segment        # memory-mapped binary segment (initial)
+│   ├── phase-1.segment        # auto-added when phase-0 is full
+│   ├── phase-2.segment        # ...
 ├── index/
-│   └── manifest.idx           # segment map and offset index
+│   └── manifest.idx           # central mapping: ID → segment, offset
 ├── metadata/
 │   └── pattern-meta.json      # JSON: id → metadata
 ```
 
+#### Segment Naming
+
+Each segment is named by its insertion order within a phase group:
+
+```
+phase-0.segment, phase-1.segment, phase-2.segment, ...
+```
+
+New segments are automatically created when the current one reaches capacity. This allows horizontal scaling without interrupting inserts.
+
+#### Memory Mapping
+
+All `.segment` files are mapped into memory using `MappedByteBuffer` in read-only or read-write mode, depending on their role.
+
+---
+
 ### 3.2 Segment Encoding
 
-Each `.segment` contains a flat binary serialization of WavePatterns:
+Each `.segment` file stores a flat binary serialization of `WavePattern` entries. All values are encoded in **little-endian** format.
 
-* MAGIC header (4 bytes)
-* pattern count (int32)
-* for each pattern:
+#### Segment Entry Layout
 
-  * id hash (16 bytes)
-  * amplitude\[] (double \* N)
-  * phase\[] (double \* N)
+Each pattern entry is aligned to 8 bytes and has the following structure:
 
-Serialization is little-endian. Deserialization must verify MAGIC header.
+```
+[offset]
+├── id hash       : 16 bytes  // MD5 content hash (binary)
+├── length        : 4 bytes   // number of elements in amplitude[] / phase[]
+├── reserved/meta : 4 bytes   // reserved for future use (e.g., versioning)
+├── data block:
+│   ├── amplitude[] : double[length]
+│   └── phase[]     : double[length]
+[alignment padding if needed]
+```
+
+* The **total entry size** is `HEADER_SIZE + encodedWaveSize`, where:
+
+  * `HEADER_SIZE = 24 bytes`
+  * `encodedWaveSize = estimated size of amplitude + phase arrays`
+* Padding is added to ensure 8-byte alignment for safe mmap traversal.
+
+#### Segment Header (not part of individual entries)
+
+Each segment starts with a **binary header** (`BinaryHeader`) containing:
+
+* magic bytes,
+* segment metadata,
+* last valid offset (used for scan boundary detection).
+
+#### Special Markers
+
+* Entries starting with `0x00` are **tombstones** (logically deleted patterns).
+* Tombstones retain their full structure for alignment and offset validity, but are skipped during reads.
+
+#### Validation
+
+Deserialization must verify:
+
+* Correct ID and length fields.
+* Sufficient remaining bytes for full entry.
+* Alignment consistency and buffer bounds.
+
+#### Example Layout (simplified)
+
+```
+[BinaryHeader]
+  ├── magic, version, lastOffset
+[PatternEntry_1]
+  ├── id[16] + len[4] + meta[4] + data[ampl+phase]
+[PatternEntry_2]
+  ...
+[Tombstone]     // 0x00 + id[15] + len[4] + meta[4] + padding
+```
+
+> Note: No inline compression is applied. All floats are stored as 64-bit IEEE 754 doubles. Entries are read via `MappedByteBuffer` without copying the entire file into memory.
+
 
 ---
 
@@ -87,7 +153,7 @@ This index allows:
 public interface ResonanceStore {
   String insert(WavePattern psi, Map<String, String> metadata);
   void delete(String id);
-  void update(String id, WavePattern psi, Map<String, String> metadata);
+  String replace(String id, WavePattern psi, Map<String, String> metadata);
   List<ResonanceMatch> query(WavePattern query, int topK);
   float compare(WavePattern a, WavePattern b);
   List<ResonanceMatchDetailed> queryDetailed(WavePattern query, int topK);
@@ -148,15 +214,54 @@ Segment-aware query routing allows:
 * parallel scanning,
 * load balancing.
 
-### 7.2 Segment Routing Example
+### 7.2 Segment Routing
+
+Each query pattern is routed to a subset of segments based on its **phase topology**, specifically the **mean phase** across all dimensions:
+
+```text
+query ψ has phase avg ≈ π/3 → routed to phase segment group covering [π/4 .. π/2]
+```
+
+#### Phase-Based Segment Groups
+
+Segments are organized into **PhaseSegmentGroups**, each responsible for a particular range of phase values (e.g., `[0 .. π/2]`, `[π/2 .. π]`, etc.).
+
+Within each group:
+
+* Multiple segments may exist: `phase-0.segment`, `phase-1.segment`, etc.
+* Inserts go to the first available non-full segment (`getWritable()`).
+* Reads are performed across all relevant segments in parallel.
+
+#### Routing Example
+
+Suppose the query has:
 
 ```
-query ψ has phase avg ≈ π/3 → search in phase-1.segment
+ψ.phase().average() = 1.05 ≈ π/3
 ```
 
-Routing based on phase topology enables field-localized query acceleration.
+Routing proceeds as follows:
+
+1. Phase selector maps this to the group handling `[π/4 .. π/2]`.
+2. All segments in that group are queried:
+
+   ```
+   segments/phase-2.segment
+   segments/phase-3.segment
+   ...
+   ```
+3. Results are merged and ranked globally.
+
+#### Benefits
+
+* Enables **scalable insert capacity** without hash-based sharding.
+* Supports **local reasoning** within phase-coherent regions.
+* Allows dynamic expansion: new segments are added on demand.
+
+> This model supports distributed agents, field-local reasoning, and phase-differentiated cognitive indexing.
 
 ---
+
 
 ## 🧵 8. Concurrency and Thread Safety
 
@@ -197,10 +302,10 @@ Routing based on phase topology enables field-localized query acceleration.
 
 ## 🗂️ 12. Dependencies & Licensing
 
-* Language: **Java 17+**
+* Language: **Java 22+**
 * Binary format: **custom codec** or FlatBuffers
 * I/O: `MappedByteBuffer`, `FileChannel`
-* Optional: RocksDB for index caching
+* Optional: Index caching (pluggable; not yet integrated)
 * License: Apache 2.0 compatible only
 
 ---
