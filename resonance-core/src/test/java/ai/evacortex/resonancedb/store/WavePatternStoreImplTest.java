@@ -43,7 +43,7 @@ public class WavePatternStoreImplTest {
     }
 
     @AfterEach
-    void cleanup() throws Exception {
+    void cleanup() {
         if (store != null) store.close();
     }
 
@@ -219,7 +219,7 @@ public class WavePatternStoreImplTest {
             assertTrue(metaJson.contains("\"case\""));
 
         } finally {
-            TestUtils.deleteDirectoryRecursive(tempDir);
+            TestUtils.deleteDirectoryRecursive(dir);
         }
     }
 
@@ -243,7 +243,7 @@ public class WavePatternStoreImplTest {
             assertThrows(PatternNotFoundException.class, () -> localStore.delete(id));
 
         } finally {
-            TestUtils.deleteDirectoryRecursive(tempDir);
+            TestUtils.deleteDirectoryRecursive(dir);
         }
     }
 
