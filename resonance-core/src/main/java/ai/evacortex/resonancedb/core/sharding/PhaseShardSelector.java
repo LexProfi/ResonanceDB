@@ -14,10 +14,6 @@ import ai.evacortex.resonancedb.core.storage.ManifestIndex;
 import java.util.*;
 import java.util.concurrent.ConcurrentSkipListMap;
 
-/**
- * PhaseShardSelector determines the target segment name based on the phase information of a WavePattern.
- * Supports both explicit range-based sharding and uniform hash-based sharding.
- */
 public class PhaseShardSelector {
 
     private final NavigableMap<Double, String> phaseShardMap;
@@ -25,11 +21,6 @@ public class PhaseShardSelector {
     private final int totalShards;
     private final boolean useExplicitRanges;
 
-    /**
-     * Constructs a range-based selector using explicit phase→shard mapping.
-     * @param phaseShardMap key: center of phase range, value: segment name
-     * @param epsilon half-width of acceptable phase deviation
-     */
     public PhaseShardSelector(Map<Double, String> phaseShardMap, double epsilon) {
         if (phaseShardMap == null || phaseShardMap.isEmpty())
             throw new IllegalArgumentException("Phase shard map must not be null or empty.");
@@ -40,10 +31,6 @@ public class PhaseShardSelector {
         this.useExplicitRanges = true;
     }
 
-    /**
-     * Constructs a uniform hash-based sharding selector.
-     * @param totalShards number of uniformly distributed shards
-     */
     public PhaseShardSelector(int totalShards) {
         if (totalShards <= 0)
             throw new IllegalArgumentException("Shard count must be > 0");
@@ -54,9 +41,6 @@ public class PhaseShardSelector {
         this.useExplicitRanges = false;
     }
 
-    /**
-     * Selects the target shard name for a given pattern.
-     */
     public String selectShard(WavePattern pattern) {
         if (useExplicitRanges) {
             return routeToShard(pattern);
@@ -67,9 +51,6 @@ public class PhaseShardSelector {
         }
     }
 
-    /**
-     * Explicit range-based routing using nearest center.
-     */
     private String routeToShard(WavePattern pattern) {
         double avgPhase = Arrays.stream(pattern.phase()).average().orElse(0.0);
         Map.Entry<Double, String> entry = phaseShardMap.floorEntry(avgPhase);
@@ -77,9 +58,6 @@ public class PhaseShardSelector {
         return entry.getValue();
     }
 
-    /**
-     * Returns a list of segment names relevant to the query pattern within epsilon range.
-     */
     public List<String> getRelevantShards(WavePattern query) {
         if (!useExplicitRanges) {
             return List.of(selectShard(query));
@@ -98,9 +76,7 @@ public class PhaseShardSelector {
         }
         return new ArrayList<>(phaseShardMap.values());
     }
-    /**
-     * Returns the (min, max) phase range used for querying.
-     */
+
     public double[] getPhaseRange(WavePattern pattern) {
         double avgPhase = Arrays.stream(pattern.phase()).average().orElse(0.0);
         if (useExplicitRanges) {
@@ -110,9 +86,6 @@ public class PhaseShardSelector {
         }
     }
 
-    /**
-     * Returns all known shard segment names.
-     */
     public List<String> allShards() {
         if (!useExplicitRanges) {
             List<String> result = new ArrayList<>(totalShards);
@@ -124,12 +97,8 @@ public class PhaseShardSelector {
         return new ArrayList<>(phaseShardMap.values());
     }
 
-    /**
-     * Builds a PhaseShardSelector using ManifestIndex data.
-     * Aggregates segmentName → average(phaseCenter) and maps that to segment.
-     */
+
     public static PhaseShardSelector fromManifest(Collection<ManifestIndex.PatternLocation> locations, double epsilon) {
-        // Group: segmentName → list of phaseCenters
         Map<String, List<Double>> grouped = new HashMap<>();
         for (ManifestIndex.PatternLocation loc : locations) {
             grouped.computeIfAbsent(loc.segmentName(), k -> new ArrayList<>()).add(loc.phaseCenter());
@@ -146,11 +115,13 @@ public class PhaseShardSelector {
         return new PhaseShardSelector(map, epsilon);
     }
 
-    /**
-     * Fallback selector that maps all patterns to a default shard.
-     */
     public static PhaseShardSelector emptyFallback() {
         return new PhaseShardSelector(Map.of(0.0, "phase-0.segment"), Math.PI);
+    }
+
+    public String fallbackRouteIfLowCoherence(WavePattern query) {
+        // TODO: implement phase-degrading route fallback logic
+        return null;
     }
 
     @Override

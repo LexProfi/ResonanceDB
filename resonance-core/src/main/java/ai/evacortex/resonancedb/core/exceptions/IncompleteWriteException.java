@@ -6,10 +6,10 @@
  * Patent notice: The authors intend to seek patent protection for this software.
  * Commercial use >30 days → license@evacortex.ai
  */
-package ai.evacortex.resonancedb.core.math;
+package ai.evacortex.resonancedb.core.exceptions;
 
-public enum ResonanceZone {
-    CORE,
-    FRINGE,
-    SHADOW
+public class IncompleteWriteException extends RuntimeException {
+    public IncompleteWriteException(String msg) {
+        super(msg);
+    }
 }

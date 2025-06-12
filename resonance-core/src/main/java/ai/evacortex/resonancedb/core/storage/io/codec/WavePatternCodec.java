@@ -14,21 +14,52 @@ import ai.evacortex.resonancedb.core.exceptions.InvalidWavePatternException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
+/**
+ * Codec utility for encoding and decoding {@link WavePattern} objects into a binary format
+ * suitable for durable storage and fast deserialization.
+ *
+ * <p>
+ * This class supports optional inclusion of a format marker (magic header) and handles
+ * conversion of fixed-length double-precision vectors (amplitude and phase) into
+ * a compact binary representation.
+ * </p>
+ *
+ * <h3>Encoding</h3>
+ * Patterns can be written to or read from {@link ByteBuffer} containers. Serialization includes:
+ * <ul>
+ *   <li>Optional format marker (magic number)</li>
+ *   <li>Pattern length</li>
+ *   <li>Amplitude values</li>
+ *   <li>Phase values</li>
+ * </ul>
+ * The layout is structured for forward compatibility and alignment with memory-mapped access.
+ *
+ * <h3>Format Detection</h3>
+ * When enabled, a format identifier is prepended to help distinguish storage layouts
+ * or versions in multi-source environments.
+ *
+ * <h3>Safety</h3>
+ * Size constraints and sanity checks are enforced to prevent corruption or malicious input.
+ * The codec is tolerant to various buffer origins, including heap and direct memory.
+ *
+ * <h3>Usage</h3>
+ * This utility is typically used by storage-layer components such as {@link ./SegmentWriter}
+ * and {@link ./SegmentReader}.
+ *
+ * <h3>Limits</h3>
+ * Maximum supported vector length is bounded by an architectural constant and may
+ * evolve in future versions without breaking compatibility.
+ *
+ * @see WavePattern
+ * @see ./SegmentWriter
+ * @see ./SegmentReader
+ */
 public class WavePatternCodec {
 
     private static final int MAGIC = 0x57565750; // 'WWWP'
     private static final ByteOrder ORDER = ByteOrder.LITTLE_ENDIAN;
     private static final int MAX_SUPPORTED_LENGTH = 65_536; // architectural sanity limit
 
-    /**
-     * Serializes a WavePattern into the given ByteBuffer.
-     *
-     * Format:
-     * if withMagic = true:
-     *   [MAGIC:int][LENGTH:int][AMP₀:double]...[AMPₙ][PHASE₀:double]...[PHASEₙ]
-     * else:
-     *   [LENGTH:int][AMP₀:double]...[AMPₙ][PHASE₀:double]...[PHASEₙ]
-     */
     public static void writeTo(ByteBuffer buf, WavePattern pattern, boolean withMagic) {
         double[] amp = pattern.amplitude();
         double[] phase = pattern.phase();
@@ -49,12 +80,6 @@ public class WavePatternCodec {
         for (double v : phase) buf.putDouble(v);
     }
 
-    /**
-     * Reads a WavePattern from a ByteBuffer.
-     * @param buf byte buffer with data
-     * @param withMagic whether to expect a MAGIC header
-     * @return reconstructed WavePattern
-     */
     public static WavePattern readFrom(ByteBuffer buf, boolean withMagic) {
         buf.order(ORDER);
 
@@ -73,7 +98,8 @@ public class WavePatternCodec {
 
         int required = 8 * len * 2;
         if (buf.remaining() < required) {
-            throw new InvalidWavePatternException("Buffer underflow: need " + required + " bytes, found " + buf.remaining());
+            throw new InvalidWavePatternException("Buffer underflow: need " + required + " bytes, found "
+                    + buf.remaining());
         }
 
         double[] amp = new double[len];
@@ -85,9 +111,6 @@ public class WavePatternCodec {
         return new WavePattern(amp, phase);
     }
 
-    /**
-     * Serializes pattern with MAGIC header into byte array.
-     */
     public static byte[] serialize(WavePattern pattern) {
         int size = estimateSize(pattern, true);
         ByteBuffer buf = ByteBuffer.allocateDirect(size).order(ORDER);
@@ -98,28 +121,15 @@ public class WavePatternCodec {
         return result;
     }
 
-    /**
-     * Deserializes pattern from byte array (expects MAGIC header).
-     */
     public static WavePattern deserialize(byte[] data) {
         ByteBuffer buf = ByteBuffer.wrap(data).order(ORDER);
         return readFrom(buf, true);
     }
 
-    /**
-     * Estimate the number of bytes required to store a pattern.
-     * @param pattern pattern to measure
-     * @param withMagic include header size
-     */
     public static int estimateSize(WavePattern pattern, boolean withMagic) {
         return estimateSize(pattern.amplitude().length, withMagic);
     }
 
-    /**
-     * Estimate the number of bytes required to store a pattern of given length.
-     * @param length number of amplitudes (and phases)
-     * @param withMagic include header size
-     */
     public static int estimateSize(int length, boolean withMagic) {
         if (length <= 0 || length > MAX_SUPPORTED_LENGTH) {
             throw new InvalidWavePatternException("Invalid length for size estimation: " + length);

@@ -19,23 +19,20 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * {@code ResonanceStore} defines the contract for interacting with a persistent,
- * phase-aware cognitive waveform database. It supports content-addressable insertions,
- * deletions, replacements, and semantic resonance queries over {@link WavePattern} instances.
+ * {@code ResonanceStore} defines the core contract for interacting with a cognitive waveform database
+ * based on phase-aware semantic encoding. It supports content-addressable insertion, atomic replacement,
+ * phase-sensitive queries, and interference-based retrieval over {@link WavePattern} instances.
  *
- * <p>Each stored pattern is uniquely identified by a deterministic 16-byte MD5 hash
- * computed from its contents. This ID remains immutable and guarantees deduplication,
- * idempotent storage, and consistent referencing across sessions.</p>
+ * <p>Each pattern is uniquely identified by a fixed-length content-derived hash
+ * (typically 16 bytes), ensuring deduplication, immutability, and reproducible addressing.
+ * The exact hash algorithm (e.g. MD5, BLAKE2, xxHash) is implementation-defined and not contract-bound.</p>
  *
- * <p>Queries are evaluated using the principle of constructive interference between waveforms,
- * enabling phase-sensitive similarity, superposition-based composite reasoning,
- * and energy-weighted semantic retrieval. The system operates on ψ(x)-encoded patterns
- * and does not rely on symbolic keys.</p>
+ * <p>Similarity is computed using constructive interference of complex waveforms ψ(x),
+ * enabling fine-grained comparison of phase and amplitude alignment. Composite queries
+ * and interference mapping support reasoning over superposed semantics.</p>
  *
- * <p>Implementations must ensure full thread safety and atomicity of insert, replace, and delete
- * operations. Read/write concurrency must be handled via lock-isolated mutation.
- * All comparison and query operations must be deterministic and reproducible
- * under identical input conditions.</p>
+ * <p>Implementations must be fully thread-safe, support concurrent reads and lock-isolated writes,
+ * and guarantee deterministic behavior under identical input conditions.</p>
  *
  * @see WavePattern
  * @see ResonanceMatch
@@ -45,41 +42,37 @@ import java.util.Map;
 public interface ResonanceStore {
 
     /**
-     * Inserts a new {@link WavePattern} into the store, indexed by its content hash.
+     * Inserts a new {@link WavePattern} into the store, indexed by its content-derived hash.
      *
      * @param psi      the wave pattern to store
      * @param metadata optional metadata associated with the pattern
-     * @return the 16-byte content-derived MD5 hash that serves as the unique identifier
+     * @return a deterministic content-based hash (e.g., 16 bytes) serving as the unique identifier
      * @throws DuplicatePatternException     if a pattern with the same content already exists
      * @throws InvalidWavePatternException  if the pattern structure is invalid
      */
     String insert(WavePattern psi, Map<String, String> metadata);
 
     /**
-     * Deletes a previously stored pattern by its ID.
+     * Deletes a previously stored pattern by its content-based ID.
      *
-     * @param id the 16-byte MD5 content hash of the pattern to delete
+     * @param id the content-derived hash of the pattern to delete
      * @throws PatternNotFoundException if no such pattern exists
      */
     void delete(String id);
 
     /**
-     * Replaces an existing pattern by deleting the pattern associated with the given ID
-     * and inserting a new waveform pattern with updated metadata.
+     * Replaces an existing pattern by its ID and inserts a new wave pattern with optional metadata.
      *
-     * <p>The original ID is used to locate and remove the existing pattern.
-     * The new pattern is then inserted as a completely separate entry,
-     * and its ID is computed from its content (MD5 hash).</p>
+     * <p>The new ID is deterministically derived from the new pattern's content.
+     * This ensures content-addressable immutability and deduplication.</p>
      *
-     * <p>This method ensures consistency in content-addressable storage,
-     * where the ID always reflects the actual content of the pattern.</p>
-     *
-     * @param id the ID of the existing pattern to remove (must match an existing entry)
-     * @param psi the new {@link WavePattern} to insert
-     * @return the 16-byte content-derived MD5 hash that serves as the unique identifier
+     * @param id    the ID of the existing pattern to remove
+     * @param psi   the new {@link WavePattern} to insert
+     * @param metadata optional metadata to associate
+     * @return the content-derived ID of the new pattern
      * @throws PatternNotFoundException     if no pattern exists for the given ID
      * @throws InvalidWavePatternException  if the new pattern is invalid
-     * @throws DuplicatePatternException if the new pattern already exists in the store
+     * @throws DuplicatePatternException    if the new pattern already exists
      */
     String replace(String id, WavePattern psi, Map<String, String> metadata);
 

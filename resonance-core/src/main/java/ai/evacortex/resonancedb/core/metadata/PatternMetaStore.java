@@ -20,13 +20,6 @@ import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-/**
- * PatternMetaStore is responsible for storing and retrieving
- * metadata associated with WavePattern entries.
-
- * Metadata is stored as a JSON map: id → {key → value}.
- * The store is thread-safe and supports atomic persistence to disk.
- */
 public class PatternMetaStore {
 
     private final Path metaFile;
@@ -36,12 +29,6 @@ public class PatternMetaStore {
 
     public record PatternMeta(Map<String, String> metadata) {}
 
-    /**
-     * Loads an existing metadata file or creates a new empty store.
-     *
-     * @param path path to pattern-meta.json
-     * @return initialized PatternMetaStore
-     */
     public static PatternMetaStore loadOrCreate(Path path) {
         PatternMetaStore metaStore = new PatternMetaStore(path);
         if (Files.exists(path)) {
@@ -65,12 +52,6 @@ public class PatternMetaStore {
         this.rwLock = new ReentrantReadWriteLock();
     }
 
-    /**
-     * Adds or updates metadata with explicit rawId. Persists the store after modification.
-     *
-     * @param hashId SHA-256 ID of the pattern
-     * @param metadata arbitrary metadata map
-     */
     public void put(String hashId, Map<String, String> metadata) {
         rwLock.writeLock().lock();
         try {
@@ -81,11 +62,6 @@ public class PatternMetaStore {
         }
     }
 
-    /**
-     * Removes metadata for a given hash ID and persists the change.
-     *
-     * @param hashId SHA-256 ID of the pattern
-     */
     public void remove(String hashId) {
         rwLock.writeLock().lock();
         try {
@@ -96,12 +72,6 @@ public class PatternMetaStore {
         }
     }
 
-    /**
-     * Retrieves metadata for a given hash ID.
-     *
-     * @param hashId SHA-256 ID of the pattern
-     * @return metadata map or null if not present
-     */
     public Map<String, String> getMetadata(String hashId) {
         rwLock.readLock().lock();
         try {
@@ -112,12 +82,6 @@ public class PatternMetaStore {
         }
     }
 
-    /**
-     * Checks if metadata exists for the given hash ID.
-     *
-     * @param hashId SHA-256 ID of the pattern
-     * @return true if present
-     */
     public boolean contains(String hashId) {
         rwLock.readLock().lock();
         try {
@@ -127,9 +91,6 @@ public class PatternMetaStore {
         }
     }
 
-    /**
-     * Persists the metadata store to disk as JSON.
-     */
     public void flush() {
         rwLock.writeLock().lock();
         try {
@@ -144,9 +105,6 @@ public class PatternMetaStore {
         }
     }
 
-    /**
-     * Returns a snapshot of the entire metadata map.
-     */
     public Map<String, PatternMeta> snapshot() {
         rwLock.readLock().lock();
         try {
@@ -160,11 +118,6 @@ public class PatternMetaStore {
         }
     }
 
-    /**
-     * Returns all hash IDs currently stored.
-     *
-     * @return set of all pattern ID hashes
-     */
     public Set<String> getAllIds() {
         rwLock.readLock().lock();
         try {

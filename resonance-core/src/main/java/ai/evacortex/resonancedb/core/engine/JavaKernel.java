@@ -14,38 +14,6 @@ import ai.evacortex.resonancedb.core.math.Complex;
 
 import java.util.List;
 
-/**
- * {@code JavaKernel} provides a resonance-based similarity metric for comparing two {@link WavePattern}
- * instances, based on constructive interference of complex-valued waveforms.
- *
- * <p>The kernel computes a normalized resonance energy that accounts for both phase alignment
- * and amplitude balance. The formula ensures bounded output in the range [0.0 ... 1.0] without
- * requiring artificial clipping.</p>
- *
- * <p>Resonance energy is defined as:</p>
- *
- * <pre>{@code
- *     E = 0.5 * |ψ₁ + ψ₂|² / (|ψ₁|² + |ψ₂|²) * A
- *     A = 2 * sqrt(E₁ * E₂) / (E₁ + E₂)
- * }</pre>
- *
- * <p>Where ψ(x) = A(x) · e^{iφ(x)} is the complex representation of the wave pattern.</p>
- *
- * <ul>
- *     <li>E = 1.0 for complete constructive interference (Δφ = 0, equal amplitudes)</li>
- *     <li>E = 0.0 for perfect destructive interference (Δφ = π)</li>
- *     <li>The amplitude factor A compensates for energy imbalance between patterns</li>
- * </ul>
- *
- * <p>The comparison is symmetric, differentiable, and suitable for reasoning systems
- * based on wave-like cognitive structures.</p>
- *
- * <p>{@link CompareOptions} can be used to enable or disable phase sensitivity and other
- * normalization strategies.</p>
-
- * @see ResonanceKernel
- * @see WavePattern
- */
 public final class JavaKernel implements ResonanceKernel {
 
     @Override
@@ -76,7 +44,6 @@ public final class JavaKernel implements ResonanceKernel {
         for (int i = 0; i < sa.length; i++) {
             Complex c1 = sa[i];
             Complex c2 = sb[i];
-
             energyA      += c1.absSquared();
             energyB      += c2.absSquared();
             interference += c1.add(c2).absSquared();
@@ -108,14 +75,6 @@ public final class JavaKernel implements ResonanceKernel {
         return results;
     }
 
-    /**
-     * Converts a {@link WavePattern} to an array of {@link Complex} values, applying comparison options.
-     * If {@code ignorePhase} is enabled, phases are set to zero (amplitude-only representation).
-     *
-     * @param pattern the input wave pattern
-     * @param options comparison configuration
-     * @return array of complex values
-     */
     private Complex[] toComplexWithOptions(WavePattern pattern, CompareOptions options) {
         Complex[] complex = pattern.toComplex();
 

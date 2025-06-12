@@ -11,9 +11,6 @@ package ai.evacortex.resonancedb.core.engine;
 import ai.evacortex.resonancedb.core.storage.responce.ComparisonResult;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
 
-/**
- * Delegates resonance comparison to backend (Java or Native).
- */
 public class ResonanceEngine {
 
     private static ResonanceKernel backend = new JavaKernel();

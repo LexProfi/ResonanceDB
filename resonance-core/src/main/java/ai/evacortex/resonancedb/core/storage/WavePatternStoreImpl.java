@@ -34,11 +34,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-/**
- * WavePatternStoreImpl is the main implementation of the ResonanceStore interface,
- * responsible for managing insertions, deletions, updates, and queries of WavePatterns,
- * with support for phase-based sharding using a PhaseShardSelector.
- */
 public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
     private static final double READ_EPSILON  = 0.1;

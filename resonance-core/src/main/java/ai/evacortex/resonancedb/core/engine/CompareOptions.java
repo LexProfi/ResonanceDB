@@ -10,13 +10,24 @@ package ai.evacortex.resonancedb.core.engine;
 
 /**
  * Configuration options for fine-tuning resonance comparison.
+ *
+ * <p>These options influence how {@code ResonanceKernel.compare(...)} interprets the input wave patterns.
+ * All options are immutable and thread-safe.</p>
+ *
+ * <ul>
+ *     <li>{@code normalizeAmplitude} — normalize each amplitude[] to unit scale before comparison</li>
+ *     <li>{@code ignorePhase} — disable phase completely; use only magnitude (A(x))</li>
+ *     <li>{@code allowGlobalPhaseShift} — align entire pattern by global φ offset (not yet implemented)</li>
+ *     <li>{@code enablePhaseAlignmentBonus} — apply optional bonus when φ_diff &lt; ε (as per patent claim 1(d)(ii))</li>
+ * </ul>
  */
 public record CompareOptions(
-        boolean normalizeAmplitude,     // normalize amplitude to [0...1] per pattern
-        boolean ignorePhase,            // ignore phase completely (project to magnitude only)
-        boolean allowGlobalPhaseShift   // align by global φ (not yet implemented)
+        boolean normalizeAmplitude,
+        boolean ignorePhase,
+        boolean allowGlobalPhaseShift,
+        boolean enablePhaseAlignmentBonus
 ) {
     public static CompareOptions defaultOptions() {
-        return new CompareOptions(false, false, false);
+        return new CompareOptions(false, false, false, false);
     }
 }

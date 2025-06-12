@@ -8,10 +8,6 @@
  */
 package ai.evacortex.resonancedb.core.math;
 
-/**
- * Immutable complex number used in WavePattern computation.
- * Optimized for numerical accuracy and compatibility with FFI.
- */
 public final class Complex {
 
     public final double real;

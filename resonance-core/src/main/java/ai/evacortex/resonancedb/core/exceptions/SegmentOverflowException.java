@@ -9,9 +9,6 @@
 package ai.evacortex.resonancedb.core.exceptions;
 
 
-/**
- * Exception thrown when a segment cannot accommodate additional data due to insufficient capacity.
- */
 public class SegmentOverflowException extends RuntimeException {
 
     public SegmentOverflowException(String message) {

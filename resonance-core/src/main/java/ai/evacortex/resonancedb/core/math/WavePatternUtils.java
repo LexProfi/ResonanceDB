@@ -19,14 +19,6 @@ public class WavePatternUtils {
 
     private WavePatternUtils() {}
 
-    /**
-     * Creates a new WavePattern by superimposing the input patterns.
-     * Complex values are added to the given weights.
-     *
-     * @param patterns list of patterns, at least one
-     * @param weights list of weights (can be null, then all are 1.0)
-     * @return the resulting pattern
-     */
     public static WavePattern superpose(List<WavePattern> patterns, List<Double> weights) {
         Objects.requireNonNull(patterns, "patterns must not be null");
 

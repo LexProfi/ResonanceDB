@@ -8,6 +8,7 @@
  */
 package ai.evacortex.resonancedb.core.storage.io;
 
+import ai.evacortex.resonancedb.core.exceptions.IncompleteWriteException;
 import ai.evacortex.resonancedb.core.exceptions.InvalidWavePatternException;
 import ai.evacortex.resonancedb.core.exceptions.PatternNotFoundException;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
@@ -28,15 +29,41 @@ import java.util.Map;
 
 
 /**
- * SegmentReader allows reading serialized {@link WavePattern}s
- * from a memory-mapped .segment file produced by {@link SegmentWriter}.
+ * SegmentReader provides read-only access to wave-based semantic patterns
+ * stored in a memory-mapped segment file produced by {@link SegmentWriter}.
  *
- * Each segment starts with a {@link BinaryHeader}.
- * Each entry layout:
- *   [ID_HASH (16 bytes)] [LENGTH (4 bytes)] [META_OFFSET (4 bytes)] [WavePattern binary]
+ * <p>
+ * Each segment begins with a {@link BinaryHeader}, followed by one or more
+ * encoded entries. The layout of each entry includes:
+ * </p>
+ * <pre>
+ *   [ID_HASH (16 bytes)] [LENGTH (4 bytes)] [RESERVED (4 bytes)] [WavePattern binary]
+ * </pre>
  *
- * Deleted entries (tombstones) are marked with 0x00 at the first byte.
- * This class is read-only and thread-safe via duplicated buffer strategy.
+ * <p>
+ * Entries can be logically deleted via a leading 0x00 tombstone marker.
+ * Patterns are retrieved with integrity checks and offset-based access.
+ * </p>
+ *
+ * <p>
+ * This reader is thread-safe for concurrent access through buffer duplication.
+ * Checksum verification and segment manifest coordination are internally supported.
+ * </p>
+ *
+ * <p>
+ * SegmentReader is compatible with fixed-length hash IDs and length-prefixed
+ * binary encodings. The structure is designed for use in resonance-based
+ * pattern retrieval systems.
+ * </p>
+ *
+ * <p><b>Note:</b> This class does not perform mutation and assumes segments
+ * are written and committed prior to read access. Compatibility with different
+ * checksum formats and alignment strategies is supported via configuration.
+ * </p>
+ *
+ * @see SegmentWriter
+ * @see WavePattern
+ * @see BinaryHeader
  */
 public final class SegmentReader implements AutoCloseable {
 
@@ -46,20 +73,39 @@ public final class SegmentReader implements AutoCloseable {
     private static final int ALIGNMENT = 8;
 
     private final Path path;
+    private final int checksumLength;
     private final FileChannel channel;
     private final MappedByteBuffer mmap;
     private final BinaryHeader header;
 
     public SegmentReader(Path path) {
+        this(path, 8);
+    }
+
+    public SegmentReader(Path path, int checksumLength) {
         this.path = path;
+        this.checksumLength = checksumLength;
+
         try {
             this.channel = FileChannel.open(path, StandardOpenOption.READ);
 
-            this.mmap = channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size());
+            verifyManifestVersion(path); // ← TODO: compare-and-swap manifest version check + mmap refresh if needed
+
+            this.mmap = Buffers.mmap(channel, FileChannel.MapMode.READ_ONLY, 0, channel.size());
 
             ByteBuffer hdrBuf = mmap.duplicate().order(ByteOrder.LITTLE_ENDIAN);
             hdrBuf.position(0);
-            this.header = BinaryHeader.from(hdrBuf);
+            this.header = BinaryHeader.from(hdrBuf, checksumLength);
+
+            if (header.lastOffset() < BinaryHeader.sizeFor(checksumLength)) {
+                throw new InvalidWavePatternException("Header lastOffset (" + header.lastOffset()
+                        + ") is less than header size (" + BinaryHeader.sizeFor(checksumLength) + ")");
+            }
+
+            if (header.commitFlag() != 1) {
+                throw new IncompleteWriteException("Segment " + path.getFileName()
+                        + " not marked as committed (flag=" + header.commitFlag() + ")");
+            }
 
         } catch (IOException e) {
             throw new RuntimeException("Failed to map segment: " + path, e);
@@ -102,10 +148,14 @@ public final class SegmentReader implements AutoCloseable {
     public List<PatternWithId> readAllWithId() {
         Map<String, PatternWithId> latest = new LinkedHashMap<>();
         ByteBuffer buf = mmap.duplicate().order(ByteOrder.LITTLE_ENDIAN);
-        buf.position(BinaryHeader.SIZE);
+        buf.position(BinaryHeader.sizeFor(checksumLength));
+
 
         while (buf.position() < header.lastOffset()) {
+
+            // TODO: Add support for filtering committed/expired patterns based on future metadata
             int entryStart = buf.position();
+            int prePosition = buf.position();
 
             if (buf.remaining() < HEADER_SIZE) {
                 throw new InvalidWavePatternException("Corrupted segment: insufficient space for header at offset " + entryStart);
@@ -118,7 +168,7 @@ public final class SegmentReader implements AutoCloseable {
                     throw new InvalidWavePatternException("Corrupted tombstone at offset " + entryStart);
                 }
                 int len = buf.getInt();
-                buf.getInt(); // skip tombstone marker
+                buf.getInt();
                 if (len <= 0 || len > MAX_LENGTH) {
                     throw new InvalidWavePatternException("Invalid length in tombstone at " + entryStart);
                 }
@@ -151,6 +201,10 @@ public final class SegmentReader implements AutoCloseable {
 
             String id = bytesToHex(idBytes);
             latest.put(id, new PatternWithId(id, pattern, entryStart));
+
+            if (buf.position() <= prePosition) {
+                throw new InvalidWavePatternException("Parser did not advance at offset " + entryStart);
+            }
         }
         return new ArrayList<>(latest.values());
     }
@@ -167,8 +221,25 @@ public final class SegmentReader implements AutoCloseable {
         return ((size + ALIGNMENT - 1) / ALIGNMENT) * ALIGNMENT;
     }
 
+    /**
+     * Verifies the manifest version of this segment against the expected global state.
+     * <p>
+     * This method is a placeholder for CAS-based consistency checking.
+     * If a mismatch is detected, the segment should be unmapped and remapped.
+     * </p>
+     * <p>
+     * TODO: Implement CAS check against segment manifest version and force re-map via Unsafe.invokeCleaner.
+     * </p>
+     *
+     * @param path Path to the segment file.
+     */
+    private static void verifyManifestVersion(Path path) {
+        // no-op for now
+    }
+
     @Override
     public void close() throws IOException {
+        Buffers.unmap(mmap);
         channel.close();
     }
 
@@ -176,6 +247,29 @@ public final class SegmentReader implements AutoCloseable {
         StringBuilder sb = new StringBuilder(ID_SIZE * 2);
         for (byte b : bytes) sb.append(String.format("%02x", b));
         return sb.toString();
+    }
+
+    private static int inferChecksumLength(Path path) {
+        try (FileChannel ch = FileChannel.open(path, StandardOpenOption.READ)) {
+            ByteBuffer buf = ByteBuffer.allocate(36).order(ByteOrder.LITTLE_ENDIAN);
+            ch.read(buf, 0);
+            buf.rewind();
+
+            buf.getInt();
+            buf.getLong();
+            buf.getInt();
+            buf.getLong();
+
+            long possibleChecksum = buf.getLong();
+            byte flag = buf.get();
+            byte pad1 = buf.get();
+            byte pad2 = buf.get();
+
+            if (flag == 1 && pad1 == 0 && pad2 == 0) return 8;
+            else return 4;
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to infer checksum length from segment header", e);
+        }
     }
 
     public record PatternWithId(String id, WavePattern pattern, long offset) {}

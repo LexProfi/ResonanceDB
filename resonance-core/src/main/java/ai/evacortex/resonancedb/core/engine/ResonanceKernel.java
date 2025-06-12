@@ -49,7 +49,13 @@ import java.util.List;
  *     <li>{@code ignorePhase} — disable phase sensitivity (amplitude-only match)</li>
  *     <li>{@code normalizeAmplitude} — normalize amplitudes before comparison</li>
  *     <li>{@code allowGlobalPhaseShift} — allow phase offset correction (not yet implemented)</li>
+ *     <li>{@code enablePhaseAlignmentBonus} — reserved for future versions</li>
  * </ul>
+ *
+ * <p><strong>Note:</strong> Optional support for a phase alignment bonus when Δφ &lt; ε
+ * (as described in patent claim 1(d)(ii)) is reserved for future versions.
+ * Implementations may include a bonus function g(Δφ, ε) based on linear or custom decay.
+ * This capability is not currently active in any kernel.</p>
  *
  * @see WavePattern
  * @see CompareOptions
@@ -83,6 +89,18 @@ public interface ResonanceKernel {
      *     E = 0.5 · |ψ₁ + ψ₂|² / (|ψ₁|² + |ψ₂|²) · A
      *     A = 2 · √(E₁ · E₂) / (E₁ + E₂)
      * </pre>
+     *
+     * <p>Options can modify comparison behavior:</p>
+     * <ul>
+     *     <li>{@code ignorePhase} — disable phase sensitivity (amplitude-only match)</li>
+     *     <li>{@code normalizeAmplitude} — normalize amplitudes before comparison</li>
+     *     <li>{@code allowGlobalPhaseShift} — allow phase offset correction (not yet implemented)</li>
+     *     <li>{@code phaseAlignmentBonus} — <strong>reserved for future implementation</strong></li>
+     * </ul>
+     *
+     * <p><strong>TODO:</strong> Support optional phaseAlignmentBonus when Δφ &lt; ε,
+     * as defined in patent claim 1(d)(ii). Bonus function g(Δφ, ε) may follow linear or custom decay.
+     * Default ε = 0.1 radians. This feature is currently not implemented in any kernel.</p>
      *
      * @param a the first wave pattern (ψ₁)
      * @param b the second wave pattern (ψ₂)
@@ -142,4 +160,5 @@ public interface ResonanceKernel {
      * @throws NullPointerException if inputs are {@code null}
      */
     ComparisonResult compareWithPhaseDelta(WavePattern a, WavePattern b);
+
 }

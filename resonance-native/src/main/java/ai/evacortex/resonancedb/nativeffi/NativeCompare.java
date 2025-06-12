@@ -14,12 +14,6 @@ import java.lang.invoke.VarHandle;
 
 import static java.lang.foreign.ValueLayout.*;
 
-/**
- * NativeCompare provides SIMD-accelerated FFI bindings for wave pattern comparison.
- * It delegates to native implementations of:
- * - compare_wave_patterns(float*, float*, float*, float*, int)
- * - compare_many(float*, float*, float**, float**, int, int, float*)
- */
 public final class NativeCompare {
 
     private static final Linker linker = Linker.nativeLinker();

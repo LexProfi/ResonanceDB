@@ -8,11 +8,6 @@
  */
 package ai.evacortex.resonancedb.core.math;
 
-/**
- * Classifies resonance matches into semantic zones based on energy and phase alignment.
- */
-
-
 public final class ResonanceZoneClassifier {
 
     private static final double SIGMA = Math.PI / 8;

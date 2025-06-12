@@ -10,8 +10,12 @@ package ai.evacortex.resonancedb.core.storage.io;
 
 import sun.misc.Unsafe;
 
+import java.io.IOException;
 import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.MappedByteBuffer;
+import java.nio.channels.FileChannel;
 
 /**  Utility — safe explicit unmap for a MappedByteBuffer.  */
 @SuppressWarnings({"removal", "UnsafeUsage"})
@@ -41,6 +45,16 @@ final class Buffers {
             INVOKE_CLEANER.invoke(UNSAFE, bb);
         } catch (Throwable t) {
             System.err.println("[WARN] explicit unmap failed: " + t);
+        }
+    }
+
+    static MappedByteBuffer mmap(FileChannel channel, FileChannel.MapMode mode, long position, long size) {
+        try {
+            MappedByteBuffer buffer = channel.map(mode, position, size);
+            buffer.order(ByteOrder.LITTLE_ENDIAN);
+            return buffer;
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to mmap segment", e);
         }
     }
 }

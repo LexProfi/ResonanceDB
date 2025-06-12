@@ -10,9 +10,6 @@
 #include <immintrin.h>
 #include <stddef.h>
 
-/**
- * Compare two complex wave patterns using AVX2.
- */
 EXPORT float compare_wave_patterns(const float* amp1, const float* phase1,
                                    const float* amp2, const float* phase2,
                                    int len) {
@@ -76,7 +73,6 @@ EXPORT float compare_wave_patterns(const float* amp1, const float* phase1,
         for (int j = 0; j < 8; ++j) energyB += tmp[j];
     }
 
-    // Scalar fallback for remaining elements
     for (; i < len; ++i) {
         float r1 = amp1[i] * cosf(phase1[i]);
         float i1 = amp1[i] * sinf(phase1[i]);
@@ -104,9 +100,7 @@ EXPORT float compare_wave_patterns(const float* amp1, const float* phase1,
     return base * ampFactor;
 }
 
-/**
- * Batched comparison: computes similarity scores between query pattern and N candidate patterns.
- */
+
 EXPORT void compare_many(const float* ampQ, const float* phaseQ,
                          const float** ampList, const float** phaseList,
                          int len, int count, float* out) {
@@ -115,10 +109,6 @@ EXPORT void compare_many(const float* ampQ, const float* phaseQ,
     }
 }
 
-/**
- * Computes energy and average phase delta between two wave patterns.
- * Output: out[0] = energy, out[1] = avg_phase_delta (radians, ∈ [–π, +π])
- */
 EXPORT void compare_with_phase_delta(const float* amp1, const float* phase1,
                                      const float* amp2, const float* phase2,
                                      int len, float* out) {

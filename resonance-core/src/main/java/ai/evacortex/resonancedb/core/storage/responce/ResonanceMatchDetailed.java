@@ -11,9 +11,6 @@ package ai.evacortex.resonancedb.core.storage.responce;
 import ai.evacortex.resonancedb.core.math.ResonanceZone;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
 
-/**
- * Represents a detailed match result including phase alignment and semantic zone.
- */
 public record ResonanceMatchDetailed(
         String id,
         float energy,

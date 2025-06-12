@@ -12,9 +12,6 @@ import ai.evacortex.resonancedb.core.storage.WavePattern;
 
 import java.util.List;
 
-/**
- * Represents a semantic interference field in response to a query wave.
- */
 public record InterferenceMap(
         WavePattern query,
         List<ResonanceMatchDetailed> matches
