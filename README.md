@@ -264,6 +264,7 @@ A **provisional U.S. patent application** related to ResonanceDB was filed on **
 
 No patent license is granted at this time.  
 Terms will be updated upon filing of the non-provisional application.
+
 ---
 
 
