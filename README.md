@@ -173,7 +173,7 @@ The segment begins with a binary header containing file-level metadata and atomi
 * `Timestamp`: UNIX time (ms) of creation
 * `Record Count`: number of stored patterns
 * `Last Offset`: file offset of last valid pattern
-* `Checksum`: hash (e.g., CRC32) over all `WavePatternё` entries; header and commit flag are excluded
+* `Checksum`: hash (e.g., CRC32) over all `WavePattern` entries; header and commit flag are excluded
 * `Commit Flag`: written *only after* successful checksum validation
 * Entire header is padded to a multiple of 4 bytes for alignment
 
