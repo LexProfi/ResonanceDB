@@ -73,7 +73,7 @@ public final class SegmentReader implements AutoCloseable {
     private static final int ALIGNMENT = 8;
 
     private final Path path;
-    private final int checksumLength;
+    private final int headerSize;
     private final FileChannel channel;
     private final MappedByteBuffer mmap;
     private final BinaryHeader header;
@@ -84,7 +84,7 @@ public final class SegmentReader implements AutoCloseable {
 
     public SegmentReader(Path path, int checksumLength) {
         this.path = path;
-        this.checksumLength = checksumLength;
+        this.headerSize = BinaryHeader.sizeFor(checksumLength);
 
         try {
             this.channel = FileChannel.open(path, StandardOpenOption.READ);
@@ -97,9 +97,9 @@ public final class SegmentReader implements AutoCloseable {
             hdrBuf.position(0);
             this.header = BinaryHeader.from(hdrBuf, checksumLength);
 
-            if (header.lastOffset() < BinaryHeader.sizeFor(checksumLength)) {
+            if (header.lastOffset() < headerSize) {
                 throw new InvalidWavePatternException("Header lastOffset (" + header.lastOffset()
-                        + ") is less than header size (" + BinaryHeader.sizeFor(checksumLength) + ")");
+                        + ") is less than header size (" + headerSize + ")");
             }
 
             if (header.commitFlag() != 1) {
@@ -148,7 +148,7 @@ public final class SegmentReader implements AutoCloseable {
     public List<PatternWithId> readAllWithId() {
         Map<String, PatternWithId> latest = new LinkedHashMap<>();
         ByteBuffer buf = mmap.duplicate().order(ByteOrder.LITTLE_ENDIAN);
-        buf.position(BinaryHeader.sizeFor(checksumLength));
+        buf.position(headerSize);
 
 
         while (buf.position() < header.lastOffset()) {
@@ -255,6 +255,7 @@ public final class SegmentReader implements AutoCloseable {
             ch.read(buf, 0);
             buf.rewind();
 
+            buf.getInt();
             buf.getInt();
             buf.getLong();
             buf.getInt();

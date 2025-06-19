@@ -78,11 +78,12 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 public class SegmentWriter implements AutoCloseable {
 
     private static final int ID_SIZE = 16;
-    private static final int FIXED_HEADER_SIZE = 16 + 4 + 4;
+    private static final int RECORD_HEADER_SIZE= 16 + 4 + 4;
     private static final int ALIGNMENT = 8;
     private static final int INITIAL_CAPACITY = 4 * 1024 * 1024;
 
     private final Path path;
+    private final int headerSize;
     private final int checksumLength;
     private final String segmentName;
     private final FileChannel channel;
@@ -98,6 +99,7 @@ public class SegmentWriter implements AutoCloseable {
         try {
             this.path = path;
             this.checksumLength = checksumLength;
+            this.headerSize = BinaryHeader.sizeFor(checksumLength);
             this.segmentName = path.getFileName().toString();
             Files.createDirectories(path.getParent());
 
@@ -111,11 +113,11 @@ public class SegmentWriter implements AutoCloseable {
 
             if (isNew) {
                 BinaryHeader header = new BinaryHeader(1, System.currentTimeMillis(), 0,
-                        BinaryHeader.sizeFor(checksumLength), 0L, (byte) 0, checksumLength);
-                ensureCapacity(BinaryHeader.sizeFor(checksumLength));
+                        headerSize, 0L, (byte) 0, checksumLength);
+                ensureCapacity(headerSize);
                 buffer.position(0);
                 buffer.put(header.toBytes());
-                this.writeOffset = new AtomicLong(BinaryHeader.sizeFor(checksumLength));
+                this.writeOffset = new AtomicLong(headerSize);
             } else {
                 ByteBuffer hdr = buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN);
                 hdr.position(0);
@@ -137,7 +139,7 @@ public class SegmentWriter implements AutoCloseable {
             }
 
             int patternSize = WavePatternCodec.estimateSize(pattern, false);
-            int blockSize = FIXED_HEADER_SIZE + patternSize;
+            int blockSize = RECORD_HEADER_SIZE + patternSize;
             int alignedSize = align(blockSize);
 
             long offset = writeOffset.get();
@@ -145,7 +147,7 @@ public class SegmentWriter implements AutoCloseable {
                 throw new SegmentOverflowException("Not enough space in segment");
             }
 
-            ensureCapacity(Math.max(offset + alignedSize, BinaryHeader.sizeFor(checksumLength)));
+            ensureCapacity(Math.max(offset + alignedSize, headerSize));
 
             buffer.position((int) offset);
             buffer.put(idBytes);
@@ -160,7 +162,7 @@ public class SegmentWriter implements AutoCloseable {
             writeOffset.addAndGet(alignedSize);
             recordCount++;
 
-            int checksumOffset = BinaryHeader.sizeFor(checksumLength);
+            int checksumOffset = headerSize;
             int lengthToChecksum = (int) (writeOffset.get() - checksumOffset);
 
             ByteBuffer checksumBuf = buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN);
@@ -172,10 +174,10 @@ public class SegmentWriter implements AutoCloseable {
                     writeOffset.get(), checksum, (byte) 1, checksumLength
             );
 
-            ensureCapacity(BinaryHeader.sizeFor(checksumLength));
+            ensureCapacity(headerSize);
             buffer.position(0);
             buffer.put(header.toBytes());
-            buffer.force(0, BinaryHeader.sizeFor(checksumLength));
+            buffer.force(0, headerSize);
 
             return offset;
         } finally {
@@ -210,12 +212,11 @@ public class SegmentWriter implements AutoCloseable {
     public void flush() {
         lock.writeLock().lock();
         try {
-            int checksumOffset = BinaryHeader.sizeFor(checksumLength);
-            int lengthToChecksum = (int) (writeOffset.get() - checksumOffset);
+            int lengthToChecksum = (int) (writeOffset.get() - headerSize);
 
             ByteBuffer checksumBuf = buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN);
-            checksumBuf.position(checksumOffset);
-            checksumBuf.limit(checksumOffset + lengthToChecksum);
+            checksumBuf.position(headerSize);
+            checksumBuf.limit(headerSize + lengthToChecksum);
 
             long checksum = HashingUtil.computeChecksum(checksumBuf.slice(), checksumLength);
 
@@ -230,10 +231,10 @@ public class SegmentWriter implements AutoCloseable {
             );
 
             if (buffer != null) {
-                ensureCapacity(BinaryHeader.sizeFor(checksumLength));
+                ensureCapacity(headerSize);
                 buffer.position(0);
                 buffer.put(header.toBytes());
-                buffer.force(0, BinaryHeader.sizeFor(checksumLength));
+                buffer.force(0, headerSize);
             }
         } finally {
             lock.writeLock().unlock();

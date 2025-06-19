@@ -47,8 +47,13 @@ import java.nio.ByteOrder;
  */
 public final class BinaryHeader {
 
-    public static final int CHECKSUM_4B = 4;
-    public static final int CHECKSUM_8B = 8;
+    public static final int MAGIC = 0x5244534E; // ASCII: 'RDSN'
+    public static final int MAGIC_LENGTH = 4;
+    public static final int VERSION_LENGTH = 2;
+    public static final int TIMESTAMP_LENGTH = 8;
+    public static final int RECORD_COUNT_LENGTH = 4;
+    public static final int LAST_OFFSET_LENGTH = 8;
+    public static final int COMMIT_FLAG_LENGTH = 1;
 
     private final int version;
     private final long timestamp;
@@ -59,17 +64,16 @@ public final class BinaryHeader {
     private final int checksumLength;
 
     public static int sizeFor(int checksumLength) {
-        return switch (checksumLength) {
-            case CHECKSUM_4B -> 32;
-            case CHECKSUM_8B -> 36;
-            default -> throw new IllegalArgumentException("Unsupported checksum length: " + checksumLength);
-        };
+        int rawSize = MAGIC_LENGTH + VERSION_LENGTH + TIMESTAMP_LENGTH +
+                RECORD_COUNT_LENGTH + LAST_OFFSET_LENGTH +
+                checksumLength + COMMIT_FLAG_LENGTH;
+        return (rawSize % 4 == 0) ? rawSize : rawSize + (4 - (rawSize % 4));
     }
 
     public BinaryHeader(int version, long timestamp, int recordCount, long lastOffset,
                         long checksum, byte commitFlag, int checksumLength) {
-        if (checksumLength != CHECKSUM_4B && checksumLength != CHECKSUM_8B)
-            throw new IllegalArgumentException("Invalid checksum length: " + checksumLength);
+        if (checksumLength < 4 || checksumLength > 32)
+            throw new IllegalArgumentException("Unsupported checksum length: " + checksumLength);
         this.version = version;
         this.timestamp = timestamp;
         this.recordCount = recordCount;
@@ -82,21 +86,32 @@ public final class BinaryHeader {
     public byte[] toBytes() {
         int size = sizeFor(checksumLength);
         ByteBuffer buf = ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN);
-        buf.putInt(version);
-        buf.putLong(timestamp);
-        buf.putInt(recordCount);
-        buf.putLong(lastOffset);
 
-        if (checksumLength == CHECKSUM_4B) {
+        buf.putInt(MAGIC);           // magic
+        buf.putShort((short) version); // version
+        buf.putLong(timestamp);      // timestamp
+        buf.putInt(recordCount);     // recordCount
+        buf.putLong(lastOffset);     // lastOffset
+
+        if (checksumLength == 4) {
             buf.putInt((int) checksum);
-        } else if (checksumLength == CHECKSUM_8B) {
+        } else if (checksumLength == 8) {
             buf.putLong(checksum);
         } else {
-            throw new IllegalArgumentException("Unsupported checksum length: " + checksumLength);
+            // pad or truncate long to match length
+            byte[] hashBytes = new byte[checksumLength];
+            ByteBuffer.wrap(hashBytes).order(ByteOrder.LITTLE_ENDIAN).putLong(checksum);
+            buf.put(hashBytes);
         }
 
         buf.put(commitFlag);
-        for (int i = 0; i < 3; i++) buf.put((byte) 0);
+
+        // Padding to align header size to 4 bytes
+        int written = MAGIC_LENGTH + VERSION_LENGTH + TIMESTAMP_LENGTH +
+                RECORD_COUNT_LENGTH + LAST_OFFSET_LENGTH +
+                checksumLength + COMMIT_FLAG_LENGTH;
+        int padding = (4 - (written % 4)) % 4;
+        for (int i = 0; i < padding; i++) buf.put((byte) 0);
 
         return buf.array();
     }
@@ -104,25 +119,33 @@ public final class BinaryHeader {
     public static BinaryHeader from(ByteBuffer buf, int checksumLength) {
         buf.order(ByteOrder.LITTLE_ENDIAN);
 
-        int version = buf.getInt();
+        int magic = buf.getInt();
+        if (magic != MAGIC)
+            throw new IllegalArgumentException("Invalid magic: " + Integer.toHexString(magic));
+
+        int version = buf.getShort() & 0xFFFF;
         long timestamp = buf.getLong();
         int recordCount = buf.getInt();
         long lastOffset = buf.getLong();
 
         long checksum;
-        byte commitFlag;
-
-        if (checksumLength == CHECKSUM_4B) {
+        if (checksumLength == 4) {
             checksum = buf.getInt() & 0xFFFFFFFFL;
-            commitFlag = buf.get();
-            buf.position(buf.position() + 3);
-        }  else if (checksumLength == CHECKSUM_8B) {
+        } else if (checksumLength == 8) {
             checksum = buf.getLong();
-            commitFlag = buf.get();
-            buf.position(buf.position() + 3);
         } else {
-            throw new IllegalArgumentException("Invalid checksum length: " + checksumLength);
+            byte[] hashBytes = new byte[checksumLength];
+            buf.get(hashBytes);
+            ByteBuffer tmp = ByteBuffer.wrap(hashBytes).order(ByteOrder.LITTLE_ENDIAN);
+            checksum = tmp.getLong(); // first 8 bytes only
         }
+
+        byte commitFlag = buf.get();
+        int readBytes = MAGIC_LENGTH + VERSION_LENGTH + TIMESTAMP_LENGTH +
+                RECORD_COUNT_LENGTH + LAST_OFFSET_LENGTH +
+                checksumLength + COMMIT_FLAG_LENGTH;
+        int padding = (4 - (readBytes % 4)) % 4;
+        buf.position(buf.position() + padding);
 
         return new BinaryHeader(version, timestamp, recordCount, lastOffset, checksum, commitFlag, checksumLength);
     }
