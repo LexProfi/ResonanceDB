@@ -1,11 +1,12 @@
-# ResonanceDB · Cognitive Wave Database
+# ResonanceDB
+### A waveform-native database for context-resonant retrieval.
 
 ---
 
 ## About 
 
 ResonanceDB is a next-generation semantic database designed to store and retrieve meaning-rich patterns using complex-valued waveforms.
-Instead of treating data as static vectors in geometric space, it represents information as structured waveforms — enabling retrieval by resonance, not distance.
+Instead of treating data as static vectors in geometric space, it represents information as structured waveforms - enabling retrieval by resonance, not distance.
 
 Queries are resolved via constructive interference between patterns, yielding context-sensitive matches across modalities.
 With phase-sharded storage, memory-mapped segments, and optional SIMD acceleration, the system supports ultra-low latency recall even across millions of entries.
@@ -13,23 +14,23 @@ With phase-sharded storage, memory-mapped segments, and optional SIMD accelerati
 ### What makes it different
 
 | Feature                         | Why it matters                                                                                                                              |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Meaning-first storage**       | Instead of fixed vectors, patterns are stored as waveforms that preserve context, intensity, and structure — closer to how cognition works. |
-| **Resonant retrieval**          | Finds results not by distance but by **interference** — surfacing patterns that align in meaning, not just position.                        |
+| ------------------------------- |---------------------------------------------------------------------------------------------------------------------------------------------|
+| **Meaning-first storage**       | Instead of fixed vectors, patterns are stored as waveforms that preserve context, intensity, and structure - closer to how cognition works. |
+| **Resonant retrieval**          | Finds results not by distance but by **interference** - surfacing patterns that align in meaning, not just position.                        |
 | **Phase-sharded scaling**       | Automatically routes patterns by average phase, enabling effortless horizontal growth and blazing-fast parallel search.                     |
-| **Performance-tunable kernels** | Pick Java for portability or native SIMD for speed — both backed by the same core logic.                                                    |
-| **Zero-copy memory**            | Access patterns directly from disk without unpacking — instant recall even on edge devices.                                                 |
-| **Crash-safe writes**           | Every pattern is atomically committed using checksum + commit flag — no corruption, no downtime.                                            |
-| **Modular by design**           | Easy to extend, integrate, or fork — the Gradle workspace is clean, isolated, and ready for evolution.                                      |
+| **Performance-tunable kernels** | Pick Java for portability or native SIMD for speed - both backed by the same core logic.                                                    |
+| **Zero-copy memory**            | Access patterns directly from disk without unpacking - instant recall even on edge devices.                                                 |
+| **Crash-safe writes**           | Every pattern is atomically committed using checksum + commit flag - no corruption, no downtime.                                            |
+| **Modular by design**           | Easy to extend, integrate, or fork - the Gradle workspace is clean, isolated, and ready for evolution.                                      |
 
 
 ### Typical use cases
 
-* **Memory for cognitive agents** — store affective or semantic traces that evolve over time, without reducing them to tokens.
-* **Hybrid reasoning systems** — combine symbolic DAGs with resonant memory for recall that adapts to phase and meaning.
-* **Multimodal AI** — unify image, text, and sensor data using a shared waveform substrate.
-* **Edge-native memory cache** — deploy on-device with zero-deserialization and memory-safe reads.
-* **Exploratory AI research** — prototype alternatives to vector search, embedding similarity, and symbolic memory.
+* **Memory for cognitive agents** - store affective or semantic traces that evolve over time, without reducing them to tokens.
+* **Hybrid reasoning systems** - combine symbolic DAGs with resonant memory for recall that adapts to phase and meaning.
+* **Multimodal AI** - unify image, text, and sensor data using a shared waveform substrate.
+* **Edge-native memory cache** - deploy on-device with zero-deserialization and memory-safe reads.
+* **Exploratory AI research** - prototype alternatives to vector search, embedding similarity, and symbolic memory.
 
 >*See also: [Applications of Wave-Based Memory](./docs/whitepapers/Applications-of-ResonanceDB-in-AGI-Memory-and-Affective-Modeling.md)*
 
@@ -38,10 +39,10 @@ With phase-sharded storage, memory-mapped segments, and optional SIMD accelerati
 | Layer    | Snapshot                                                                                                                     |
 | -------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | Language | Java 22 + optional native C/SIMD (via Panama FFI)                                                                            |
-| Storage  | `.segment` files with memory-mapped access — each pattern is stored as complex-valued waveform (amplitude + phase)           |
+| Storage  | `.segment` files with memory-mapped access - each pattern is stored as complex-valued waveform (amplitude + phase)           |
 | Routing  | Patterns are routed by average phase φ̄; optional fallback strategies can be plugged in                                      |
 | Build    | Modular Gradle 8 workspace with clean project boundaries                                                                     |
-| License  | **Prosperity Public License 3.0** — free for non-commercial use; 30-day commercial evaluation                                |
+| License  | **Prosperity Public License 3.0** - free for non-commercial use; 30-day commercial evaluation                                |
 
 ---
 
