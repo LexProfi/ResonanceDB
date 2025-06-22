@@ -91,6 +91,7 @@ public class SegmentWriter implements AutoCloseable {
     private final AtomicLong writeOffset;
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
     private int recordCount = 0;
+    private volatile boolean needsFlush = false;
 
     public SegmentWriter(Path path) {
         this(path, 8);
@@ -179,7 +180,7 @@ public class SegmentWriter implements AutoCloseable {
             buffer.position(0);
             buffer.put(header.toBytes());
             buffer.force(0, headerSize);
-
+            needsFlush = true;
             return offset;
         } finally {
             lock.writeLock().unlock();
@@ -287,6 +288,16 @@ public class SegmentWriter implements AutoCloseable {
 
     public long getWriteOffset() {
         return writeOffset.get();
+    }
+
+    public boolean markFlushNeeded() {
+        return needsFlush = true;
+    }
+    public boolean flushIfNeeded() {
+        if (!needsFlush) return false;
+        flush();
+        needsFlush = false;
+        return true;
     }
 
     @Override

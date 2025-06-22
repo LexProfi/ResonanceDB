@@ -61,7 +61,6 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     private static final float ENERGY_DAMP = Float.parseFloat(System.getProperty("ripple.energyDamp", "0.15"));
     private static final double READ_EPSILON  = 0.1;
     private static final float EXACT_MATCH_EPS = 1e-6f;
-    private static final int OFFSET_TOLERANCE = 64;
     private final ManifestIndex manifest;
     private final PatternMetaStore metaStore;
     private final Map<String, PhaseSegmentGroup> segmentGroups;
@@ -75,6 +74,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
     private final SegmentCompactor compactor;
     private final SegmentReaderCache readerCache;
+    private final BlockingQueue<Runnable> flushQueue = new LinkedBlockingQueue<>();
     private record IdAndPattern(String id, WavePattern pattern) {}
 
     public WavePatternStoreImpl(Path dbRoot) {
@@ -100,6 +100,30 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 compactPhase(phase);
             }
         }, 10, 300, TimeUnit.SECONDS);
+
+        scheduler.scheduleAtFixedRate(() -> {
+            for (PhaseSegmentGroup group : segmentGroups.values()) {
+                for (SegmentWriter writer : group.getAll()) {
+                    try {
+                        writer.flush();
+                    } catch (Exception e) {
+                        System.err.println("Flush failed: " + writer.getSegmentName());
+                    }
+                }
+            }
+        }, 3, 5, TimeUnit.SECONDS);
+
+        scheduler.scheduleAtFixedRate(() -> {
+            List<Runnable> batch = new ArrayList<>();
+            flushQueue.drainTo(batch);
+            for (Runnable r : batch) {
+                try {
+                    r.run();
+                } catch (Throwable t) {
+                    System.err.println("Flush task failed: " + t.getMessage());
+                }
+            }
+        }, 200, 500, TimeUnit.MILLISECONDS);
     }
 
     private PhaseShardSelector createShardSelector() {
@@ -125,7 +149,6 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         String idKey = HashingUtil.computeContentHash(psi);
         HashingUtil.parseAndValidateMd5(idKey);
 
-        globalLock.writeLock().lock();
         try {
             /* ---- 0. уникальность ------------------------------------------------ */
             if (manifest.contains(idKey)) {
@@ -160,8 +183,6 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             while (true) {
                 try {
                     offset = writer.write(idKey, psi);
-                    writer.flush();
-                    writer.sync();
                     segmentName = writer.getSegmentName(); // ⟵ добавлено
                     readerCache.invalidate(segmentName);   // ⟵ добавлено
                     break; // успех
@@ -175,8 +196,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             manifest.add(idKey, writer.getSegmentName(), offset, phaseCenter);
             if (!metadata.isEmpty()) metaStore.put(idKey, metadata);
 
-            manifest.flush();
-            metaStore.flush();
+            flushAsync();
             rebuildShardSelector();
             return idKey;
 
@@ -189,7 +209,6 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             metaStore.remove(idKey);
             throw new RuntimeException("Insert failed: " + idKey, e);
         } finally {
-            globalLock.writeLock().unlock();
         }
     }
 
@@ -211,8 +230,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             manifest.remove(idKey);
             metaStore.remove(idKey);
 
-            manifest.flush();               // ← добавлено
-            metaStore.flush();
+            flushAsync();
             rebuildShardSelector();
         } finally {
             globalLock.writeLock().unlock();
@@ -287,8 +305,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 }
                 metaStore.remove(oldId);
             }
-            manifest.flush();
-            metaStore.flush();
+            flushAsync();
             group.registerIfAbsent(writer);
             rebuildShardSelector();
             return newId;
@@ -840,5 +857,10 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 .collect(Collectors.collectingAndThen(
                         Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (a, b) -> a),
                         Collections::unmodifiableMap));
+    }
+
+    private void flushAsync() {
+        flushQueue.offer(manifest::flush);
+        flushQueue.offer(metaStore::flush);
     }
 }
