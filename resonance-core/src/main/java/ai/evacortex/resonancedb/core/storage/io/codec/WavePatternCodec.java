@@ -58,7 +58,7 @@ public class WavePatternCodec {
 
     private static final int MAGIC = 0x57565750; // 'WWWP'
     private static final ByteOrder ORDER = ByteOrder.LITTLE_ENDIAN;
-    private static final int MAX_SUPPORTED_LENGTH = 65_536; // architectural sanity limit
+    public static final int MAX_SUPPORTED_LENGTH = 65_536; // architectural sanity limit
 
     public static void writeTo(ByteBuffer buf, WavePattern pattern, boolean withMagic) {
         double[] amp = pattern.amplitude();

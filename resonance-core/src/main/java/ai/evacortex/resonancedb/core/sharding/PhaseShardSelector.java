@@ -59,22 +59,7 @@ public class PhaseShardSelector {
     }
 
     public List<String> getRelevantShards(WavePattern query) {
-        if (!useExplicitRanges) {
-            return List.of(selectShard(query));
-        }
-
-        double avgPhase = Arrays.stream(query.phase()).average().orElse(0.0);
-        double min = avgPhase - epsilon;
-        double max = avgPhase + epsilon;
-
-        Collection<String> rangeHits = phaseShardMap
-                .subMap(min, true, max, true)
-                .values();
-
-        if (!rangeHits.isEmpty()) {
-            return new ArrayList<>(rangeHits);
-        }
-        return new ArrayList<>(phaseShardMap.values());
+        return getRelevantShards(query, this.epsilon);      // ✨ changed
     }
 
     public double[] getPhaseRange(WavePattern pattern) {
@@ -122,6 +107,37 @@ public class PhaseShardSelector {
     public String fallbackRouteIfLowCoherence(WavePattern query) {
         // TODO: implement phase-degrading route fallback logic
         return null;
+    }
+
+    // ✨ new — упорядоченный (по mean φ) неизменяемый список имён сегментов
+    public List<String> orderedShardList() {
+        if (!useExplicitRanges) {
+            List<String> list = new ArrayList<>(totalShards);
+            for (int i = 0; i < totalShards; i++) list.add("phase-" + i + ".segment");
+            return Collections.unmodifiableList(list);
+        }
+        return Collections.unmodifiableList(new ArrayList<>(phaseShardMap.values()));
+    }
+
+    // ✨ new — индекс сегмента в orderedShardList(), -1 если не найден
+    public int indexOf(String segmentName) {
+        List<String> ord = orderedShardList();
+        for (int i = 0; i < ord.size(); i++) {
+            if (ord.get(i).equals(segmentName)) return i;
+        }
+        return -1;
+    }
+
+    // ✨ new — перегрузка с произвольным ε (используется ripple-алгоритмом)
+    public List<String> getRelevantShards(WavePattern query, double customEps) {
+        if (!useExplicitRanges) {
+            return List.of(selectShard(query));
+        }
+        double avg = Arrays.stream(query.phase()).average().orElse(0.0);
+        double min = avg - customEps;
+        double max = avg + customEps;
+        Collection<String> hits = phaseShardMap.subMap(min, true, max, true).values();
+        return new ArrayList<>(hits.isEmpty() ? phaseShardMap.values() : hits);
     }
 
     @Override

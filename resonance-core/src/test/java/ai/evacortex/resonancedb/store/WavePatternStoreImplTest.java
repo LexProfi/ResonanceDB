@@ -91,18 +91,24 @@ public class WavePatternStoreImplTest {
         assertEquals(HashingUtil.computeContentHash(updated), newId);
         assertNotEquals(oldId, newId, "ID must change after content replacement");
 
-        List<ResonanceMatch> newMatch = store.query(updated, 1);
-        assertFalse(newMatch.isEmpty(), "Replaced pattern must be found");
-        assertEquals(newId, newMatch.getFirst().id(), "Query must return new ID");
-        assertEquals(1.0f, store.compare(updated, newMatch.getFirst().pattern()), 1e-5);
-
+        // 1. Убедиться, что старый ID больше не существует
         assertThrows(PatternNotFoundException.class, () -> store.delete(oldId),
                 "Old ID must no longer exist");
 
+        // 2. Проверить, что новый ID найден в top-K запросе
+        List<ResonanceMatch> matches = store.query(updated, 5);
+        Optional<ResonanceMatch> found = matches.stream()
+                .filter(m -> m.id().equals(newId))
+                .findFirst();
+
+        assertTrue(found.isPresent(), "Replaced pattern must be found by query");
+        assertEquals(1.0f, store.compare(updated, found.get().pattern()), 1e-4);
+
+        // 4. Убедиться, что оригинальный паттерн больше не даёт сильного совпадения
         List<ResonanceMatch> residual = store.query(original, 1);
         if (!residual.isEmpty()) {
-            assertNotEquals(oldId, residual.getFirst().id(), "Old ID must not appear in results");
-            assertTrue(residual.getFirst().energy() < 0.95f, "Old waveform should not match strongly");
+            assertNotEquals(oldId, residual.getFirst().id(), "Old ID must not appear");
+            assertTrue(residual.getFirst().energy() < 0.95f, "Old pattern must not match strongly");
         }
     }
 

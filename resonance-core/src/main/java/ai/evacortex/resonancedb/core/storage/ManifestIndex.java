@@ -239,5 +239,11 @@ public class ManifestIndex implements Closeable {
         }
     }
 
+    public void replace(String oldId, String newId,
+                        String newSegment, long newOffset, double newPhaseCenter) {
+        this.remove(oldId);
+        this.add(newId, newSegment, newOffset, newPhaseCenter);
+    }
+
     public record PatternLocation(String segmentName, long offset, double phaseCenter) {}
 }

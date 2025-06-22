@@ -68,7 +68,7 @@ import java.util.Map;
 public final class SegmentReader implements AutoCloseable {
 
     private static final int ID_SIZE = 16;
-    private static final int HEADER_SIZE = ID_SIZE + 4 + 4;
+    private static final int HEADER_SIZE = 1 + 16 + 4 + 4;
     private static final int MAX_LENGTH = 65_536;
     private static final int ALIGNMENT = 8;
 
@@ -123,13 +123,14 @@ public final class SegmentReader implements AutoCloseable {
 
         ByteBuffer buf = mmap.duplicate().order(ByteOrder.LITTLE_ENDIAN);
         buf.position((int) offset);
-        if (buf.get(buf.position()) == 0x00) {
+        byte deleted = buf.get();                             // 1 байт
+        if (deleted == 0x00) {
             throw new PatternNotFoundException("Deleted (tombstoned) pattern at offset " + offset);
         }
-        byte[] idBytes = new byte[ID_SIZE];
+        byte[] idBytes = new byte[ID_SIZE];                   // 16 байт
         buf.get(idBytes);
-        int len = buf.getInt();
-        buf.getInt();
+        int len = buf.getInt();                     // read length
+        buf.getInt();                               // skip reserved
         if (len <= 0 || len > MAX_LENGTH) {
             throw new InvalidWavePatternException("Invalid pattern length at offset " + offset);
         }
@@ -150,38 +151,24 @@ public final class SegmentReader implements AutoCloseable {
         ByteBuffer buf = mmap.duplicate().order(ByteOrder.LITTLE_ENDIAN);
         buf.position(headerSize);
 
-
         while (buf.position() < header.lastOffset()) {
-
-            // TODO: Add support for filtering committed/expired patterns based on future metadata
             int entryStart = buf.position();
-            int prePosition = buf.position();
 
             if (buf.remaining() < HEADER_SIZE) {
                 throw new InvalidWavePatternException("Corrupted segment: insufficient space for header at offset " + entryStart);
             }
 
-            byte firstByte = buf.get(entryStart);
-            if (firstByte == 0x00) {
-                buf.position(entryStart + ID_SIZE);
-                if (buf.remaining() < 8) {
-                    throw new InvalidWavePatternException("Corrupted tombstone at offset " + entryStart);
-                }
-                int len = buf.getInt();
-                buf.getInt();
-                if (len <= 0 || len > MAX_LENGTH) {
-                    throw new InvalidWavePatternException("Invalid length in tombstone at " + entryStart);
-                }
+            byte deleted = buf.get();                             // 1 байт
+            byte[] idBytes = new byte[ID_SIZE];                   // 16 байт
+            buf.get(idBytes);
+            int len = buf.getInt();
+            buf.getInt(); // reserved
+
+            if (deleted == 0x00) {
                 int skip = align(HEADER_SIZE + WavePatternCodec.estimateSize(len, false));
                 buf.position(entryStart + skip);
                 continue;
             }
-
-            buf.position(entryStart);
-            byte[] idBytes = new byte[ID_SIZE];
-            buf.get(idBytes);
-            int len = buf.getInt();
-            buf.getInt();
 
             if (len <= 0 || len > MAX_LENGTH) {
                 throw new InvalidWavePatternException("Invalid pattern length at offset " + entryStart + ": " + len);
@@ -201,11 +188,8 @@ public final class SegmentReader implements AutoCloseable {
 
             String id = bytesToHex(idBytes);
             latest.put(id, new PatternWithId(id, pattern, entryStart));
-
-            if (buf.position() <= prePosition) {
-                throw new InvalidWavePatternException("Parser did not advance at offset " + entryStart);
-            }
         }
+
         return new ArrayList<>(latest.values());
     }
 
@@ -249,27 +233,51 @@ public final class SegmentReader implements AutoCloseable {
         return sb.toString();
     }
 
-    private static int inferChecksumLength(Path path) {
+    static int inferChecksumLength(Path path) {
+        final int FULL_HDR = 39;          // максимум (checksum=8)
+        final int MIN_HDR  = 35;          // минимум (checksum=4)
+
         try (FileChannel ch = FileChannel.open(path, StandardOpenOption.READ)) {
-            ByteBuffer buf = ByteBuffer.allocate(36).order(ByteOrder.LITTLE_ENDIAN);
-            ch.read(buf, 0);
+            ByteBuffer buf = ByteBuffer.allocate(FULL_HDR).order(ByteOrder.LITTLE_ENDIAN);
+
+            int read = 0;
+            while (read < buf.capacity()) {            // читаем столько, сколько реально есть
+                int n = ch.read(buf, read);
+                if (n <= 0) break;
+                read += n;
+            }
+
+            /* файл ещё не дописан – по умолчанию считаем, что checksum = 8 */
+            if (read < MIN_HDR) {
+                return 8;
+            }
+
             buf.rewind();
+            buf.getInt();     // version
+            buf.getInt();     // reserved
+            buf.getLong();    // timestamp
+            buf.getInt();     // recordCount
+            buf.getLong();    // lastOffset
 
-            buf.getInt();
-            buf.getInt();
-            buf.getLong();
-            buf.getInt();
-            buf.getLong();
+            if (read >= FULL_HDR) {        // можем безопасно прочитать 8-байтовый checksum
+                long checksum = buf.getLong();
+                byte flag     = buf.get();
+                byte pad1     = buf.get();
+                byte pad2     = buf.get();
 
-            long possibleChecksum = buf.getLong();
-            byte flag = buf.get();
-            byte pad1 = buf.get();
-            byte pad2 = buf.get();
+            /* «длинный» вариант header’а всегда записывается SegmentWriter-ом,
+               поэтому если мы добрались до commitFlag, значит checksum = 8. */
+                return 8;
+            } else {                       // header обрезан на 4-байтовом checksum
+                /* пропускаем 4-байтовую контрольную сумму */
+                buf.getInt();
+                byte flag = buf.get();
 
-            if (flag == 1 && pad1 == 0 && pad2 == 0) return 8;
-            else return 4;
+                // если commitFlag уже присутствует и паддинг не читается – значит checksum = 4
+                return 4;
+            }
         } catch (IOException e) {
-            throw new RuntimeException("Failed to infer checksum length from segment header", e);
+            throw new RuntimeException("Failed to infer checksum length", e);
         }
     }
 

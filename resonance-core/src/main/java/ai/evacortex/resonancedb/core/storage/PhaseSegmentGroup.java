@@ -18,11 +18,16 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
 public class PhaseSegmentGroup {
 
+    private static final long MAX_SEG_BYTES = Long.parseLong(
+            System.getProperty("segment.maxBytes", "" + (32L << 20)));
+    private final AtomicInteger seq = new AtomicInteger();
+    private volatile SegmentWriter current;
     private final String baseName;
     private final Path baseDir;
     private final CopyOnWriteArrayList<SegmentWriter> writers = new CopyOnWriteArrayList<>();
@@ -49,8 +54,12 @@ public class PhaseSegmentGroup {
         }
 
         if (writers.isEmpty()) {
-            writers.add(createSegment(0));
+            writers.add(createSegment(seq.getAndIncrement()));   // seq=0
+        } else {
+            int lastIdx = writers.size();                        // size == maxIndex+1
+            seq.set(lastIdx);
         }
+        current = writers.getLast();
     }
 
     private SegmentWriter createSegment(int index) {
@@ -67,18 +76,28 @@ public class PhaseSegmentGroup {
         }
     }
 
+    private SegmentWriter createSegment() {
+        int index = seq.getAndIncrement();
+        try {
+            String filename = baseName + "-" + index + ".segment";
+            Path fullPath = baseDir.resolve(filename);
+            Files.createDirectories(baseDir);
+            if (Files.notExists(fullPath)) Files.createFile(fullPath);
+            return new SegmentWriter(fullPath);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to create segment: " + baseName + "-" + index, e);
+        }
+    }
+
     public SegmentWriter getWritable() {
         lock.lock();
         try {
-            return writers.stream()
-                    .filter(writer -> !writer.isOverflow())
-                    .min(Comparator.comparingDouble(SegmentWriter::getFillRatio))
-                    .orElseGet(() -> {
-                        int nextIndex = writers.size();
-                        SegmentWriter newWriter = createSegment(nextIndex);
-                        writers.add(newWriter);
-                        return newWriter;
-                    });
+            if (current != null && current.approxSize() <= MAX_SEG_BYTES) {
+                return current;
+            }
+            current = createSegment();          // ✨ вместо createSegment(nextIndex)
+            writers.add(current);
+            return current;
         } finally {
             lock.unlock();
         }
@@ -87,10 +106,9 @@ public class PhaseSegmentGroup {
     public SegmentWriter createAndRegisterNewSegment() {
         lock.lock();
         try {
-            int nextIndex = writers.size();
-            SegmentWriter writer = createSegment(nextIndex);
-            writers.add(writer);
-            return writer;
+            current = createSegment();          // ✨ seq гарантирует уникальность
+            writers.add(current);
+            return current;
         } finally {
             lock.unlock();
         }
@@ -113,6 +131,16 @@ public class PhaseSegmentGroup {
         try {
             writers.clear();
             writers.add(writer);
+            current = writer;                   // ✨
+
+            // извлекаем индекс из имени «base-N.segment»
+            String name = writer.getSegmentName();
+            int idx = 0;
+            try {
+                int cut1 = baseName.length() + 1;
+                idx = Integer.parseInt(name.substring(cut1, name.length() - 8)); // -8 = \".segment\"
+            } catch (Exception ignore) {}
+            seq.set(idx + 1);                   // ✨ следующий файл будет уникален
         } finally {
             lock.unlock();
         }

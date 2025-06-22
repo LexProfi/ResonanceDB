@@ -78,7 +78,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 public class SegmentWriter implements AutoCloseable {
 
     private static final int ID_SIZE = 16;
-    private static final int RECORD_HEADER_SIZE= 16 + 4 + 4;
+    private static final int RECORD_HEADER_SIZE = 1 + 16 + 4 + 4;
     private static final int ALIGNMENT = 8;
     private static final int INITIAL_CAPACITY = 4 * 1024 * 1024;
 
@@ -150,8 +150,9 @@ public class SegmentWriter implements AutoCloseable {
             ensureCapacity(Math.max(offset + alignedSize, headerSize));
 
             buffer.position((int) offset);
-            buffer.put(idBytes);
-            buffer.putInt(pattern.amplitude().length);
+            buffer.put((byte) 0x01);
+            buffer.put(idBytes);             // [1..16]
+            buffer.putInt(pattern.amplitude().length); // [17..20]
             buffer.putInt(-1);
 
             ByteBuffer tmpBuf = ByteBuffer.allocate(patternSize).order(ByteOrder.LITTLE_ENDIAN);
@@ -189,7 +190,7 @@ public class SegmentWriter implements AutoCloseable {
         lock.writeLock().lock();
         try {
             if (offset < buffer.limit()) {
-                buffer.put((int) offset, (byte) 0x00);
+                buffer.put((int) offset, (byte) 0x00);  // пометить как удалённую
             } else {
                 throw new IllegalStateException("Offset exceeds segment capacity: " + offset);
             }
@@ -201,9 +202,12 @@ public class SegmentWriter implements AutoCloseable {
     public void unmarkDeleted(long offset) {
         lock.writeLock().lock();
         try {
-            buffer.position((int) offset + ID_SIZE + 4);
-            buffer.putInt(-1);
+            buffer.position((int) offset);           // первый байт записи
+            buffer.put((byte) 0x01);               // установить как "валиден"
             buffer.force();
+            channel.force(false);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to unmark deleted at offset: " + offset, e);
         } finally {
             lock.writeLock().unlock();
         }
@@ -267,8 +271,8 @@ public class SegmentWriter implements AutoCloseable {
 
     public boolean willOverflow(WavePattern pattern) {
         int patternSize = WavePatternCodec.estimateSize(pattern, false);
-        int blockSize = 16 + 4 + 4 + patternSize;
-        int aligned = ((blockSize + 7) / 8) * 8;
+        int blockSize = RECORD_HEADER_SIZE + patternSize;
+        int aligned = align(blockSize);
         return writeOffset.get() + aligned > buffer.capacity();
     }
 
@@ -316,4 +320,6 @@ public class SegmentWriter implements AutoCloseable {
             lock.writeLock().unlock();
         }
     }
+
+    public long approxSize() { return writeOffset.get(); }
 }
