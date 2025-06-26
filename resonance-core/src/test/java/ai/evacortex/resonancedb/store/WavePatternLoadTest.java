@@ -29,10 +29,10 @@ import java.util.concurrent.*;
 //@Disabled("Smoke benchmark — run manually from IDE")
 public class WavePatternLoadTest {
 
-    private static final int PATTERN_COUNT = Integer.getInteger("patterns", 100_000);
-    private static final int PATTERN_LEN = Integer.getInteger("length", 1024);
+    private static final int PATTERN_COUNT = Integer.getInteger("patterns", 50_000);
+    private static final int PATTERN_LEN = Integer.getInteger("length", 2048);
     private static final int QUERY_REPS = Integer.getInteger("queries", 100);
-    private static final Path DB_ROOT = Paths.get(System.getProperty("resonance.test.dir", "C:\\Users\\Aleksandr\\Downloads\\128x1024x100k\\resdb-load"));
+    private static final Path DB_ROOT = Paths.get(System.getProperty("resonance.test.dir", "C:\\Users\\Aleksandr\\Downloads\\64x2048x50k\\resdb-load"));
 
     private static final int[] TOP_K_BUCKETS = Arrays.stream(System.getProperty("topKs", "1,10,100").split(","))
             .mapToInt(Integer::parseInt).toArray();

@@ -77,6 +77,7 @@ public final class SegmentReader implements AutoCloseable {
     private final FileChannel channel;
     private final MappedByteBuffer mmap;
     private final BinaryHeader header;
+    public record PatternWithId(String id, WavePattern pattern, long offset) {}
 
     public SegmentReader(Path path) {
         this(path, 8);
@@ -112,10 +113,6 @@ public final class SegmentReader implements AutoCloseable {
         }
     }
 
-    public WavePattern readAt(long offset) {
-        return readWithId(offset).pattern();
-    }
-
     public PatternWithId readWithId(long offset) {
         if (offset < 0 || offset + HEADER_SIZE >= header.lastOffset()) {
             throw new InvalidWavePatternException("Offset out of segment bounds: " + offset);
@@ -124,9 +121,8 @@ public final class SegmentReader implements AutoCloseable {
         ByteBuffer buf = mmap.duplicate().order(ByteOrder.LITTLE_ENDIAN);
         buf.position((int) offset);
         byte flag = buf.get();
-        if (flag == 0x00) {                       // tombstone → записи нет
-            throw new PatternNotFoundException(
-                    "Deleted (tombstoned) pattern at offset " + offset);
+        if (flag == 0x00) {
+            throw new PatternNotFoundException("Deleted (tombstoned) pattern at offset " + offset);
         }
 
         byte[] idBytes = new byte[ID_SIZE];
@@ -149,6 +145,36 @@ public final class SegmentReader implements AutoCloseable {
         return new PatternWithId(bytesToHex(idBytes), pattern, offset);
     }
 
+    public static PatternWithId readWithIdFromBuffer(ByteBuffer buf, long offset) {
+        buf.position((int) offset);
+
+        byte flag = buf.get();
+        if (flag == 0x00) {
+            throw new PatternNotFoundException("Tombstone at offset " + offset);
+        }
+
+        byte[] idBytes = new byte[ID_SIZE];
+        buf.get(idBytes);
+
+        int len = buf.getInt();
+        buf.getInt();
+
+        if (len <= 0 || len > MAX_LENGTH) {
+            throw new InvalidWavePatternException("Bad pattern length at offset " + offset);
+        }
+
+        int patternSize = WavePatternCodec.estimateSize(len, false);
+        if (buf.remaining() < patternSize) {
+            throw new InvalidWavePatternException("Truncated pattern at offset " + offset);
+        }
+
+        ByteBuffer patternBuf = buf.slice();
+        patternBuf.limit(patternSize);
+        WavePattern pattern = WavePatternCodec.readFrom(patternBuf, false);
+
+        return new PatternWithId(bytesToHex(idBytes), pattern, offset);
+    }
+
     public List<PatternWithId> readAllWithId() {
         Map<String, PatternWithId> latest = new LinkedHashMap<>();
         ByteBuffer buf = mmap.duplicate().order(ByteOrder.LITTLE_ENDIAN);
@@ -158,18 +184,15 @@ public final class SegmentReader implements AutoCloseable {
             int entryStart = buf.position();
 
             if (buf.remaining() < HEADER_SIZE) {
-                throw new InvalidWavePatternException(
-                        "Corrupted segment: insufficient space at " + entryStart);
+                throw new InvalidWavePatternException("Corrupted segment: insufficient space at " + entryStart);
             }
 
-            // ─── 1. tombstone-флаг ────────────────────────────────────
             byte flag = buf.get();
 
-            // ─── 2. читаем id и длину независимо от того, живой ли он ─
             byte[] idBytes = new byte[ID_SIZE];
             buf.get(idBytes);
             int len = buf.getInt();
-            buf.getInt();                 // reserved
+            buf.getInt();
 
             if (flag == 0x00) {
                 int skip = align(HEADER_SIZE
@@ -179,14 +202,12 @@ public final class SegmentReader implements AutoCloseable {
             }
 
             if (len <= 0 || len > MAX_LENGTH) {
-                throw new InvalidWavePatternException(
-                        "Invalid pattern length at " + entryStart + ": " + len);
+                throw new InvalidWavePatternException("Invalid pattern length at " + entryStart + ": " + len);
             }
 
             int patternSize = WavePatternCodec.estimateSize(len, false);
             if (buf.remaining() < patternSize) {
-                throw new InvalidWavePatternException(
-                        "Insufficient bytes at offset " + entryStart);
+                throw new InvalidWavePatternException("Insufficient bytes at offset " + entryStart);
             }
 
             ByteBuffer patternSlice = buf.slice();
@@ -203,6 +224,10 @@ public final class SegmentReader implements AutoCloseable {
         return new ArrayList<>(latest.values());
     }
 
+    public WavePattern readAt(long offset) {
+        return readWithId(offset).pattern();
+    }
+
     public BinaryHeader getHeader() {
         return header;
     }
@@ -215,27 +240,11 @@ public final class SegmentReader implements AutoCloseable {
         return ((size + ALIGNMENT - 1) / ALIGNMENT) * ALIGNMENT;
     }
 
-    /**
-     * Verifies the manifest version of this segment against the expected global state.
-     * <p>
-     * This method is a placeholder for CAS-based consistency checking.
-     * If a mismatch is detected, the segment should be unmapped and remapped.
-     * </p>
-     * <p>
-     * TODO: Implement CAS check against segment manifest version and force re-map via Unsafe.invokeCleaner.
-     * </p>
-     *
-     * @param path Path to the segment file.
-     */
+
     private static void verifyManifestVersion(Path path) {
         // no-op for now
     }
 
-    @Override
-    public void close() throws IOException {
-        Buffers.unmap(mmap);
-        channel.close();
-    }
 
     private static String bytesToHex(byte[] bytes) {
         StringBuilder sb = new StringBuilder(ID_SIZE * 2);
@@ -285,37 +294,9 @@ public final class SegmentReader implements AutoCloseable {
         }
     }
 
-    public static PatternWithId readWithIdFromBuffer(ByteBuffer buf, long offset) {
-        buf.position((int) offset);
-
-        /* 1 ── tombstone-флаг */
-        byte flag = buf.get();
-        if (flag == 0x00) {
-            throw new PatternNotFoundException("Tombstone at offset " + offset);
-        }
-
-        /* 2 ── MD5 хэш (16 байт) */
-        byte[] idBytes = new byte[ID_SIZE];
-        buf.get(idBytes);
-
-        int len = buf.getInt();  // длина векторов
-        buf.getInt();            // reserved
-
-        if (len <= 0 || len > MAX_LENGTH) {
-            throw new InvalidWavePatternException("Bad pattern length at offset " + offset);
-        }
-
-        int patternSize = WavePatternCodec.estimateSize(len, false);
-        if (buf.remaining() < patternSize) {
-            throw new InvalidWavePatternException("Truncated pattern at offset " + offset);
-        }
-
-        ByteBuffer patternBuf = buf.slice();
-        patternBuf.limit(patternSize);
-        WavePattern pattern = WavePatternCodec.readFrom(patternBuf, false);
-
-        return new PatternWithId(bytesToHex(idBytes), pattern, offset);
+    @Override
+    public void close() throws IOException {
+        Buffers.unmap(mmap);
+        channel.close();
     }
-
-    public record PatternWithId(String id, WavePattern pattern, long offset) {}
 }

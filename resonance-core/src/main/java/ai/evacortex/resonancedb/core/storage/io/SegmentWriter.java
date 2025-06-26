@@ -315,16 +315,4 @@ public class SegmentWriter implements AutoCloseable {
 
     public long approxSize() { return writeOffset.get(); }
 
-    public void ensureExists() {
-        try {
-            if (!Files.exists(path)) {
-                try (FileChannel ch = FileChannel.open(path, StandardOpenOption.CREATE)) {
-                    ch.write(ByteBuffer.allocate(1));
-                }
-            }
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
 }

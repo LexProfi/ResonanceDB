@@ -20,7 +20,6 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.*;
@@ -51,7 +50,6 @@ public class CachedReader implements AutoCloseable {
     }
 
     public static CachedReader open(Path segmentPath) throws IOException {
-        //System.out.println("[READER] Opening segment file: " + segmentPath);
         FileChannel channel = FileChannel.open(segmentPath, StandardOpenOption.READ);
         long fileSize = channel.size();
 
@@ -82,9 +80,7 @@ public class CachedReader implements AutoCloseable {
             byte[] idBytes = new byte[ID_SIZE];
             buf.get(idBytes);
             int len = buf.getInt();
-            buf.getInt(); // reserved
-
-            // если длина неверная — дальше читать уже нельзя
+            buf.getInt();
             if (len <= 0 || len > WavePatternCodec.MAX_SUPPORTED_LENGTH) {
                 break;
             }
@@ -92,16 +88,13 @@ public class CachedReader implements AutoCloseable {
             int patternSize = WavePatternCodec.estimateSize(len, false);
             int totalSize   = align(HEADER_SIZE + patternSize);
 
-            // регистрируем только **живые** записи,
-            // но пропускаем tombstone не останавливаясь
             if (deleted == 0x01) {
                 String id = bytesToHex(idBytes);
                 offsetMap.put(id, (long) pos);
             }
-
-            pos += totalSize;      // идём к следующему блоку
+            pos += totalSize;
         }
-        //System.out.println("[READER] Initialized CachedReader for " + segmentPath.getFileName() + ", live patterns = " + offsetMap.size());
+
         return new CachedReader(segmentPath, channel, mmap, offsetMap, lastOffset, fileSize);
     }
 
@@ -152,16 +145,6 @@ public class CachedReader implements AutoCloseable {
         return path;
     }
 
-
-    @Override
-    public void close() {
-        closed = true;
-        try {
-            Buffers.unmap(mmap);
-            channel.close();
-        } catch (IOException ignored) {
-        }
-    }
     private static int align(int size) {
         return ((size + ALIGNMENT - 1) / ALIGNMENT) * ALIGNMENT;
     }
@@ -181,34 +164,20 @@ public class CachedReader implements AutoCloseable {
         return new String(hexChars);
     }
 
+
     void ensureOpen() {
         if (closed) {
             throw new IllegalStateException("Attempted to access closed CachedReader for " + path);
         }
     }
 
-    public Optional<WavePattern> tryRead(String id) {
-        ensureOpen();
-        if (!offsetMap.containsKey(id)) {
-            return Optional.empty();
-        }
+    @Override
+    public void close() {
+        closed = true;
         try {
-            return Optional.of(readAtOffset(offsetMap.get(id)).pattern());
-        } catch (RuntimeException e) {
-            // corrupted block / invalid data — гасим и возвращаем empty
-            return Optional.empty();
-        }
-    }
-
-    /**
-     * Безопасно читает raw-структуру по offset’у; может пригодиться компактору.
-     */
-    public Optional<SegmentReader.PatternWithId> tryReadAtOffset(long offset) {
-        ensureOpen();
-        try {
-            return Optional.of(readAtOffset(offset));
-        } catch (RuntimeException e) {
-            return Optional.empty();
+            Buffers.unmap(mmap);
+            channel.close();
+        } catch (IOException ignored) {
         }
     }
 }
