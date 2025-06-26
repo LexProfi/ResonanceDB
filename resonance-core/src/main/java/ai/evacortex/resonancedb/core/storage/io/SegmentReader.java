@@ -27,44 +27,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-
-/**
- * SegmentReader provides read-only access to wave-based semantic patterns
- * stored in a memory-mapped segment file produced by {@link SegmentWriter}.
- *
- * <p>
- * Each segment begins with a {@link BinaryHeader}, followed by one or more
- * encoded entries. The layout of each entry includes:
- * </p>
- * <pre>
- *   [ID_HASH (16 bytes)] [LENGTH (4 bytes)] [RESERVED (4 bytes)] [WavePattern binary]
- * </pre>
- *
- * <p>
- * Entries can be logically deleted via a leading 0x00 tombstone marker.
- * Patterns are retrieved with integrity checks and offset-based access.
- * </p>
- *
- * <p>
- * This reader is thread-safe for concurrent access through buffer duplication.
- * Checksum verification and segment manifest coordination are internally supported.
- * </p>
- *
- * <p>
- * SegmentReader is compatible with fixed-length hash IDs and length-prefixed
- * binary encodings. The structure is designed for use in resonance-based
- * pattern retrieval systems.
- * </p>
- *
- * <p><b>Note:</b> This class does not perform mutation and assumes segments
- * are written and committed prior to read access. Compatibility with different
- * checksum formats and alignment strategies is supported via configuration.
- * </p>
- *
- * @see SegmentWriter
- * @see WavePattern
- * @see BinaryHeader
- */
 public final class SegmentReader implements AutoCloseable {
 
     private static final int ID_SIZE = 16;

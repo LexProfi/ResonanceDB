@@ -178,39 +178,60 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             PhaseSegmentGroup group = getOrCreateGroup(base);
             double phaseCenter = Arrays.stream(newPattern.phase()).average().orElse(0.0);
 
-            SegmentWriteResult result = writeToSegment(newId, newPattern, group);
-
-            SegmentWriter oldWriter = null;
-            if (!oldLoc.segmentName().equals(result.writer().getSegmentName()) || oldLoc.offset() != result.offset()) {
-                oldWriter = getOrCreateWriter(oldLoc.segmentName());
-                oldWriter.markDeleted(oldLoc.offset());
-                oldWriter.flush();
-                oldWriter.sync();
+            SegmentWriteResult result;
+            try {
+                result = writeToSegment(newId, newPattern, group);
+            } catch (Exception e) {
+                // ни manifest, ни metaStore ещё не тронуты — ничего откатывать не надо
+                throw new RuntimeException("Failed to write new pattern during replace", e);
             }
 
-            if (oldId.equals(newId)) {
-                manifest.replace(oldId, oldLoc.segmentName(), oldLoc.offset(),
-                        result.writer().getSegmentName(), result.offset(), phaseCenter);
-            } else {
-                manifest.remove(oldId);
-                manifest.add(newId, result.writer().getSegmentName(), result.offset(), phaseCenter);
-            }
+            try {
+                SegmentWriter oldWriter = null;
+                if (!oldLoc.segmentName().equals(result.writer().getSegmentName()) || oldLoc.offset() != result.offset()) {
+                    oldWriter = getOrCreateWriter(oldLoc.segmentName());
+                    oldWriter.markDeleted(oldLoc.offset());
+                    oldWriter.flush();
+                    oldWriter.sync();
+                }
 
-            group.updatePhaseStats(phaseCenter);
-            manifest.flush();
-            if (!newMetadata.isEmpty()) {
-                metaStore.put(newId, newMetadata);
+                if (oldId.equals(newId)) {
+                    manifest.replace(oldId, oldLoc.segmentName(), oldLoc.offset(),
+                            result.writer().getSegmentName(), result.offset(), phaseCenter);
+                } else {
+                    manifest.replace(oldId, newId,
+                            result.writer().getSegmentName(), result.offset(), phaseCenter);
+                }
+
+                if (!newMetadata.isEmpty()) {
+                    metaStore.put(newId, newMetadata);
+                }
+
+                manifest.flush();
                 metaStore.flush();
+                group.updatePhaseStats(phaseCenter);
+                readerCache.updateVersion(result.writer().getSegmentName(), result.writer().getWriteOffset());
+
+                if (oldWriter != null) {
+                    readerCache.updateVersion(oldWriter.getSegmentName(), oldWriter.getWriteOffset());
+                }
+
+                rebuildShardSelector();
+                return newId;
+
+            } catch (Exception rollbackEx) {
+
+                try {
+                    SegmentWriter writer = result.writer();
+                    writer.markDeleted(result.offset());
+                    writer.flush();
+                    writer.sync();
+                    readerCache.updateVersion(writer.getSegmentName(), writer.getWriteOffset());
+                } catch (Exception _) {
+                    System.err.println("Failed to rollback written pattern " + newId);
+                }
+                throw new RuntimeException("Replace failed after write: " + newId, rollbackEx);
             }
-
-            readerCache.updateVersion(result.writer().getSegmentName(), result.writer().getWriteOffset());
-
-            if (oldWriter != null) {
-                readerCache.updateVersion(oldWriter.getSegmentName(), oldWriter.getWriteOffset());
-            }
-
-            rebuildShardSelector();
-            return newId;
         }
     }
 

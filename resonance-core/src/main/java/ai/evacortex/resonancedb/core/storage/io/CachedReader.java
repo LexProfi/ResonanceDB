@@ -165,7 +165,7 @@ public class CachedReader implements AutoCloseable {
     }
 
 
-    void ensureOpen() {
+    public void ensureOpen() {
         if (closed) {
             throw new IllegalStateException("Attempted to access closed CachedReader for " + path);
         }

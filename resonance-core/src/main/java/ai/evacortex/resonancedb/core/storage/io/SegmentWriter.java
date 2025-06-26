@@ -23,81 +23,33 @@ import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.util.HexFormat;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-/**
- * SegmentWriter is responsible for appending encoded {@link WavePattern} entries
- * to a memory-mapped segment file (*.segment) using a deterministic binary layout.
- *
- * <p>
- * Each segment begins with a {@link BinaryHeader}, which tracks versioning,
- * logical timestamps, pattern count, last write offset, checksum, and a commit marker.
- * Entries are serialized sequentially and aligned for efficient read access.
- * </p>
- *
- * <h3>Entry Layout</h3>
- * Each entry is written using the following binary structure:
- * <pre>
- * [ID_HASH (16 bytes)]         // Unique pattern identifier (e.g., content-derived hash)
- * [LENGTH (4 bytes)]           // Number of elements per vector
- * [RESERVED (4 bytes)]         // Reserved field for future use
- * [Pattern body]               // Encoded amplitude and phase components
- * [padding]                    // Optional alignment for access efficiency
- * </pre>
- *
- * <h3>Checksum Handling</h3>
- * Each segment includes an integrity checksum covering all record data
- * written after the header. The length of the checksum (4 or 8 bytes) is configurable.
- * The checksum is recalculated after every write or flush.
- * </p>
- *
- * <h3>Concurrency</h3>
- * SegmentWriter is thread-safe. Internally, it uses a {@link ReentrantReadWriteLock}
- * to synchronize write access and buffer state.
- *
- * <h3>Durability</h3>
- * Every {@link #write(String, WavePattern)} operation updates the header atomically
- * with the latest offset, record count, and checksum. On {@link #flush()} or {@link #close()},
- * the data is persisted via explicit sync and buffer unmapping.
- *
- * <h3>Lifecycle</h3>
- * The caller must invoke {@link #close()} to ensure proper resource release.
- * Intermediate durability can be triggered via {@link #flush()} or {@link #sync()}.
- *
- * <h3>Errors</h3>
- * Throws {@link SegmentOverflowException} when the pattern exceeds segment capacity.
- * Throws {@link InvalidWavePatternException} for malformed input or invalid ID format.
- *
- * @see SegmentReader
- * @see BinaryHeader
- * @see WavePattern
- * @see WavePatternCodec
- */
 public class SegmentWriter implements AutoCloseable {
 
-    private static final long MAX_SEG_BYTES = Long.parseLong(
-            System.getProperty("segment.maxBytes", "" + (64L << 20)));
+    private static final long MAX_SEG_BYTES = Long.parseLong(System.getProperty("segment.maxBytes", "" + (64L << 20)));
     private static final int RECORD_HEADER_SIZE = 1 + 16 + 4 + 4;
     private static final int ALIGNMENT = 8;
 
     private final Path path;
-    private final int headerSize;
-    private final int checksumLength;
     private final String segmentName;
     private final FileChannel channel;
-    private MappedByteBuffer buffer;
     private final AtomicLong writeOffset;
-    private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
+    private final ReentrantReadWriteLock lock;
+
+    private MappedByteBuffer buffer;
     private int recordCount = 0;
+    private final int headerSize;
+    private final int checksumLength;
 
     public SegmentWriter(Path path) {
         this(path, 8);
     }
     public SegmentWriter(Path path, int checksumLength) {
         try {
+            this.lock = new ReentrantReadWriteLock();
             this.path = path;
             this.checksumLength = checksumLength;
             this.headerSize = BinaryHeader.sizeFor(checksumLength);
@@ -205,6 +157,29 @@ public class SegmentWriter implements AutoCloseable {
         }
     }
 
+    private void ensureCapacity(long requiredCapacity) {
+        if (requiredCapacity <= buffer.capacity()) return;
+        if (requiredCapacity > buffer.capacity()) {
+            try {
+                long newSize = Math.max(buffer.capacity() * 2L, requiredCapacity);
+
+                buffer.force();
+                Buffers.unmap(buffer);
+                this.buffer = channel.map(FileChannel.MapMode.READ_WRITE, 0, newSize);
+                this.buffer.order(ByteOrder.LITTLE_ENDIAN);
+            } catch (IOException e) {
+                throw new SegmentOverflowException("Failed to remap segment buffer", e);
+            }
+        }
+    }
+
+    public boolean willOverflow(WavePattern pattern) {
+        int patternSize = WavePatternCodec.estimateSize(pattern, false);
+        int blockSize = RECORD_HEADER_SIZE + patternSize;
+        int aligned = align(blockSize);
+        return writeOffset.get() + aligned > buffer.capacity();
+    }
+
     public long flush() {
         lock.writeLock().lock();
         try {
@@ -235,24 +210,25 @@ public class SegmentWriter implements AutoCloseable {
             lock.writeLock().unlock();
         }
     }
-    private int align(int size) {
-        return ((size + ALIGNMENT - 1) / ALIGNMENT) * ALIGNMENT;
+
+    public void sync() {
+        lock.writeLock().lock();
+        try {
+            if (buffer != null) {
+                buffer.force();
+            }
+            if (channel.isOpen()) {
+                channel.force(true);
+            }
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to sync segment to disk", e);
+        } finally {
+            lock.writeLock().unlock();
+        }
     }
 
-    private void ensureCapacity(long requiredCapacity) {
-        if (requiredCapacity <= buffer.capacity()) return;
-        if (requiredCapacity > buffer.capacity()) {
-            try {
-                long newSize = Math.max(buffer.capacity() * 2L, requiredCapacity);
-
-                buffer.force();
-                Buffers.unmap(buffer);
-                this.buffer = channel.map(FileChannel.MapMode.READ_WRITE, 0, newSize);
-                this.buffer.order(ByteOrder.LITTLE_ENDIAN);
-            } catch (IOException e) {
-                throw new SegmentOverflowException("Failed to remap segment buffer", e);
-            }
-        }
+    private int align(int size) {
+        return ((size + ALIGNMENT - 1) / ALIGNMENT) * ALIGNMENT;
     }
 
     public String getSegmentName() {
@@ -263,18 +239,15 @@ public class SegmentWriter implements AutoCloseable {
         return path;
     }
 
-    public boolean willOverflow(WavePattern pattern) {
-        int patternSize = WavePatternCodec.estimateSize(pattern, false);
-        int blockSize = RECORD_HEADER_SIZE + patternSize;
-        int aligned = align(blockSize);
-        return writeOffset.get() + aligned > buffer.capacity();
-    }
-
     public double getFillRatio() {
         return (double) writeOffset.get() / buffer.capacity();
     }
 
     public long getWriteOffset() {
+        return writeOffset.get();
+    }
+
+    public long approxSize() {
         return writeOffset.get();
     }
 
@@ -296,23 +269,4 @@ public class SegmentWriter implements AutoCloseable {
             lock.writeLock().unlock();
         }
     }
-
-    public void sync() {
-        lock.writeLock().lock();
-        try {
-            if (buffer != null) {
-                buffer.force();
-            }
-            if (channel.isOpen()) {
-                channel.force(true);
-            }
-        } catch (IOException e) {
-            throw new RuntimeException("Failed to sync segment to disk", e);
-        } finally {
-            lock.writeLock().unlock();
-        }
-    }
-
-    public long approxSize() { return writeOffset.get(); }
-
 }
