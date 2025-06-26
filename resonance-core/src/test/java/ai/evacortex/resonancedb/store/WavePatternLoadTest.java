@@ -12,6 +12,7 @@ import ai.evacortex.resonancedb.core.engine.JavaKernel;
 import ai.evacortex.resonancedb.core.engine.ResonanceEngine;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
 import ai.evacortex.resonancedb.core.storage.WavePatternStoreImpl;
+import ai.evacortex.resonancedb.core.storage.responce.ResonanceMatch;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -25,14 +26,17 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 //@Disabled("Smoke benchmark — run manually from IDE")
 public class WavePatternLoadTest {
 
-    private static final int PATTERN_COUNT = Integer.getInteger("patterns", 50_000);
-    private static final int PATTERN_LEN = Integer.getInteger("length", 2048);
+    private static final int PATTERN_COUNT = Integer.getInteger("patterns", 100_000_000);
+    private static final int PATTERN_LEN = Integer.getInteger("length", 512);
     private static final int QUERY_REPS = Integer.getInteger("queries", 100);
-    private static final Path DB_ROOT = Paths.get(System.getProperty("resonance.test.dir", "C:\\Users\\Aleksandr\\Downloads\\64x2048x50k\\resdb-load"));
+    private static final Path DB_ROOT = Paths.get(System.getProperty("resonance.test.dir", "C:\\Users\\Aleksandr\\Downloads\\S64xL512x100k\\resdb-load"));
 
     private static final int[] TOP_K_BUCKETS = Arrays.stream(System.getProperty("topKs", "1,10,100").split(","))
             .mapToInt(Integer::parseInt).toArray();
@@ -181,6 +185,56 @@ public class WavePatternLoadTest {
                         times.stream().mapToLong(Long::longValue).average().orElse(0) / 1e6);
             }
             System.out.printf("Finished at: %s%n", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+        }
+    }
+
+    @Test
+    public void concurrentQueryAccuracy() throws Exception {
+        final int TOP_K   = 10;
+        final int THREADS = Runtime.getRuntime().availableProcessors();
+        final int LOOPS   = QUERY_REPS;
+
+        ResonanceEngine.setBackend(new JavaKernel());
+
+        try (WavePatternStoreImpl store = new WavePatternStoreImpl(DB_ROOT)) {
+            ExecutorService pool = Executors.newFixedThreadPool(THREADS);
+            CountDownLatch latch = new CountDownLatch(THREADS);
+            AtomicInteger failures = new AtomicInteger();
+
+            for (int t = 0; t < THREADS; t++) {
+                pool.submit(() -> {
+                    ThreadLocalRandom rnd = ThreadLocalRandom.current();
+                    try {
+                        for (int i = 0; i < LOOPS; i++) {
+                            WavePattern q   = randomPattern(PATTERN_LEN, rnd);
+                            List<ResonanceMatch> hits = store.query(q, TOP_K);
+
+                            if (hits.size() > TOP_K) {
+                                failures.incrementAndGet();
+                                continue;
+                            }
+                            float prev = Float.POSITIVE_INFINITY;
+                            for (ResonanceMatch m : hits) {
+                                float e = m.energy();
+                                if (e < 0.0f || e > 1.0f || e > prev + 1e-5f) {
+                                    failures.incrementAndGet();
+                                    break;
+                                }
+                                prev = e;
+                            }
+                        }
+                    } catch (Throwable ex) {
+                        ex.printStackTrace(System.err);
+                        failures.incrementAndGet();
+                    } finally {
+                        latch.countDown();
+                    }
+                });
+            }
+
+            latch.await();
+            pool.shutdown();
+            assertEquals(0, failures.get(), "Inaccuracies detected in concurrent results");
         }
     }
 }

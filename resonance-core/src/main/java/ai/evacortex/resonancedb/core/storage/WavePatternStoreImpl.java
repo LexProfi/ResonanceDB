@@ -182,7 +182,6 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             try {
                 result = writeToSegment(newId, newPattern, group);
             } catch (Exception e) {
-                // ни manifest, ни metaStore ещё не тронуты — ничего откатывать не надо
                 throw new RuntimeException("Failed to write new pattern during replace", e);
             }
 
