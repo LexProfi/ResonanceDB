@@ -6,7 +6,10 @@
  * Patent notice: The authors intend to seek patent protection for this software.
  * Commercial use >30 days → license@evacortex.ai
  */
-package ai.evacortex.resonancedb.core.storage;
+package ai.evacortex.resonancedb.core.storage.util;
+
+import ai.evacortex.resonancedb.core.storage.ResonanceTracer;
+import ai.evacortex.resonancedb.core.storage.WavePattern;
 
 public class NoOpTracer implements ResonanceTracer {
     @Override

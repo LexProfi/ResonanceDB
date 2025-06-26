@@ -13,6 +13,7 @@ import ai.evacortex.resonancedb.core.storage.*;
 import ai.evacortex.resonancedb.core.storage.responce.ResonanceMatch;
 import ai.evacortex.resonancedb.core.WavePatternTestUtils;
 import ai.evacortex.resonancedb.core.storage.io.SegmentWriter;
+import ai.evacortex.resonancedb.core.storage.util.HashingUtil;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

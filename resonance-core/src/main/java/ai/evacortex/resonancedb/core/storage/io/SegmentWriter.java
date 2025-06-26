@@ -10,7 +10,7 @@ package ai.evacortex.resonancedb.core.storage.io;
 
 import ai.evacortex.resonancedb.core.exceptions.InvalidWavePatternException;
 import ai.evacortex.resonancedb.core.exceptions.SegmentOverflowException;
-import ai.evacortex.resonancedb.core.storage.HashingUtil;
+import ai.evacortex.resonancedb.core.storage.util.HashingUtil;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
 import ai.evacortex.resonancedb.core.storage.io.codec.WavePatternCodec;
 import ai.evacortex.resonancedb.core.storage.io.format.BinaryHeader;
@@ -23,6 +23,7 @@ import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.HexFormat;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -77,10 +78,10 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  */
 public class SegmentWriter implements AutoCloseable {
 
-    private static final int ID_SIZE = 16;
+    private static final long MAX_SEG_BYTES = Long.parseLong(
+            System.getProperty("segment.maxBytes", "" + (64L << 20)));
     private static final int RECORD_HEADER_SIZE = 1 + 16 + 4 + 4;
     private static final int ALIGNMENT = 8;
-    private static final int INITIAL_CAPACITY = 4 * 1024 * 1024;
 
     private final Path path;
     private final int headerSize;
@@ -91,7 +92,6 @@ public class SegmentWriter implements AutoCloseable {
     private final AtomicLong writeOffset;
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
     private int recordCount = 0;
-    private volatile boolean needsFlush = false;
 
     public SegmentWriter(Path path) {
         this(path, 8);
@@ -108,13 +108,13 @@ public class SegmentWriter implements AutoCloseable {
             this.channel = raf.getChannel();
 
             boolean isNew = channel.size() == 0;
-            long mapSize = Math.max(INITIAL_CAPACITY, channel.size());
+            long mapSize = Math.max(MAX_SEG_BYTES, channel.size());
             this.buffer = Buffers.mmap(channel, FileChannel.MapMode.READ_WRITE, 0, mapSize);
             this.buffer.order(ByteOrder.LITTLE_ENDIAN);
 
             if (isNew) {
                 BinaryHeader header = new BinaryHeader(1, System.currentTimeMillis(), 0,
-                        headerSize, 0L, (byte) 0, checksumLength);
+                        headerSize, 0L, (byte) 1, checksumLength);
                 ensureCapacity(headerSize);
                 buffer.position(0);
                 buffer.put(header.toBytes());
@@ -152,14 +152,15 @@ public class SegmentWriter implements AutoCloseable {
 
             buffer.position((int) offset);
             buffer.put((byte) 0x01);
-            buffer.put(idBytes);             // [1..16]
-            buffer.putInt(pattern.amplitude().length); // [17..20]
+            buffer.put(idBytes);
+            buffer.putInt(pattern.amplitude().length);
             buffer.putInt(-1);
 
-            ByteBuffer tmpBuf = ByteBuffer.allocate(patternSize).order(ByteOrder.LITTLE_ENDIAN);
-            WavePatternCodec.writeTo(tmpBuf, pattern, false);
-            tmpBuf.flip();
-            buffer.put(tmpBuf);
+            WavePatternCodec.writeDirect(buffer, pattern);
+            int pad = alignedSize - blockSize;
+            for (int i = 0; i < pad; i++) {
+                buffer.put((byte) 0);
+            }
 
             writeOffset.addAndGet(alignedSize);
             recordCount++;
@@ -170,17 +171,7 @@ public class SegmentWriter implements AutoCloseable {
             ByteBuffer checksumBuf = buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN);
             checksumBuf.position(checksumOffset);
             checksumBuf.limit(checksumOffset + lengthToChecksum);
-            long checksum = HashingUtil.computeChecksum(checksumBuf.slice(), checksumLength);
 
-            BinaryHeader header = new BinaryHeader(1, System.currentTimeMillis(), recordCount,
-                    writeOffset.get(), checksum, (byte) 1, checksumLength
-            );
-
-            ensureCapacity(headerSize);
-            buffer.position(0);
-            buffer.put(header.toBytes());
-            buffer.force(0, headerSize);
-            needsFlush = true;
             return offset;
         } finally {
             lock.writeLock().unlock();
@@ -191,7 +182,7 @@ public class SegmentWriter implements AutoCloseable {
         lock.writeLock().lock();
         try {
             if (offset < buffer.limit()) {
-                buffer.put((int) offset, (byte) 0x00);  // пометить как удалённую
+                buffer.put((int) offset, (byte) 0x00);
             } else {
                 throw new IllegalStateException("Offset exceeds segment capacity: " + offset);
             }
@@ -203,8 +194,8 @@ public class SegmentWriter implements AutoCloseable {
     public void unmarkDeleted(long offset) {
         lock.writeLock().lock();
         try {
-            buffer.position((int) offset);           // первый байт записи
-            buffer.put((byte) 0x01);               // установить как "валиден"
+            buffer.position((int) offset);
+            buffer.put((byte) 0x01);
             buffer.force();
             channel.force(false);
         } catch (IOException e) {
@@ -214,33 +205,32 @@ public class SegmentWriter implements AutoCloseable {
         }
     }
 
-    public void flush() {
+    public long flush() {
         lock.writeLock().lock();
         try {
+            if (buffer == null) {
+                throw new IllegalStateException("Segment buffer is null during flush");
+            }
             int lengthToChecksum = (int) (writeOffset.get() - headerSize);
+            if (lengthToChecksum < 0) {
+                throw new IllegalStateException("Invalid checksum length: " + lengthToChecksum);
+            }
 
             ByteBuffer checksumBuf = buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN);
             checksumBuf.position(headerSize);
             checksumBuf.limit(headerSize + lengthToChecksum);
-
             long checksum = HashingUtil.computeChecksum(checksumBuf.slice(), checksumLength);
 
+            long finalOffset = writeOffset.get();
             BinaryHeader header = new BinaryHeader(
-                    1,
-                    System.currentTimeMillis(),
-                    recordCount,
-                    writeOffset.get(),
-                    checksum,
-                    (byte) 1,
-                    checksumLength
-            );
+                    1, System.currentTimeMillis(), recordCount, finalOffset,
+                    checksum, (byte) 1, checksumLength);
 
-            if (buffer != null) {
-                ensureCapacity(headerSize);
-                buffer.position(0);
-                buffer.put(header.toBytes());
-                buffer.force(0, headerSize);
-            }
+            buffer.position(0);
+            buffer.put(header.toBytes());
+
+            buffer.force();
+            return writeOffset.get();
         } finally {
             lock.writeLock().unlock();
         }
@@ -250,10 +240,13 @@ public class SegmentWriter implements AutoCloseable {
     }
 
     private void ensureCapacity(long requiredCapacity) {
+        if (requiredCapacity <= buffer.capacity()) return;
         if (requiredCapacity > buffer.capacity()) {
             try {
                 long newSize = Math.max(buffer.capacity() * 2L, requiredCapacity);
+
                 buffer.force();
+                Buffers.unmap(buffer);
                 this.buffer = channel.map(FileChannel.MapMode.READ_WRITE, 0, newSize);
                 this.buffer.order(ByteOrder.LITTLE_ENDIAN);
             } catch (IOException e) {
@@ -277,11 +270,6 @@ public class SegmentWriter implements AutoCloseable {
         return writeOffset.get() + aligned > buffer.capacity();
     }
 
-    public boolean isOverflow() {
-        long remaining = buffer.capacity() - writeOffset.get();
-        return remaining < 32 * 1024;
-    }
-
     public double getFillRatio() {
         return (double) writeOffset.get() / buffer.capacity();
     }
@@ -290,23 +278,12 @@ public class SegmentWriter implements AutoCloseable {
         return writeOffset.get();
     }
 
-    public boolean markFlushNeeded() {
-        return needsFlush = true;
-    }
-    public boolean flushIfNeeded() {
-        if (!needsFlush) return false;
-        flush();
-        needsFlush = false;
-        return true;
-    }
-
     @Override
     public void close() {
         lock.writeLock().lock();
         try {
             if (buffer != null) {
                 flush();
-                buffer.force();
                 Buffers.unmap(buffer);
                 buffer = null;
             }
@@ -323,8 +300,12 @@ public class SegmentWriter implements AutoCloseable {
     public void sync() {
         lock.writeLock().lock();
         try {
-            buffer.force();
-            channel.force(true);
+            if (buffer != null) {
+                buffer.force();
+            }
+            if (channel.isOpen()) {
+                channel.force(true);
+            }
         } catch (IOException e) {
             throw new RuntimeException("Failed to sync segment to disk", e);
         } finally {
@@ -333,4 +314,17 @@ public class SegmentWriter implements AutoCloseable {
     }
 
     public long approxSize() { return writeOffset.get(); }
+
+    public void ensureExists() {
+        try {
+            if (!Files.exists(path)) {
+                try (FileChannel ch = FileChannel.open(path, StandardOpenOption.CREATE)) {
+                    ch.write(ByteBuffer.allocate(1));
+                }
+            }
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
 }

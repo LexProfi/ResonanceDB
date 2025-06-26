@@ -12,7 +12,7 @@ import ai.evacortex.resonancedb.core.*;
 import ai.evacortex.resonancedb.core.engine.ResonanceEngine;
 import ai.evacortex.resonancedb.core.exceptions.DuplicatePatternException;
 import ai.evacortex.resonancedb.core.exceptions.PatternNotFoundException;
-import ai.evacortex.resonancedb.core.storage.HashingUtil;
+import ai.evacortex.resonancedb.core.storage.util.HashingUtil;
 import ai.evacortex.resonancedb.core.math.ResonanceZone;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
 import ai.evacortex.resonancedb.core.storage.WavePatternStoreImpl;
@@ -91,11 +91,9 @@ public class WavePatternStoreImplTest {
         assertEquals(HashingUtil.computeContentHash(updated), newId);
         assertNotEquals(oldId, newId, "ID must change after content replacement");
 
-        // 1. Убедиться, что старый ID больше не существует
         assertThrows(PatternNotFoundException.class, () -> store.delete(oldId),
                 "Old ID must no longer exist");
 
-        // 2. Проверить, что новый ID найден в top-K запросе
         List<ResonanceMatch> matches = store.query(updated, 5);
         Optional<ResonanceMatch> found = matches.stream()
                 .filter(m -> m.id().equals(newId))
@@ -104,7 +102,6 @@ public class WavePatternStoreImplTest {
         assertTrue(found.isPresent(), "Replaced pattern must be found by query");
         assertEquals(1.0f, store.compare(updated, found.get().pattern()), 1e-4);
 
-        // 4. Убедиться, что оригинальный паттерн больше не даёт сильного совпадения
         List<ResonanceMatch> residual = store.query(original, 1);
         if (!residual.isEmpty()) {
             assertNotEquals(oldId, residual.getFirst().id(), "Old ID must not appear");

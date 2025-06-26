@@ -1,5 +1,14 @@
+/*
+ * ResonanceDB — Waveform Semantic Engine
+ * Copyright © 2025 Aleksandr Listopad
+ * SPDX-License-Identifier: Prosperity-3.0
+ *
+ * Patent notice: The authors intend to seek patent protection for this software.
+ * Commercial use >30 days → license@evacortex.ai
+ */
 package ai.evacortex.resonancedb.core.storage.io;
 
+import ai.evacortex.resonancedb.core.exceptions.IncompleteWriteException;
 import ai.evacortex.resonancedb.core.exceptions.InvalidWavePatternException;
 import ai.evacortex.resonancedb.core.exceptions.PatternNotFoundException;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
@@ -11,30 +20,38 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.*;
+import java.util.stream.Stream;
 
 public class CachedReader implements AutoCloseable {
 
     private static final int ID_SIZE = 16;
-    private static final int HEADER_SIZE = 1 + 16 + 4 + 4; // id[16] + deleted[1] + len[4] + reserved[4]
+    private static final int HEADER_SIZE = 1 + 16 + 4 + 4;
     private static final int ALIGNMENT = 8;
 
     private final Path path;
     private final FileChannel channel;
     private final MappedByteBuffer mmap;
     private final Map<String, Long> offsetMap;
+    private final long lastOffset;
+    private final long weightInBytes;
+    private volatile boolean closed = false;
 
-    private CachedReader(Path path, FileChannel channel, MappedByteBuffer mmap, Map<String, Long> offsetMap) {
+    private CachedReader(Path path, FileChannel channel, MappedByteBuffer mmap,
+                         Map<String, Long> offsetMap, long lastOffset, long weightInBytes) {
         this.path = path;
         this.channel = channel;
         this.mmap = mmap;
         this.offsetMap = offsetMap;
+        this.lastOffset = lastOffset;
+        this.weightInBytes = weightInBytes;
     }
 
     public static CachedReader open(Path segmentPath) throws IOException {
-        // === mmap whole segment ==================================================
+        //System.out.println("[READER] Opening segment file: " + segmentPath);
         FileChannel channel = FileChannel.open(segmentPath, StandardOpenOption.READ);
         long fileSize = channel.size();
 
@@ -42,125 +59,115 @@ public class CachedReader implements AutoCloseable {
                 .map(FileChannel.MapMode.READ_ONLY, 0, fileSize)
                 .order(ByteOrder.LITTLE_ENDIAN);
 
-        /*--- определяем фактическую длину BinaryHeader (4-or-8-byte checksum) ---*/
-        int checksumLen  = SegmentReader.inferChecksumLength(segmentPath); // уже есть util
-        int fileHdrSize  = BinaryHeader.sizeFor(checksumLen);
+        int checksumLen = SegmentReader.inferChecksumLength(segmentPath);
+        int hdrSize = BinaryHeader.sizeFor(checksumLen);
 
+        ByteBuffer hdrBuf = mmap.duplicate().order(ByteOrder.LITTLE_ENDIAN);
+        BinaryHeader header = BinaryHeader.from(hdrBuf, checksumLen);
+
+        if (header.commitFlag() != 0 && header.commitFlag() != 1) {
+            throw new IncompleteWriteException("Segment " + segmentPath.getFileName() +
+                    " has unknown commit flag: " + header.commitFlag());
+            }
+
+        long lastOffset = header.lastOffset();
         Map<String, Long> offsetMap = new LinkedHashMap<>();
-        int pos = fileHdrSize;
-        while (pos + HEADER_SIZE <= fileSize) {
+
+        int pos = hdrSize;
+        while (pos + HEADER_SIZE <= lastOffset) {
             ByteBuffer buf = mmap.duplicate().order(ByteOrder.LITTLE_ENDIAN);
             buf.position(pos);
 
-            byte deleted      = buf.get();          // 1 byte   — 0x01 = live, 0x00 = tombstone
-            byte[] idBytes    = new byte[ID_SIZE];  // 16 bytes — MD5
+            byte deleted = buf.get();
+            byte[] idBytes = new byte[ID_SIZE];
             buf.get(idBytes);
-            int len           = buf.getInt();       // 4 bytes  — amplitude length
-            buf.getInt();                           // 4 bytes  — reserved
+            int len = buf.getInt();
+            buf.getInt(); // reserved
 
-            // ───── live entry ─────
-            if (deleted == 0x01 && len > 0 && len <= WavePatternCodec.MAX_SUPPORTED_LENGTH) {
-                int patternSize = WavePatternCodec.estimateSize(len, false);
-                int totalSize   = align(HEADER_SIZE + patternSize);
-
-                String id = bytesToHex(idBytes);
-                offsetMap.put(id, (long) pos);
-
-                pos += totalSize;                   // advance to next header
-                continue;
-            }
-
-            // ───── tombstone / garbage ─────
+            // если длина неверная — дальше читать уже нельзя
             if (len <= 0 || len > WavePatternCodec.MAX_SUPPORTED_LENGTH) {
-                // corrupt length ⇒ stop scan (rest of file unusable)
                 break;
             }
 
-            int skip = align(HEADER_SIZE + WavePatternCodec.estimateSize(len, false));
-            pos += skip;                            // skip over tombstoned record
-        }
+            int patternSize = WavePatternCodec.estimateSize(len, false);
+            int totalSize   = align(HEADER_SIZE + patternSize);
 
-        return new CachedReader(segmentPath, channel, mmap, offsetMap);
+            // регистрируем только **живые** записи,
+            // но пропускаем tombstone не останавливаясь
+            if (deleted == 0x01) {
+                String id = bytesToHex(idBytes);
+                offsetMap.put(id, (long) pos);
+            }
+
+            pos += totalSize;      // идём к следующему блоку
+        }
+        //System.out.println("[READER] Initialized CachedReader for " + segmentPath.getFileName() + ", live patterns = " + offsetMap.size());
+        return new CachedReader(segmentPath, channel, mmap, offsetMap, lastOffset, fileSize);
     }
 
     public Set<String> allIds() {
+        ensureOpen();
         return offsetMap.keySet();
     }
 
     public boolean contains(String id) {
+        ensureOpen();
         return offsetMap.containsKey(id);
     }
 
     public long offsetOf(String id) {
+        ensureOpen();
         Long off = offsetMap.get(id);
         if (off == null) throw new PatternNotFoundException("ID not found: " + id);
         return off;
     }
 
-    public WavePattern readAtOffset(long offset) {
-        if (offset < 0 || offset + HEADER_SIZE >= mmap.capacity()) {
+    public SegmentReader.PatternWithId readAtOffset(long offset) {
+        ensureOpen();
+        if (offset < 0 || offset + HEADER_SIZE >= lastOffset) {
             throw new InvalidWavePatternException("Offset out of bounds: " + offset);
         }
-
-        ByteBuffer buf = mmap.duplicate().order(ByteOrder.LITTLE_ENDIAN);
-        buf.position((int) offset);
-
-        byte deleted = buf.get();                       // 0x01 = live, 0x00 = tombstone
-        byte[] idBytes = new byte[ID_SIZE];
-        buf.get(idBytes);
-        int len = buf.getInt();
-        buf.getInt();                                   // reserved
-
-        if (deleted == 0x00) {                          // ← ПРАВИЛЬНАЯ проверка
-            throw new PatternNotFoundException("Deleted pattern at offset " + offset);
-        }
-
-        int patternSize = WavePatternCodec.estimateSize(len, false);
-        if (buf.remaining() < patternSize) {
-            throw new InvalidWavePatternException("Insufficient bytes to decode pattern at offset " + offset);
-        }
-
-        ByteBuffer patternBuf = buf.slice();
-        patternBuf.limit(patternSize);
-        return WavePatternCodec.readFrom(patternBuf, false);
+        ByteBuffer local = mmap.duplicate().order(ByteOrder.LITTLE_ENDIAN);
+        return SegmentReader.readWithIdFromBuffer(local, offset);
     }
 
     public WavePattern readById(String id) {
-        return readAtOffset(offsetOf(id));
+        ensureOpen();
+        return readAtOffset(offsetOf(id)).pattern();
     }
+
+    public Stream<SegmentReader.PatternWithId> lazyStream() {
+        ensureOpen();
+        return offsetMap.entrySet().stream().map(entry -> {
+            try {
+                return readAtOffset(entry.getValue());
+            } catch (RuntimeException e) {
+                return null;
+            }
+        }).filter(Objects::nonNull);
+    }
+
 
     public Path getPath() {
         return path;
     }
 
-    public List<SegmentReader.PatternWithId> readAllWithId() {
-        List<SegmentReader.PatternWithId> result = new ArrayList<>();
-
-        for (Map.Entry<String, Long> entry : offsetMap.entrySet()) {
-            String id = entry.getKey();
-            long offset = entry.getValue();
-            try {
-                WavePattern pattern = readAtOffset(offset);
-                result.add(new SegmentReader.PatternWithId(id, pattern, offset));
-            } catch (RuntimeException ex) {
-                // Повреждённые или удалённые пропускаем
-            }
-        }
-
-        return result;
-    }
 
     @Override
     public void close() {
+        closed = true;
         try {
+            Buffers.unmap(mmap);
             channel.close();
-        } catch (IOException e) {
-            // optional: log
+        } catch (IOException ignored) {
         }
     }
-
     private static int align(int size) {
         return ((size + ALIGNMENT - 1) / ALIGNMENT) * ALIGNMENT;
+    }
+
+    public long getWeightInBytes() {
+        return weightInBytes;
     }
 
     private static String bytesToHex(byte[] bytes) {
@@ -172,5 +179,36 @@ public class CachedReader implements AutoCloseable {
             hexChars[j * 2 + 1] = HEX_ARRAY[v & 0x0F];
         }
         return new String(hexChars);
+    }
+
+    void ensureOpen() {
+        if (closed) {
+            throw new IllegalStateException("Attempted to access closed CachedReader for " + path);
+        }
+    }
+
+    public Optional<WavePattern> tryRead(String id) {
+        ensureOpen();
+        if (!offsetMap.containsKey(id)) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(readAtOffset(offsetMap.get(id)).pattern());
+        } catch (RuntimeException e) {
+            // corrupted block / invalid data — гасим и возвращаем empty
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Безопасно читает raw-структуру по offset’у; может пригодиться компактору.
+     */
+    public Optional<SegmentReader.PatternWithId> tryReadAtOffset(long offset) {
+        ensureOpen();
+        try {
+            return Optional.of(readAtOffset(offset));
+        } catch (RuntimeException e) {
+            return Optional.empty();
+        }
     }
 }

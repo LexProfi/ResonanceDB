@@ -59,7 +59,7 @@ public class PhaseShardSelector {
     }
 
     public List<String> getRelevantShards(WavePattern query) {
-        return getRelevantShards(query, this.epsilon);      // ✨ changed
+        return getRelevantShards(query, this.epsilon);
     }
 
     public double[] getPhaseRange(WavePattern pattern) {
@@ -109,7 +109,6 @@ public class PhaseShardSelector {
         return null;
     }
 
-    // ✨ new — упорядоченный (по mean φ) неизменяемый список имён сегментов
     public List<String> orderedShardList() {
         if (!useExplicitRanges) {
             List<String> list = new ArrayList<>(totalShards);
@@ -119,7 +118,6 @@ public class PhaseShardSelector {
         return Collections.unmodifiableList(new ArrayList<>(phaseShardMap.values()));
     }
 
-    // ✨ new — индекс сегмента в orderedShardList(), -1 если не найден
     public int indexOf(String segmentName) {
         List<String> ord = orderedShardList();
         for (int i = 0; i < ord.size(); i++) {
@@ -128,7 +126,6 @@ public class PhaseShardSelector {
         return -1;
     }
 
-    // ✨ new — перегрузка с произвольным ε (используется ripple-алгоритмом)
     public List<String> getRelevantShards(WavePattern query, double customEps) {
         if (!useExplicitRanges) {
             return List.of(selectShard(query));

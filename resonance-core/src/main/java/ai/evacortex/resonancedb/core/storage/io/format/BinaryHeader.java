@@ -87,32 +87,26 @@ public final class BinaryHeader {
         int size = sizeFor(checksumLength);
         ByteBuffer buf = ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN);
 
-        buf.putInt(MAGIC);           // magic
-        buf.putShort((short) version); // version
-        buf.putLong(timestamp);      // timestamp
-        buf.putInt(recordCount);     // recordCount
-        buf.putLong(lastOffset);     // lastOffset
+        buf.putInt(MAGIC);
+        buf.putShort((short) version);
+        buf.putLong(timestamp);
+        buf.putInt(recordCount);
+        buf.putLong(lastOffset);
 
         if (checksumLength == 4) {
             buf.putInt((int) checksum);
         } else if (checksumLength == 8) {
             buf.putLong(checksum);
         } else {
-            // pad or truncate long to match length
             byte[] hashBytes = new byte[checksumLength];
             ByteBuffer.wrap(hashBytes).order(ByteOrder.LITTLE_ENDIAN).putLong(checksum);
             buf.put(hashBytes);
         }
-
         buf.put(commitFlag);
-
-        // Padding to align header size to 4 bytes
-        int written = MAGIC_LENGTH + VERSION_LENGTH + TIMESTAMP_LENGTH +
-                RECORD_COUNT_LENGTH + LAST_OFFSET_LENGTH +
+        int written = MAGIC_LENGTH + VERSION_LENGTH + TIMESTAMP_LENGTH + RECORD_COUNT_LENGTH + LAST_OFFSET_LENGTH +
                 checksumLength + COMMIT_FLAG_LENGTH;
         int padding = (4 - (written % 4)) % 4;
         for (int i = 0; i < padding; i++) buf.put((byte) 0);
-
         return buf.array();
     }
 

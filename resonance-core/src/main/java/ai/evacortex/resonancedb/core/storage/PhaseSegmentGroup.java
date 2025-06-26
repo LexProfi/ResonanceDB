@@ -15,7 +15,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -24,8 +23,7 @@ import java.util.stream.Collectors;
 
 public class PhaseSegmentGroup {
 
-    private static final long MAX_SEG_BYTES = Long.parseLong(
-            System.getProperty("segment.maxBytes", "" + (32L << 20)));
+    private static final long MAX_SEG_BYTES = Long.parseLong(System.getProperty("segment.maxBytes", "" + (64L << 20)));
     private final AtomicInteger seq = new AtomicInteger();
     private volatile SegmentWriter current;
     private final String baseName;
@@ -33,6 +31,9 @@ public class PhaseSegmentGroup {
     private final CopyOnWriteArrayList<SegmentWriter> writers = new CopyOnWriteArrayList<>();
     private final SegmentCompactor compactor;
     private final ReentrantLock lock = new ReentrantLock();
+
+    private volatile double avgPhase = 0.0;
+    private volatile int count = 0;
 
     public PhaseSegmentGroup(String baseName, Path baseDir, SegmentCompactor compactor) {
         this.baseName = baseName;
@@ -54,9 +55,9 @@ public class PhaseSegmentGroup {
         }
 
         if (writers.isEmpty()) {
-            writers.add(createSegment(seq.getAndIncrement()));   // seq=0
+            writers.add(createSegment(seq.getAndIncrement()));
         } else {
-            int lastIdx = writers.size();                        // size == maxIndex+1
+            int lastIdx = writers.size();
             seq.set(lastIdx);
         }
         current = writers.getLast();
@@ -95,7 +96,7 @@ public class PhaseSegmentGroup {
             if (current != null && current.approxSize() <= MAX_SEG_BYTES) {
                 return current;
             }
-            current = createSegment();          // ✨ вместо createSegment(nextIndex)
+            current = createSegment();
             writers.add(current);
             return current;
         } finally {
@@ -106,7 +107,7 @@ public class PhaseSegmentGroup {
     public SegmentWriter createAndRegisterNewSegment() {
         lock.lock();
         try {
-            current = createSegment();          // ✨ seq гарантирует уникальность
+            current = createSegment();
             writers.add(current);
             return current;
         } finally {
@@ -131,16 +132,14 @@ public class PhaseSegmentGroup {
         try {
             writers.clear();
             writers.add(writer);
-            current = writer;                   // ✨
-
-            // извлекаем индекс из имени «base-N.segment»
+            current = writer;
             String name = writer.getSegmentName();
             int idx = 0;
             try {
                 int cut1 = baseName.length() + 1;
-                idx = Integer.parseInt(name.substring(cut1, name.length() - 8)); // -8 = \".segment\"
+                idx = Integer.parseInt(name.substring(cut1, name.length() - 8));
             } catch (Exception ignore) {}
-            seq.set(idx + 1);                   // ✨ следующий файл будет уникален
+            seq.set(idx + 1);
         } finally {
             lock.unlock();
         }
@@ -164,5 +163,19 @@ public class PhaseSegmentGroup {
 
     public void registerIfAbsent(SegmentWriter writer) {
         writers.addIfAbsent(writer);
+    }
+
+    public synchronized void updatePhaseStats(double newPhase) {
+        this.avgPhase = (this.avgPhase * this.count + newPhase) / (this.count + 1);
+        this.count++;
+    }
+
+    public double getAvgPhase() {
+        return avgPhase;
+    }
+
+    public boolean containsSegment(String segmentName) {
+        return getAll().stream()
+                .anyMatch(w -> w.getSegmentName().equals(segmentName));
     }
 }

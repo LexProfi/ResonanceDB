@@ -9,7 +9,7 @@
 package ai.evacortex.resonancedb.store;
 
 import ai.evacortex.resonancedb.core.exceptions.PatternNotFoundException;
-import ai.evacortex.resonancedb.core.storage.HashingUtil;
+import ai.evacortex.resonancedb.core.storage.util.HashingUtil;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
 import ai.evacortex.resonancedb.core.WavePatternTestUtils;
 import ai.evacortex.resonancedb.core.exceptions.DuplicatePatternException;

@@ -11,6 +11,7 @@ package ai.evacortex.resonancedb.core.storage;
 import ai.evacortex.resonancedb.core.exceptions.PatternNotFoundException;
 
 import java.io.*;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -19,8 +20,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-import java.time.Duration;
-import java.util.concurrent.*;
 
 public class ManifestIndex implements Closeable {
 
@@ -28,19 +27,11 @@ public class ManifestIndex implements Closeable {
     private final Map<String, PatternLocation> map;
     private final Set<String> knownSegments;
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
-    private final ScheduledExecutorService scheduler;
-    private volatile boolean dirty = false;
 
     private ManifestIndex(Path indexFile) {
         this.indexFile = indexFile;
         this.map = new ConcurrentHashMap<>();
         this.knownSegments = ConcurrentHashMap.newKeySet();
-        this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r);
-            t.setDaemon(true);
-            t.setName("manifest-autoflush");
-            return t;
-        });
     }
 
     public static ManifestIndex loadOrCreate(Path path) {
@@ -66,21 +57,10 @@ public class ManifestIndex implements Closeable {
                     idx.knownSegments.add(segment);
                 }
             } catch (IOException e) {
-                Path backup = path.resolveSibling(path.getFileName().toString() + ".bak");
-                if (Files.exists(backup)) {
-                    return loadOrCreate(backup);
-                } else {
-                    throw new RuntimeException("Failed to load manifest index", e);
-                }
+                throw new RuntimeException("Failed to load manifest index: " + path, e);
             }
         }
         return idx;
-    }
-
-    public void startAutoFlush(Duration interval) {
-        scheduler.scheduleAtFixedRate(() -> {
-            if (dirty) flush();
-        }, interval.toMillis(), interval.toMillis(), TimeUnit.MILLISECONDS);
     }
 
     public void add(String id, String segment, long offset, double phaseCenter) {
@@ -88,7 +68,6 @@ public class ManifestIndex implements Closeable {
         try {
             map.put(id, new PatternLocation(segment, offset, phaseCenter));
             knownSegments.add(segment);
-            dirty = true;
         } finally {
             lock.writeLock().unlock();
         }
@@ -97,9 +76,7 @@ public class ManifestIndex implements Closeable {
     public void registerSegmentIfAbsent(String segmentName) {
         lock.writeLock().lock();
         try {
-            if (knownSegments.add(segmentName)) {
-                dirty = true;
-            }
+            knownSegments.add(segmentName);
         } finally {
             lock.writeLock().unlock();
         }
@@ -110,7 +87,6 @@ public class ManifestIndex implements Closeable {
         try {
             if (!map.containsKey(id)) throw new PatternNotFoundException(id);
             map.remove(id);
-            dirty = true;
         } finally {
             lock.writeLock().unlock();
         }
@@ -126,12 +102,7 @@ public class ManifestIndex implements Closeable {
     }
 
     public boolean contains(String id) {
-        lock.readLock().lock();
-        try {
-            return map.containsKey(id);
-        } finally {
-            lock.readLock().unlock();
-        }
+        return map.containsKey(id);
     }
 
     public Set<String> getAllSegmentNames() {
@@ -160,7 +131,6 @@ public class ManifestIndex implements Closeable {
         lock.writeLock().lock();
         try {
             persistToFile();
-            dirty = false;
         } finally {
             lock.writeLock().unlock();
         }
@@ -168,41 +138,41 @@ public class ManifestIndex implements Closeable {
 
     @Override
     public void close() {
-        scheduler.shutdownNow();
         flush();
     }
 
     private void persistToFile() {
+        lock.readLock().lock();
         try {
             Files.createDirectories(indexFile.getParent());
+            Path tmp = indexFile.resolveSibling(indexFile.getFileName().toString() + ".tmp");
+            try (DataOutputStream out = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(tmp)))) {
+                out.writeInt(knownSegments.size());
+                for (String seg : knownSegments) {
+                    out.writeUTF(seg);
+                }
 
-            if (Files.exists(indexFile)) {
-                Path backup = indexFile.resolveSibling(indexFile.getFileName().toString() + ".bak");
-                Files.copy(indexFile, backup, StandardCopyOption.REPLACE_EXISTING);
-            }
-
-            try (DataOutputStream out = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(indexFile)))) {
-                lock.readLock().lock();
-                try {
-                    out.writeInt(knownSegments.size());
-                    for (String seg : knownSegments) {
-                        out.writeUTF(seg);
-                    }
-
-                    out.writeInt(map.size());
-                    for (Map.Entry<String, PatternLocation> e : map.entrySet()) {
-                        out.writeUTF(e.getKey());
-                        PatternLocation loc = e.getValue();
-                        out.writeUTF(loc.segmentName());
-                        out.writeLong(loc.offset());
-                        out.writeDouble(loc.phaseCenter());
-                    }
-                } finally {
-                    lock.readLock().unlock();
+                out.writeInt(map.size());
+                for (Map.Entry<String, PatternLocation> e : map.entrySet()) {
+                    out.writeUTF(e.getKey());
+                    PatternLocation loc = e.getValue();
+                    out.writeUTF(loc.segmentName());
+                    out.writeLong(loc.offset());
+                    out.writeDouble(loc.phaseCenter());
                 }
             }
+
+            try {
+                Files.move(tmp, indexFile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException ex) {
+                Files.move(tmp, indexFile, StandardCopyOption.REPLACE_EXISTING);
+            }
+
         } catch (IOException e) {
+            System.err.printf("Manifest flush failed: %s%n", e);
             throw new RuntimeException("Failed to write manifest index", e);
+        } finally {
+            lock.readLock().unlock();
         }
     }
 
@@ -233,7 +203,6 @@ public class ManifestIndex implements Closeable {
             }
 
             map.put(id, new PatternLocation(newSegment, newOffset, newPhaseCenter));
-            dirty = true;
         } finally {
             lock.writeLock().unlock();
         }

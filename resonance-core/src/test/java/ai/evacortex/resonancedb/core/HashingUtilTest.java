@@ -8,7 +8,7 @@
  */
 package ai.evacortex.resonancedb.core;
 
-import ai.evacortex.resonancedb.core.storage.HashingUtil;
+import ai.evacortex.resonancedb.core.storage.util.HashingUtil;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;

@@ -13,6 +13,7 @@ import ai.evacortex.resonancedb.core.exceptions.InvalidWavePatternException;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.MappedByteBuffer;
 
 /**
  * Codec utility for encoding and decoding {@link WavePattern} objects into a binary format
@@ -57,7 +58,7 @@ import java.nio.ByteOrder;
 public class WavePatternCodec {
 
     private static final int MAGIC = 0x57565750; // 'WWWP'
-    private static final ByteOrder ORDER = ByteOrder.LITTLE_ENDIAN;
+    public static final ByteOrder ORDER = ByteOrder.LITTLE_ENDIAN;
     public static final int MAX_SUPPORTED_LENGTH = 65_536; // architectural sanity limit
 
     public static void writeTo(ByteBuffer buf, WavePattern pattern, boolean withMagic) {
@@ -78,6 +79,19 @@ public class WavePatternCodec {
         buf.putInt(len);
         for (double v : amp) buf.putDouble(v);
         for (double v : phase) buf.putDouble(v);
+    }
+
+    public static void writeDirect(MappedByteBuffer mmap, WavePattern pattern) {
+        double[] amp = pattern.amplitude();
+        double[] phase = pattern.phase();
+        int len = amp.length;
+        if (len <= 0 || len > MAX_SUPPORTED_LENGTH) {
+            throw new InvalidWavePatternException("Unsupported WavePattern length: " + len);
+        }
+        mmap.order(ORDER);
+        mmap.putInt(len);
+        for (double v : amp) mmap.putDouble(v);
+        for (double v : phase) mmap.putDouble(v);
     }
 
     public static WavePattern readFrom(ByteBuffer buf, boolean withMagic) {
