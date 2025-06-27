@@ -29,7 +29,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public class SegmentWriter implements AutoCloseable {
 
-    private static final long MAX_SEG_BYTES = Long.parseLong(System.getProperty("segment.maxBytes", "" + (64L << 20)));
+    private static final long MAX_SEG_BYTES = Long.parseLong(System.getProperty("resonance.segment.maxBytes", "" + (64L << 20)));
     private static final int RECORD_HEADER_SIZE = 1 + 16 + 4 + 4;
     private static final int ALIGNMENT = 8;
 

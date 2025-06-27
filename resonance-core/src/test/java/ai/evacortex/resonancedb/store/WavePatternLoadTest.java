@@ -38,7 +38,7 @@ public class WavePatternLoadTest {
     private static final int QUERY_REPS = Integer.getInteger("queries", 100);
     private static final Path DB_ROOT = Paths.get(System.getProperty("resonance.test.dir", "C:\\Users\\Aleksandr\\Downloads\\S64xL512x100k\\resdb-load"));
 
-    private static final int[] TOP_K_BUCKETS = Arrays.stream(System.getProperty("topKs", "1,10,100").split(","))
+    private static final int[] TOP_K_BUCKETS = Arrays.stream(System.getProperty("resonance.test.topKs", "1,10,100").split(","))
             .mapToInt(Integer::parseInt).toArray();
 
     private static WavePattern randomPattern(int len, ThreadLocalRandom rnd) {
@@ -189,25 +189,39 @@ public class WavePatternLoadTest {
     }
 
     @Test
-    public void concurrentQueryAccuracy() throws Exception {
+    public void concurrentQueryLatencyStats() throws Exception {
         final int TOP_K   = 10;
-        final int THREADS = Runtime.getRuntime().availableProcessors();
+        final int THREADS = Runtime.getRuntime().availableProcessors() * 2;
         final int LOOPS   = QUERY_REPS;
+        final int WARMUP  = Math.max(1, (int) (0.05 * LOOPS)); // 5% warmup
 
         ResonanceEngine.setBackend(new JavaKernel());
+
+        System.out.printf("=== Concurrency TOP‑K Queries from %s ===%n", DB_ROOT);
+        showSystemInfo();
 
         try (WavePatternStoreImpl store = new WavePatternStoreImpl(DB_ROOT)) {
             ExecutorService pool = Executors.newFixedThreadPool(THREADS);
             CountDownLatch latch = new CountDownLatch(THREADS);
             AtomicInteger failures = new AtomicInteger();
+            List<List<Long>> allLatencies = new ArrayList<>(THREADS);
 
             for (int t = 0; t < THREADS; t++) {
+                List<Long> local = new ArrayList<>(LOOPS - WARMUP);
+                allLatencies.add(local);
+
                 pool.submit(() -> {
                     ThreadLocalRandom rnd = ThreadLocalRandom.current();
                     try {
                         for (int i = 0; i < LOOPS; i++) {
-                            WavePattern q   = randomPattern(PATTERN_LEN, rnd);
+                            WavePattern q = randomPattern(PATTERN_LEN, rnd);
+                            long start = System.nanoTime();
                             List<ResonanceMatch> hits = store.query(q, TOP_K);
+                            long end = System.nanoTime();
+
+                            if (i >= WARMUP) {
+                                local.add(end - start);
+                            }
 
                             if (hits.size() > TOP_K) {
                                 failures.incrementAndGet();
@@ -234,7 +248,33 @@ public class WavePatternLoadTest {
 
             latch.await();
             pool.shutdown();
+
+            List<Long> samples = allLatencies.stream()
+                    .flatMap(Collection::stream)
+                    .sorted()
+                    .toList();
+
+            int count = samples.size();
+            if (count == 0) throw new AssertionError("No latency samples collected");
+
+            double avgMs = samples.stream().mapToLong(Long::longValue).average().orElse(0) / 1_000_000.0;
+            double p50 = samples.get(count / 2) / 1_000_000.0;
+            double p95 = samples.get((int)(count * 0.95)) / 1_000_000.0;
+            double p99 = samples.get((int)(count * 0.99)) / 1_000_000.0;
+            double max = samples.get(count - 1) / 1_000_000.0;
+
+            System.out.printf("""
+            Queries executed:  %,d
+            Avg latency   (ms): %.3f
+            P50 latency   (ms): %.3f
+            P95 latency   (ms): %.3f
+            P99 latency   (ms): %.3f
+            Max latency   (ms): %.3f
+            """, count, avgMs, p50, p95, p99, max);
+
             assertEquals(0, failures.get(), "Inaccuracies detected in concurrent results");
         }
     }
+
+
 }

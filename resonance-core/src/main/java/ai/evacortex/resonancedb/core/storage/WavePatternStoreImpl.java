@@ -42,7 +42,7 @@ import java.util.stream.Stream;
 @SuppressWarnings("resource")
 public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
-    private static final double BUCKET_WIDTH_RAD = Double.parseDouble(System.getProperty("segment.bucketRad", "0.2"));
+    private static final double BUCKET_WIDTH_RAD = Double.parseDouble(System.getProperty("resonance.segment.bucketRad", "0.2"));
     private static final double READ_EPSILON = 0.1;
     private static final float EXACT_MATCH_EPS = 1e-6f;
 
@@ -74,11 +74,12 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         this.compactor = new DefaultSegmentCompactor(manifest, metaStore, rootDir.resolve("segments"), globalLock);
         this.segmentGroups = new ConcurrentHashMap<>();
         this.tracer = new NoOpTracer();
-        this.executor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+        this.executor = Executors.newWorkStealingPool();
         this.scheduler = Executors.newScheduledThreadPool(1);
         loadAllWritersFromManifest();
         this.shardSelectorRef = new AtomicReference<>(createShardSelector());
-        scheduler.scheduleAtFixedRate(() -> segmentGroups.keySet().forEach(this::compactPhase), 10, 5, TimeUnit.MINUTES);
+        scheduler.scheduleAtFixedRate(() ->
+                segmentGroups.keySet().forEach(this::compactPhase), 10, 5, TimeUnit.MINUTES);
     }
 
     @Override
@@ -187,7 +188,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
             try {
                 SegmentWriter oldWriter = null;
-                if (!oldLoc.segmentName().equals(result.writer().getSegmentName()) || oldLoc.offset() != result.offset()) {
+                if (!oldLoc.segmentName().equals(result.writer().getSegmentName())
+                        || oldLoc.offset() != result.offset()) {
                     oldWriter = getOrCreateWriter(oldLoc.segmentName());
                     oldWriter.markDeleted(oldLoc.offset());
                     oldWriter.flush();
@@ -244,14 +246,10 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                     .thenComparing((HeapItem h) -> h.match().energy(), Comparator.reverseOrder())
                     .thenComparing(h -> h.match().id());
 
-            List<CompletableFuture<List<HeapItem>>> futures = getAllWritersStream()
-                    .map(writer -> CompletableFuture.supplyAsync(() ->
-                            collectMatchesFromWriter(writer, query, queryId, topK), executor))
-                    .toList();
-
-            List<HeapItem> collected = futures.stream()
-                    .flatMap(f -> f.join().stream())
-                    .toList();
+            List<SegmentWriter> writers = getAllWritersStream().toList();
+            ForkJoinPool pool = (ForkJoinPool) executor;
+            List<HeapItem> collected =
+                    pool.invoke(new MatchQueryTask(writers, query, queryId, topK, 0, writers.size()));
 
             return deduplicateTopK(collected, h -> h.match().id(), order, topK)
                     .stream()
@@ -270,14 +268,10 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                     .thenComparing((HeapItemDetailed h) -> h.match().energy(), Comparator.reverseOrder())
                     .thenComparing(h -> h.match().id());
 
-            List<CompletableFuture<List<HeapItemDetailed>>> futures = getAllWritersStream()
-                    .map(writer -> CompletableFuture.supplyAsync(() ->
-                            collectDetailedFromWriter(writer, query, queryId, topK), executor))
-                    .toList();
-
-            List<HeapItemDetailed> collected = futures.stream()
-                    .flatMap(f -> f.join().stream())
-                    .toList();
+            List<SegmentWriter> writers = getAllWritersStream().toList();
+            ForkJoinPool pool = (ForkJoinPool) executor;
+            List<HeapItemDetailed> collected =
+                    pool.invoke(new DetailedMatchQueryTask(writers, query, queryId, topK, 0, writers.size()));
 
             return deduplicateTopK(collected, h -> h.match().id(), order, topK)
                     .stream()
@@ -314,7 +308,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     }
 
     @Override
-    public List<ResonanceMatchDetailed> queryCompositeDetailed(List<WavePattern> patterns, List<Double> weights, int topK) {
+    public List<ResonanceMatchDetailed> queryCompositeDetailed(List<WavePattern> patterns, List<Double> weights,
+                                                               int topK) {
         Objects.requireNonNull(patterns, "patterns must not be null");
         if (patterns.isEmpty()) throw new InvalidWavePatternException("Empty pattern list in composite query");
 
@@ -401,12 +396,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         String groupKey = segmentName.contains("-") ?
                 segmentName.split("-")[0] : segmentName.replace(".segment", "");
 
-        PhaseSegmentGroup group = segmentGroups.computeIfAbsent(groupKey, key ->
-                new PhaseSegmentGroup(
-                        key,
-                        rootDir.resolve("segments"),
-                        this.compactor
-                )
+        PhaseSegmentGroup group = segmentGroups.computeIfAbsent(groupKey,
+                key -> new PhaseSegmentGroup(key, rootDir.resolve("segments"), this.compactor)
         );
 
         return group.getWritable();
@@ -414,7 +405,9 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
     private PhaseShardSelector createShardSelector() {
         var locations = manifest.getAllLocations();
-        return locations.isEmpty() ? PhaseShardSelector.emptyFallback() : PhaseShardSelector.fromManifest(locations, READ_EPSILON);
+        return locations.isEmpty()
+                ? PhaseShardSelector.emptyFallback()
+                : PhaseShardSelector.fromManifest(locations, READ_EPSILON);
     }
 
     private void rebuildShardSelector() {
@@ -428,7 +421,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     }
 
     private PhaseSegmentGroup getOrCreateGroup(String baseName) {
-        return segmentGroups.computeIfAbsent(baseName, name -> new PhaseSegmentGroup(name, rootDir.resolve("segments"), compactor));
+        return segmentGroups.computeIfAbsent(baseName,
+                name -> new PhaseSegmentGroup(name, rootDir.resolve("segments"), compactor));
     }
 
     private void registerSegment(SegmentWriter w) {
@@ -552,6 +546,91 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             segmentGroups.values().forEach(group -> group.getAll().forEach(this::safeClose));
             manifest.flush();
             metaStore.flush();
+        }
+    }
+
+    private abstract static class QueryTask<T> extends RecursiveTask<List<T>> {
+        final List<SegmentWriter> writers;
+        private final int from;
+        private final int to;
+        private final int threshold;
+
+        protected QueryTask(List<SegmentWriter> writers, int from, int to, int threshold) {
+            this.writers = writers;
+            this.from = from;
+            this.to = to;
+            this.threshold = threshold;
+        }
+
+        protected abstract List<T> process(SegmentWriter writer);
+
+        @Override
+        protected List<T> compute() {
+            if (to - from <= threshold) {
+                List<T> results = new ArrayList<>();
+                for (int i = from; i < to; i++) {
+                    results.addAll(process(writers.get(i)));
+                }
+                return results;
+            } else {
+                int mid = (from + to) >>> 1;
+                QueryTask<T> left = cloneFor(from, mid);
+                QueryTask<T> right = cloneFor(mid, to);
+                left.fork();
+                List<T> rightResult = right.compute();
+                List<T> leftResult = left.join();
+                leftResult.addAll(rightResult);
+                return leftResult;
+            }
+        }
+
+        protected abstract QueryTask<T> cloneFor(int from, int to);
+    }
+
+    private class MatchQueryTask extends QueryTask<HeapItem> {
+        private final WavePattern query;
+        private final String queryId;
+        private final int topK;
+
+        public MatchQueryTask(List<SegmentWriter> writers, WavePattern query, String queryId, int topK, int from, int to) {
+            super(writers, from, to, 1);
+            this.query = query;
+            this.queryId = queryId;
+            this.topK = topK;
+        }
+
+        @Override
+        protected List<HeapItem> process(SegmentWriter writer) {
+            return collectMatchesFromWriter(writer, query, queryId, topK);
+        }
+
+        @Override
+        protected QueryTask<HeapItem> cloneFor(int from, int to) {
+            return new MatchQueryTask(this.writers, query, queryId, topK, from, to);
+        }
+
+    }
+
+    private class DetailedMatchQueryTask extends QueryTask<HeapItemDetailed> {
+        private final WavePattern query;
+        private final String queryId;
+        private final int topK;
+
+        public DetailedMatchQueryTask(List<SegmentWriter> writers, WavePattern query, String queryId, int topK, int from, int to) {
+            super(writers, from, to, 1);
+            this.query = query;
+            this.queryId = queryId;
+            this.topK = topK;
+        }
+
+        @Override
+        protected List<HeapItemDetailed> process(SegmentWriter writer) {
+            return collectDetailedFromWriter(writer, query, queryId, topK);
+        }
+
+        @Override
+        protected QueryTask<HeapItemDetailed> cloneFor(int from, int to) {
+            return new DetailedMatchQueryTask(this.writers, query, queryId, topK, from, to);
         }
     }
 }

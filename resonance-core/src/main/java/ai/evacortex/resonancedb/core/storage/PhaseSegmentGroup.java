@@ -23,7 +23,7 @@ import java.util.stream.Collectors;
 
 public class PhaseSegmentGroup {
 
-    private static final long MAX_SEG_BYTES = Long.parseLong(System.getProperty("segment.maxBytes", "" + (64L << 20)));
+    private static final long MAX_SEG_BYTES = Long.parseLong(System.getProperty("resonance.segment.maxBytes", "" + (64L << 20)));
     private final AtomicInteger seq = new AtomicInteger();
     private volatile SegmentWriter current;
     private final String baseName;
