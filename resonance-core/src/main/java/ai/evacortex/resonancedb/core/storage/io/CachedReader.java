@@ -23,6 +23,7 @@ import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
 public class CachedReader implements AutoCloseable {
@@ -38,6 +39,9 @@ public class CachedReader implements AutoCloseable {
     private final long lastOffset;
     private final long weightInBytes;
     private volatile boolean closed = false;
+
+    private final AtomicInteger refCount = new AtomicInteger(0);
+    private final Object unmapLock = new Object();
 
     private CachedReader(Path path, FileChannel channel, MappedByteBuffer mmap,
                          Map<String, Long> offsetMap, long lastOffset, long weightInBytes) {
@@ -171,13 +175,38 @@ public class CachedReader implements AutoCloseable {
         }
     }
 
+    public void acquire() {
+        synchronized (unmapLock) {
+            if (closed) {
+                throw new IllegalStateException("Attempted to acquire closed CachedReader for " + path);
+            }
+            refCount.incrementAndGet();
+        }
+    }
+
+    public void release() {
+        synchronized (unmapLock) {
+            int remaining = refCount.decrementAndGet();
+            if (remaining < 0) {
+                throw new IllegalStateException("CachedReader refCount below zero for " + path);
+            }
+            if (closed && remaining == 0) {
+                Buffers.unmap(mmap);
+            }
+        }
+    }
+
     @Override
     public void close() {
-        closed = true;
-        try {
-            Buffers.unmap(mmap);
-            channel.close();
-        } catch (IOException ignored) {
+        synchronized (unmapLock) {
+            closed = true;
+            try {
+                channel.close();
+            } catch (IOException ignored) {}
+
+            if (refCount.get() == 0) {
+                Buffers.unmap(mmap);
+            }
         }
     }
 }

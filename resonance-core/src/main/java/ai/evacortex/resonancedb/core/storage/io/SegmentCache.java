@@ -54,7 +54,7 @@ public class SegmentCache implements Closeable {
         CachedReader reader = cache.getIfPresent(key);
         if (reader == null) return null;
         try {
-            reader.ensureOpen();
+            reader.acquire();
             return reader;
         } catch (IllegalStateException e) {
             cache.invalidate(key);

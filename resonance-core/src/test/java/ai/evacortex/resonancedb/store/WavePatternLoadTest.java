@@ -13,6 +13,7 @@ import ai.evacortex.resonancedb.core.engine.ResonanceEngine;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
 import ai.evacortex.resonancedb.core.storage.WavePatternStoreImpl;
 import ai.evacortex.resonancedb.core.storage.responce.ResonanceMatch;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -30,13 +31,13 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-//@Disabled("Smoke benchmark — run manually from IDE")
+@Disabled("Smoke benchmark — run manually from IDE")
 public class WavePatternLoadTest {
 
-    private static final int PATTERN_COUNT = Integer.getInteger("patterns", 100_000_000);
-    private static final int PATTERN_LEN = Integer.getInteger("length", 512);
+    private static final int PATTERN_COUNT = Integer.getInteger("patterns", 500_000);
+    private static final int PATTERN_LEN = Integer.getInteger("length", 1024);
     private static final int QUERY_REPS = Integer.getInteger("queries", 100);
-    private static final Path DB_ROOT = Paths.get(System.getProperty("resonance.test.dir", "C:\\Users\\Aleksandr\\Downloads\\S64xL512x100k\\resdb-load"));
+    private static final Path DB_ROOT = Paths.get(System.getProperty("resonance.test.dir", "C:\\ResonanceDB\\S64xL1024x500k"));
 
     private static final int[] TOP_K_BUCKETS = Arrays.stream(System.getProperty("resonance.test.topKs", "1,10,100").split(","))
             .mapToInt(Integer::parseInt).toArray();
@@ -190,10 +191,10 @@ public class WavePatternLoadTest {
 
     @Test
     public void concurrentQueryLatencyStats() throws Exception {
-        final int TOP_K   = 10;
+        final int TOP_K = 10;
         final int THREADS = Runtime.getRuntime().availableProcessors() * 2;
-        final int LOOPS   = QUERY_REPS;
-        final int WARMUP  = Math.max(1, (int) (0.05 * LOOPS)); // 5% warmup
+        final int LOOPS = QUERY_REPS;
+        final int WARMUP = Math.max(1, (int) (0.05 * LOOPS)); // 5% warmup
 
         ResonanceEngine.setBackend(new JavaKernel());
 
@@ -259,22 +260,88 @@ public class WavePatternLoadTest {
 
             double avgMs = samples.stream().mapToLong(Long::longValue).average().orElse(0) / 1_000_000.0;
             double p50 = samples.get(count / 2) / 1_000_000.0;
-            double p95 = samples.get((int)(count * 0.95)) / 1_000_000.0;
-            double p99 = samples.get((int)(count * 0.99)) / 1_000_000.0;
+            double p95 = samples.get((int) (count * 0.95)) / 1_000_000.0;
+            double p99 = samples.get((int) (count * 0.99)) / 1_000_000.0;
             double max = samples.get(count - 1) / 1_000_000.0;
 
             System.out.printf("""
-            Queries executed:  %,d
-            Avg latency   (ms): %.3f
-            P50 latency   (ms): %.3f
-            P95 latency   (ms): %.3f
-            P99 latency   (ms): %.3f
-            Max latency   (ms): %.3f
-            """, count, avgMs, p50, p95, p99, max);
+                    Queries executed:  %,d
+                    Avg latency   (ms): %.3f
+                    P50 latency   (ms): %.3f
+                    P95 latency   (ms): %.3f
+                    P99 latency   (ms): %.3f
+                    Max latency   (ms): %.3f
+                    """, count, avgMs, p50, p95, p99, max);
 
             assertEquals(0, failures.get(), "Inaccuracies detected in concurrent results");
         }
     }
 
+    @Test
+    public void incrementalInsertQueryBenchmark() throws Exception {
+        final int TOTAL = PATTERN_COUNT;
+        final int CHUNK = Math.max(TOTAL / 10, 1);
+        final int THREADS = Runtime.getRuntime().availableProcessors();
 
+        System.out.printf("=== Incremental Insert + Query Benchmark ===%n");
+        showSystemInfo();
+
+        ResonanceEngine.setBackend(new JavaKernel());
+
+        try (WavePatternStoreImpl store = new WavePatternStoreImpl(DB_ROOT)) {
+            ExecutorService pool = Executors.newFixedThreadPool(THREADS);
+            AtomicInteger inserted = new AtomicInteger();
+            List<Long> insertTimes = Collections.synchronizedList(new ArrayList<>());
+            List<Long> queryTimes = Collections.synchronizedList(new ArrayList<>());
+
+            for (int phase = 1; phase <= 10; phase++) {
+                int start = (phase - 1) * CHUNK;
+                int end = Math.min(phase * CHUNK, TOTAL);
+                CountDownLatch latch = new CountDownLatch(end - start);
+                ThreadLocalRandom rnd = ThreadLocalRandom.current();
+
+                for (int i = start; i < end; i++) {
+                    pool.submit(() -> {
+                        try {
+                            WavePattern wp = randomPattern(PATTERN_LEN, rnd);
+                            long t0 = System.nanoTime();
+                            store.insert(wp, Collections.emptyMap());
+                            long t1 = System.nanoTime();
+                            insertTimes.add(t1 - t0);
+                            WavePattern q = randomPattern(PATTERN_LEN, rnd);
+                            long t2 = System.nanoTime();
+                            store.query(q, 10);
+                            long t3 = System.nanoTime();
+                            queryTimes.add(t3 - t2);
+                        } catch (Exception e) {
+                            e.printStackTrace();
+                        } finally {
+                            latch.countDown();
+                            inserted.incrementAndGet();
+                        }
+                    });
+                }
+
+                latch.await();
+
+                System.out.printf("[%3d%%] DB size: %,d | Insert avg: %.3f ms | Query avg: %.3f ms | P99: %.3f ms%n",
+                        phase * 10,
+                        inserted.get(),
+                        insertTimes.stream().mapToLong(Long::longValue).average().orElse(0) / 1e6,
+                        queryTimes.stream().mapToLong(Long::longValue).average().orElse(0) / 1e6,
+                        percentile(queryTimes, 99));
+
+                insertTimes.clear();
+                queryTimes.clear();
+            }
+
+            pool.shutdown();
+            if (!pool.awaitTermination(3, TimeUnit.MINUTES)) {
+                System.err.println("Executor did not terminate in time.");
+            }
+        }
+
+        System.out.printf("Finished at: %s%n",
+                LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+    }
 }

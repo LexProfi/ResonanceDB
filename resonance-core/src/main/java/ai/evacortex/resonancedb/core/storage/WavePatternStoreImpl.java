@@ -31,6 +31,7 @@ import ai.evacortex.resonancedb.core.storage.util.NoOpTracer;
 
 import java.io.Closeable;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
@@ -43,6 +44,7 @@ import java.util.stream.Stream;
 public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
     private static final double BUCKET_WIDTH_RAD = Double.parseDouble(System.getProperty("resonance.segment.bucketRad", "0.2"));
+    private static final boolean FLUSH_ASYNC = Boolean.parseBoolean(System.getProperty("resonance.flush.async", "false"));
     private static final double READ_EPSILON = 0.1;
     private static final float EXACT_MATCH_EPS = 1e-6f;
 
@@ -60,6 +62,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
     private final ExecutorService executor;
     private final ScheduledExecutorService scheduler;
+    private final FlushDispatcher flushDispatcher;
 
     private record HeapItem(ResonanceMatch match, float priority) {}
     private record HeapItemDetailed(ResonanceMatchDetailed match, double priority) {}
@@ -80,6 +83,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         this.shardSelectorRef = new AtomicReference<>(createShardSelector());
         scheduler.scheduleAtFixedRate(() ->
                 segmentGroups.keySet().forEach(this::compactPhase), 10, 5, TimeUnit.MINUTES);
+        this.flushDispatcher = FLUSH_ASYNC ? new FlushDispatcher(Duration.ofMillis(5)) : null;
     }
 
     @Override
@@ -490,20 +494,31 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         }
     }
 
-    private <T> List<T> collectTopK(SegmentWriter writer, int topK, Function<CachedReader, Stream<T>> supplier,
+    private <T> List<T> collectTopK(SegmentWriter writer, int topK,
+                                    Function<CachedReader, Stream<T>> supplier,
                                     Comparator<? super T> comparator) {
         CachedReader reader = readerCache.get(writer.getSegmentName());
         if (reader == null) return List.of();
 
-        PriorityQueue<T> heap = new PriorityQueue<>(topK, comparator);
-        supplier.apply(reader).forEach(item -> {
-            if (heap.size() < topK) heap.add(item);
-            else if (comparator.compare(item, heap.peek()) > 0) {
-                heap.poll();
-                heap.add(item);
+        reader.acquire();
+        try {
+            PriorityQueue<T> heap = new PriorityQueue<>(topK, comparator);
+            try (Stream<T> stream = supplier.apply(reader)) {
+                stream.forEach(item -> {
+                    if (heap.size() < topK) {
+                        heap.add(item);
+                    } else if (comparator.compare(item, heap.peek()) > 0) {
+                        heap.poll();
+                        heap.add(item);
+                    }
+                });
             }
-        });
-        return new ArrayList<>(heap);
+            return new ArrayList<>(heap);
+        } catch (IllegalStateException e) {
+            return List.of();
+        } finally {
+            reader.release();
+        }
     }
 
     private <T> List<T> deduplicateTopK(List<T> items, Function<T, String> idExtractor, Comparator<? super T> order,
@@ -531,6 +546,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             scheduler.shutdownNow();
             Thread.currentThread().interrupt();
         }
+        if (flushDispatcher != null) flushDispatcher.close();
     }
 
     private void safeClose(SegmentWriter writer) {
