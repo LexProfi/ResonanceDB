@@ -96,6 +96,12 @@
       "created": "2025-08-19T06:45:22Z",
       "updated": "2025-08-19T06:45:22Z",
       "sha256": "5a8b508fdc1ef8febdc9bea2f7a30cc0c57d29b3637a88506ace5d8ee1519dad"
+    },
+    {
+      "version": "1.0.1",
+      "created": "2025-08-19T06:45:22Z",
+      "updated": "2025-08-19T13:20:16Z",
+      "sha256": "1f962ac6e60a9f786b36cde3c351c16bd237a4973449bf9591aa91aad92b6f10"
     }
   ]
 }
