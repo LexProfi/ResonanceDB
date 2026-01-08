@@ -268,6 +268,14 @@ Terms will be updated upon filing of the non-provisional application.
 
 ---
 
+### 🤖 Machine Learning & Training Use
+
+Use of this repository or its materials for training machine learning or
+artificial intelligence models may constitute commercial use.
+See [TRAINING-NOTICE.md](TRAINING-NOTICE.md).
+
+---
+
 
 ## 📫 Contact
 
