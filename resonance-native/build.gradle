@@ -1,20 +1,212 @@
-apply plugin: 'java'
+plugins {
+    id 'base'
+}
 
-java {
-    toolchain {
-        languageVersion = JavaLanguageVersion.of(22)
+def os = org.gradle.internal.os.OperatingSystem.current()
+def isWindows = os.isWindows()
+def isMac     = os.isMacOsX()
+def isLinux   = os.isLinux()
+def cc        = (project.hasProperty('cc') ? project.property('cc') : (isMac ? "clang" : "gcc")) as String
+def useOpenMP = !(project.hasProperty('openmp') && project.property('openmp') == 'false')
+def enableAvx2 = !(project.hasProperty('avx2') && project.property('avx2') == 'false')
+def enableFastMath = !(project.hasProperty('fastmath') && project.property('fastmath') == 'false')
+
+def libName = {
+    if (isWindows) return "resonance.dll"
+    if (isMac)     return "libresonance.dylib"
+    return "libresonance.so"
+}.call()
+
+def outputDir  = file("$buildDir/native")
+def outputLib  = file("$outputDir/${libName}")
+def sourceC    = file("src/main/c/compare.c")
+def sleefInclude = file(System.getenv('RES_SLEEF_INCLUDE') ?: "libs/include")
+def sleefLib     = file(System.getenv('RES_SLEEF_LIB')     ?: "libs/lib/libsleef.a")
+def sleefDllPath = System.getenv('RES_SLEEF_DLL')
+
+tasks.register('buildNativeLib', Exec) {
+    group = "build"
+    description = "Compiles the resonance native shared library for the current OS"
+    boolean debugMode = project.hasProperty('nativeDebug') && project.property('nativeDebug') == 'true'
+    doFirst {
+        if (!sourceC.exists()) {
+            throw new GradleException("C source not found: ${sourceC}")
+        }
+        if (!sleefInclude.exists()) {
+            throw new GradleException("SLEEF headers not found: ${sleefInclude}. Expected include dir with Sleef headers.")
+        }
+        if (!sleefLib.exists()) {
+            throw new GradleException("SLEEF library not found: ${sleefLib}. Set RES_SLEEF_LIB or place libsleef.(a|dll.a) in libs/lib/")
+        }
+        outputDir.mkdirs()
+        def commonFlags = [
+                "-Wall",
+                "-Wextra",
+                "-Wno-attributes",
+                "-I", sleefInclude.absolutePath
+        ]
+        if (enableAvx2) {
+            commonFlags += ["-mavx2", "-mfma"]
+        }
+        if (isWindows || isLinux) {
+            commonFlags += ["-mstackrealign"]
+        }
+        def optFlags = debugMode ? [
+                "-O0",
+                "-g",
+                "-DDEBUG=1",
+                "-DDEBUG_MODE=1",
+                "-fno-omit-frame-pointer"
+        ] : [
+                "-O3",
+                "-DNDEBUG"
+        ]
+        if (!debugMode && enableFastMath) {
+            optFlags += ["-ffast-math", "-fno-math-errno", "-fno-trapping-math"]
+        }
+        def platformFlags = []
+        def linkerFlags   = []
+
+        if (isWindows) {
+            platformFlags += ["-shared"]
+            commonFlags   += ["-D_WIN32_WINNT=0x0601"]
+            linkerFlags   += ["-lm"]
+            if (useOpenMP) {
+                commonFlags += ["-fopenmp"]
+                linkerFlags += ["-fopenmp"]
+            }
+        } else if (isMac) {
+            platformFlags += ["-fPIC", "-dynamiclib", "-mmacosx-version-min=10.15"]
+            linkerFlags   += ["-lpthread", "-lm"]
+            if (useOpenMP) {
+                commonFlags += ["-Xpreprocessor", "-fopenmp"]
+                linkerFlags += ["-lomp"]
+            }
+        } else {
+            platformFlags += ["-fPIC", "-shared"]
+            linkerFlags   += ["-lpthread", "-lm", "-Wl,--as-needed", "-Wl,--no-undefined"]
+        }
+        boolean sleefIsImportLib = sleefLib.name.endsWith("dll.a")
+        boolean sleefIsStatic = sleefLib.name.endsWith(".a") && !sleefIsImportLib
+        if (sleefIsStatic) {
+            commonFlags += ["-DSLEEF_STATIC_LIBS", "-DSLEEF_STATIC_CONST_TABLES"]
+        }
+        if (debugMode && !isWindows) {
+            optFlags    += ["-fsanitize=address,undefined", "-fno-optimize-sibling-calls"]
+            linkerFlags += ["-fsanitize=address,undefined"]
+        }
+        def cmd = [cc] + commonFlags + optFlags + platformFlags + [
+                "-o", outputLib.absolutePath,
+                sourceC.absolutePath,
+                sleefLib.absolutePath
+        ] + linkerFlags
+
+        commandLine cmd
+        logger.lifecycle("Building native library with:\n${cmd.join(' ')}")
+    }
+
+    workingDir = projectDir
+    ignoreExitValue = false
+    outputs.file(outputLib)
+
+    doLast {
+        if (!outputLib.exists()) {
+            throw new GradleException("Failed to build native library: ${outputLib}")
+        }
+
+        if (isWindows) {
+            try {
+                def peCheck = ["objdump","-p", outputLib.absolutePath].execute()
+                peCheck.waitFor()
+                if (peCheck.exitValue() == 0 && !peCheck.text.contains("DLL")) {
+                    throw new GradleException("Built file does not look like a DLL (objdump).")
+                }
+            } catch (Exception e) {
+                logger.warn("Skipping objdump check: ${e.message}")
+            }
+        } else {
+            def f = ["file", outputLib.absolutePath].execute().text
+            if (!(f.contains("shared object") || f.contains("Mach-O"))) {
+                throw new GradleException("Invalid shared library format: ${f}")
+            }
+        }
     }
 }
 
-dependencies {
-    implementation project(':resonance-core')
+tasks.register('copyNativeLib', Copy) {
+    group = "build"
+    description = "Copies compiled native library (and optional SLEEF DLL) into resources path expected by NativeCompare"
+    dependsOn 'buildNativeLib'
+
+    from outputDir
+    into file("$buildDir/resources/main/native")
+    include libName
+
+    doLast {
+        if (sleefDllPath) {
+            def dll = file(sleefDllPath)
+            if (dll.exists()) {
+                copy {
+                    from dll
+                    into file("$buildDir/resources/main/native")
+                }
+                logger.lifecycle("SLEEF runtime DLL copied to: $buildDir/resources/main/native/${dll.name}")
+            } else {
+                logger.warn("RES_SLEEF_DLL is set, but file not found: ${sleefDllPath}")
+            }
+        }
+        logger.lifecycle("Native library copied to resources: ${destinationDir}/native/${libName}")
+    }
 }
 
-def nativeLibName = "libresonance.so"
+tasks.register('validateNativeLib') {
+    group = "verification"
+    description = "Validates the native library binary layout"
+    dependsOn 'buildNativeLib'
 
-tasks.register('buildNativeLib', Exec) {
-    workingDir = file("src/main/c")
-    commandLine "gcc", "-O3", "-mavx2", "-fPIC", "-shared", "-lm", "-o", "../../libs/${nativeLibName}", "compare.c"
+    doLast {
+        def lib = outputLib.absolutePath
+        if (isWindows) {
+            if (!file(lib).exists() || file(lib).length() <= 0) {
+                throw new GradleException("Built DLL not found or empty: ${lib}")
+            }
+        } else {
+            def result = ["file", lib].execute().text
+            if (!result.contains("shared object") && !result.contains("Mach-O")) {
+                throw new GradleException("Invalid shared library format: ${result}")
+            }
+        }
+    }
 }
 
-tasks.build.dependsOn 'buildNativeLib'
+tasks.register('cleanNative', Delete) {
+    group = "build"
+    description = "Cleans native build artifacts"
+    delete outputDir
+}
+
+tasks.build {
+    dependsOn 'copyNativeLib'
+    finalizedBy 'validateNativeLib'
+}
+
+if (isWindows) {
+    tasks.withType(Exec).configureEach {
+        doFirst {
+            try {
+                def ccCheck = "${cc} --version".execute()
+                ccCheck.waitFor()
+                if (ccCheck.exitValue() != 0) {
+                    throw new GradleException("""
+                        ${cc} not found in PATH. For Windows, install MinGW-w64:
+                        https://www.mingw-w64.org/
+                        and add it to your PATH.
+                    """.stripIndent())
+                }
+                logger.lifecycle("Using C compiler:\n${ccCheck.text}")
+            } catch (IOException e) {
+                throw new GradleException("Failed to check C compiler version", e)
+            }
+        }
+    }
+}

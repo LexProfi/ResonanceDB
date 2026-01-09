@@ -170,7 +170,7 @@ public class CachedReader implements AutoCloseable {
 
 
     public void ensureOpen() {
-        if (closed) {
+        if (closed && refCount.get() == 0) {
             throw new IllegalStateException("Attempted to access closed CachedReader for " + path);
         }
     }

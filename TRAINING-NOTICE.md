@@ -123,7 +123,9 @@ No implied consent or implied license is granted by publication of this reposito
 
 ResonanceDB is subject to one or more **pending patent applications** covering certain techniques described or implemented in the Materials.
 
-**No patent license is granted at this time**, whether express or implied.
+No patent license is granted beyond what is expressly provided
+under the Prosperity Public License 3.0, and any such license
+applies only while the user remains in full compliance with its terms.
 
 Use of the Materials to develop or train machine learning systems that implement, approximate, reproduce, or are derived from techniques described in this repository **may implicate patent rights**, even if the resulting implementation differs technically.
 

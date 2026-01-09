@@ -8,12 +8,9 @@
  */
 package ai.evacortex.resonancedb.store;
 
-import ai.evacortex.resonancedb.core.engine.JavaKernel;
-import ai.evacortex.resonancedb.core.engine.ResonanceEngine;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
 import ai.evacortex.resonancedb.core.storage.WavePatternStoreImpl;
 import ai.evacortex.resonancedb.core.storage.responce.ResonanceMatch;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -31,13 +28,13 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-@Disabled("Smoke benchmark — run manually from IDE")
+//@Disabled("Smoke benchmark — run manually from IDE")
 public class WavePatternLoadTest {
 
-    private static final int PATTERN_COUNT = Integer.getInteger("patterns", 500_000);
-    private static final int PATTERN_LEN = Integer.getInteger("length", 1024);
+    private static final int PATTERN_COUNT = Integer.getInteger("patterns", 200_000);
+    private static final int PATTERN_LEN = Integer.getInteger("length", 1536);
     private static final int QUERY_REPS = Integer.getInteger("queries", 100);
-    private static final Path DB_ROOT = Paths.get(System.getProperty("resonance.test.dir", "C:\\ResonanceDB\\S64xL1024x500k"));
+    private static final Path DB_ROOT = Paths.get(System.getProperty("resonance.test.dir", "D:\\ResonanceDB\\S64xL1536x200k"));
 
     private static final int[] TOP_K_BUCKETS = Arrays.stream(System.getProperty("resonance.test.topKs", "1,10,100").split(","))
             .mapToInt(Integer::parseInt).toArray();
@@ -76,6 +73,10 @@ public class WavePatternLoadTest {
         System.out.printf("OS   : %s %s%n", System.getProperty("os.name"), System.getProperty("os.version"));
         System.out.printf("CPU  : %d logical cores%n", Runtime.getRuntime().availableProcessors());
         System.out.printf("JVM  : %s %s%n", System.getProperty("java.vm.name"), System.getProperty("java.version"));
+        var rt = java.lang.management.ManagementFactory.getRuntimeMXBean();
+        System.out.println("JVM args: " + rt.getInputArguments());
+        System.out.println("Heap: max=" + (Runtime.getRuntime().maxMemory() / (1024*1024)) + " MB");
+        System.out.println("Kernel: " + (Boolean.parseBoolean(System.getProperty("resonance.kernel.native")) ? "NativeKernel" : "JavaKernel"));
         long maxMemory = Runtime.getRuntime().maxMemory();
         long totalMemoryMB = maxMemory / (1024 * 1024);
         System.out.printf("RAM  : ~%d MB (max JVM heap)%n", totalMemoryMB);
@@ -86,7 +87,6 @@ public class WavePatternLoadTest {
         Files.createDirectories(DB_ROOT);
         System.out.printf("=== GENERATE %,d x L=%s patterns to %s ===%n", PATTERN_COUNT, PATTERN_LEN, DB_ROOT);
         showSystemInfo();
-        ResonanceEngine.setBackend(new JavaKernel());
 
         try (WavePatternStoreImpl store = new WavePatternStoreImpl(DB_ROOT)) {
             int threads = Runtime.getRuntime().availableProcessors();
@@ -146,7 +146,6 @@ public class WavePatternLoadTest {
     @Test
     public void runTopKQueries() throws Exception {
 
-        ResonanceEngine.setBackend(new JavaKernel());
         System.out.printf("=== TOP‑K Queries from %s ===%n", DB_ROOT);
         showSystemInfo();
         try (WavePatternStoreImpl store = new WavePatternStoreImpl(DB_ROOT)) {
@@ -190,13 +189,64 @@ public class WavePatternLoadTest {
     }
 
     @Test
+    public void compareQueryLatencyWithAndWithoutPhaseRouting() throws Exception {
+        System.out.printf("=== Phase-Routed vs Full-Scan Queries from %s ===%n", DB_ROOT);
+        showSystemInfo();
+
+        try (WavePatternStoreImpl store = new WavePatternStoreImpl(DB_ROOT)) {
+            Path segmentsDir = DB_ROOT.resolve("segments");
+            warmUpSSD(segmentsDir);
+
+            long totalBytes = Files.walk(segmentsDir)
+                    .filter(Files::isRegularFile)
+                    .mapToLong(p -> {
+                        try {
+                            return Files.size(p);
+                        } catch (IOException e) {
+                            return 0L;
+                        }
+                    }).sum();
+
+            System.out.printf("Database size: %.2f MB%n", totalBytes / 1024.0 / 1024.0);
+            ThreadLocalRandom rnd = ThreadLocalRandom.current();
+
+            for (int k : TOP_K_BUCKETS) {
+                for (boolean fullScan : new boolean[]{true, false}) {
+                    String label = fullScan ? "Full‑Scan" : "Phase‑Routed";
+                    System.out.printf("Running %,d queries for top‑%d [%s]...\n", QUERY_REPS, k, label);
+                    List<Long> times = new ArrayList<>(QUERY_REPS);
+
+                    for (int i = 0; i < QUERY_REPS; i++) {
+                        WavePattern q = randomPattern(PATTERN_LEN, rnd);
+                        if (fullScan) {
+                            double[] phase0 = new double[PATTERN_LEN];
+                            Arrays.fill(phase0, 0.0);
+                            q = new WavePattern(q.amplitude(), phase0);
+                        }
+
+                        long t0 = System.nanoTime();
+                        store.query(q, k);
+                        times.add(System.nanoTime() - t0);
+                    }
+
+                    System.out.printf("TOP %3d [%s] | p50 %.3f ms | p95 %.3f | avg %.3f%n%n",
+                            k, label,
+                            percentile(times, 50),
+                            percentile(times, 95),
+                            times.stream().mapToLong(Long::longValue).average().orElse(0) / 1e6);
+                }
+            }
+
+            System.out.printf("Finished at: %s%n", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+        }
+    }
+
+    @Test
     public void concurrentQueryLatencyStats() throws Exception {
         final int TOP_K = 10;
         final int THREADS = Runtime.getRuntime().availableProcessors() * 2;
         final int LOOPS = QUERY_REPS;
         final int WARMUP = Math.max(1, (int) (0.05 * LOOPS)); // 5% warmup
-
-        ResonanceEngine.setBackend(new JavaKernel());
 
         System.out.printf("=== Concurrency TOP‑K Queries from %s ===%n", DB_ROOT);
         showSystemInfo();
@@ -285,8 +335,6 @@ public class WavePatternLoadTest {
 
         System.out.printf("=== Incremental Insert + Query Benchmark ===%n");
         showSystemInfo();
-
-        ResonanceEngine.setBackend(new JavaKernel());
 
         try (WavePatternStoreImpl store = new WavePatternStoreImpl(DB_ROOT)) {
             ExecutorService pool = Executors.newFixedThreadPool(THREADS);

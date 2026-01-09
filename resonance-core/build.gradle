@@ -21,6 +21,12 @@ dependencies {
     implementation 'com.github.ben-manes.caffeine:caffeine:3.2.0'
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
     testImplementation 'org.mockito:mockito-core:5.11.0'
+
+
+
+    if (project.hasProperty("withNative")) {
+        implementation project(':resonance-native')
+    }
 }
 
 tasks.withType(JavaCompile).configureEach {
@@ -28,6 +34,132 @@ tasks.withType(JavaCompile).configureEach {
     options.release = 22
 }
 
-test {
+tasks.withType(Test).configureEach {
     useJUnitPlatform()
+    maxParallelForks = 1
+    forkEvery = 0
+    testLogging {
+        events = []
+        showStandardStreams = false
+        exceptionFormat = 'short'
+    }
+
+    def kernel  = (project.findProperty('kernel') ?: 'java').toString().toLowerCase()
+    def preset  = (project.findProperty('preset') ?: 'ide').toString().toLowerCase()
+    systemProperty 'resonance.kernel.native', (kernel == 'native') ? 'true' : 'false'
+    systemProperty 'file.encoding', 'UTF-8'
+    systemProperty 'user.language', 'ru'
+    systemProperty 'user.country',  'RU'
+    systemProperty 'bench.warmupIters', '10'
+
+    def baseArgs = [
+            '--enable-preview',
+            '--enable-native-access=ALL-UNNAMED',
+            '-XX:ActiveProcessorCount=12',
+            '-XX:+PerfDisableSharedMem',
+            '-XX:+DisableAttachMechanism',
+            '-XX:+AlwaysPreTouch'
+    ]
+
+    def heapArgs
+    if (preset == 'heavy') {
+        heapArgs = [
+                '-Xms2g', '-Xmx4g',
+                '-XX:+UseZGC',
+                '-XX:+ZGenerational',
+                '-XX:ZUncommitDelay=30s'
+        ]
+    } else {
+        heapArgs = [
+                '-Xms512m', '-Xmx512m',
+                '-XX:+UseG1GC',
+                '-XX:G1HeapRegionSize=8m',
+                '-XX:MaxGCPauseMillis=100'
+        ]
+    }
+
+    enableAssertions = false
+    jvmArgs = baseArgs + heapArgs
+
+    doFirst {
+        println ">>> Test JVM args: ${jvmArgs}"
+        println ">>> resonance.kernel.native=${(kernel == 'native')}"
+        println ">>> preset=${preset}"
+    }
+}
+
+tasks.register('testJavaPerf', Test) {
+    description = "Run performance tests with JavaKernel (preset=ide)"
+    group = "verification"
+
+    useJUnitPlatform()
+    maxParallelForks = 1
+    forkEvery = 0
+
+    systemProperty 'resonance.kernel.native', 'false'
+    systemProperty 'file.encoding', 'UTF-8'
+    systemProperty 'user.language', 'ru'
+    systemProperty 'user.country',  'RU'
+
+    jvmArgs = [
+            '--enable-preview',
+            '--enable-native-access=ALL-UNNAMED',
+            '-Xms512m', '-Xmx512m',
+            '-XX:+UseG1GC',
+            '-XX:G1HeapRegionSize=8m',
+            '-XX:MaxGCPauseMillis=100'
+    ]
+
+    testLogging.showStandardStreams = true
+}
+
+tasks.register('testNativePerf', Test) {
+    description = "Run performance tests with NativeKernel (preset=ide)"
+    group = "verification"
+
+    useJUnitPlatform()
+    maxParallelForks = 1
+    forkEvery = 0
+
+    systemProperty 'resonance.kernel.native', 'true'
+    systemProperty 'file.encoding', 'UTF-8'
+    systemProperty 'user.language', 'ru'
+    systemProperty 'user.country',  'RU'
+
+    jvmArgs = [
+            '--enable-preview',
+            '--enable-native-access=ALL-UNNAMED',
+            '-Xms512m', '-Xmx512m',
+            '-XX:+UseG1GC',
+            '-XX:G1HeapRegionSize=8m',
+            '-XX:MaxGCPauseMillis=100'
+    ]
+
+    testLogging.showStandardStreams = true
+}
+
+tasks.register('testJavaPerfHeavy', Test) {
+    description = "Run performance tests with JavaKernel (preset=heavy)"
+    group = "verification"
+
+    useJUnitPlatform()
+    maxParallelForks = 1
+    forkEvery = 0
+
+    systemProperty 'resonance.kernel.native', 'false'
+    systemProperty 'file.encoding', 'UTF-8'
+    systemProperty 'user.language', 'ru'
+    systemProperty 'user.country',  'RU'
+
+    jvmArgs = [
+            '--enable-preview',
+            '--enable-native-access=ALL-UNNAMED',
+            '-Xms2g', '-Xmx4g',
+            '-XX:+UseZGC',
+            '-XX:+ZGenerational',
+            '-XX:ZUncommitDelay=30s',
+            '-XX:+AlwaysPreTouch'
+    ]
+
+    testLogging.showStandardStreams = true
 }

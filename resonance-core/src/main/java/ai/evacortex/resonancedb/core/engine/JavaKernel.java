@@ -10,9 +10,10 @@ package ai.evacortex.resonancedb.core.engine;
 
 import ai.evacortex.resonancedb.core.storage.responce.ComparisonResult;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
-import ai.evacortex.resonancedb.core.math.Complex;
 
 import java.util.List;
+import java.util.Objects;
+import java.util.stream.IntStream;
 
 public final class JavaKernel implements ResonanceKernel {
 
@@ -22,39 +23,46 @@ public final class JavaKernel implements ResonanceKernel {
     }
 
     @Override
-    public float compare(WavePattern a,
-                         WavePattern b,
-                         CompareOptions options) {
+    public float compare(WavePattern a, WavePattern b, CompareOptions options) {
+        Objects.requireNonNull(a, "a must not be null");
+        Objects.requireNonNull(b, "b must not be null");
+        Objects.requireNonNull(options, "options must not be null");
 
-        if (a == null || b == null) {
-            throw new NullPointerException("patterns must not be null");
+        double[] aA = a.amplitude(), aP = a.phase();
+        double[] bA = b.amplitude(), bP = b.phase();
+
+        final int len = aA.length;
+        if (len != aP.length || len != bA.length || len != bP.length) {
+            throw new IllegalArgumentException("Mismatched lengths");
         }
 
-        Complex[] sa = toComplexWithOptions(a, options);
-        Complex[] sb = toComplexWithOptions(b, options);
+        double eA = 0.0, eB = 0.0, inter = 0.0;
 
-        if (sa.length != sb.length) {
-            throw new IllegalArgumentException("Mismatched lengths: " + sa.length + " vs " + sb.length);
+        if (options.ignorePhase()) {
+            for (int i = 0; i < len; i++) {
+                double A1 = aA[i], A2 = bA[i];
+                double A1sq = A1 * A1, A2sq = A2 * A2;
+                eA += A1sq;
+                eB += A2sq;
+                inter += (A1 + A2) * (A1 + A2);
+            }
+        } else {
+            for (int i = 0; i < len; i++) {
+                double A1 = aA[i], A2 = bA[i];
+                double A1sq = A1 * A1, A2sq = A2 * A2;
+                eA += A1sq;
+                eB += A2sq;
+                double dphi = bP[i] - aP[i];
+                inter += A1sq + A2sq + 2.0 * A1 * A2 * Math.cos(dphi);
+            }
         }
 
-        double energyA = 0.0;
-        double energyB = 0.0;
-        double interference = 0.0;
+        double denom = eA + eB;
+        if (denom == 0.0) return 0.0f;
 
-        for (int i = 0; i < sa.length; i++) {
-            Complex c1 = sa[i];
-            Complex c2 = sb[i];
-            energyA      += c1.absSquared();
-            energyB      += c2.absSquared();
-            interference += c1.add(c2).absSquared();
-        }
-
-        if (energyA + energyB == 0.0) return 0.0f;
-
-        double base = 0.5 * interference / (energyA + energyB);
-        double ampFactor = 2.0 * Math.sqrt(energyA * energyB) / (energyA + energyB);
-
-        return (float) (base * ampFactor);
+        double base = 0.5 * inter / denom;
+        double ampF = (eA > 0.0 && eB > 0.0) ? 2.0 * Math.sqrt(eA * eB) / denom : 0.0;
+        return (float) (base * ampF);
     }
 
     @Override
@@ -63,70 +71,87 @@ public final class JavaKernel implements ResonanceKernel {
     }
 
     @Override
-    public float[] compareMany(WavePattern query, List<WavePattern> candidates, CompareOptions options) {
-        if (query == null || candidates == null) {
-            throw new NullPointerException("query and candidates must not be null");
-        }
+    public float[] compareMany(WavePattern q, List<WavePattern> cands, CompareOptions options) {
+        Objects.requireNonNull(q, "query must not be null");
+        Objects.requireNonNull(cands, "candidates must not be null");
+        Objects.requireNonNull(options, "options must not be null");
 
-        float[] results = new float[candidates.size()];
-        for (int i = 0; i < candidates.size(); i++) {
-            results[i] = compare(query, candidates.get(i), options);
-        }
-        return results;
-    }
+        final double[] qA = q.amplitude(), qP = q.phase();
+        final int len = qA.length;
+        if (len != qP.length) throw new IllegalArgumentException("Query length mismatch");
 
-    private Complex[] toComplexWithOptions(WavePattern pattern, CompareOptions options) {
-        Complex[] complex = pattern.toComplex();
-
-        if (options.ignorePhase()) {
-            for (int i = 0; i < complex.length; i++) {
-                double mag = complex[i].abs();
-                complex[i] = new Complex(mag, 0.0);
+        for (int i = 0, n = cands.size(); i < n; i++) {
+            WavePattern b = Objects.requireNonNull(cands.get(i), "candidate[" + i + "] is null");
+            double[] bA = b.amplitude(), bP = b.phase();
+            if (bA.length != len || bP.length != len) {
+                throw new IllegalArgumentException("Candidate length mismatch at index " + i);
             }
         }
 
-        return complex;
+        final boolean ignorePhase = options.ignorePhase();
+        final int n = cands.size();
+        final float[] out = new float[n];
+
+        IntStream.range(0, n).forEach(i -> {
+            WavePattern b = cands.get(i);
+            double[] bA = b.amplitude(), bP = b.phase();
+
+            double eA = 0.0, eB = 0.0, inter = 0.0;
+
+            if (ignorePhase) {
+                for (int k = 0; k < len; k++) {
+                    double A1 = qA[k], A2 = bA[k];
+                    double A1sq = A1 * A1, A2sq = A2 * A2;
+                    eA += A1sq; eB += A2sq;
+                    inter += (A1 + A2) * (A1 + A2);
+                }
+            } else {
+                for (int k = 0; k < len; k++) {
+                    double A1 = qA[k], A2 = bA[k];
+                    double A1sq = A1 * A1, A2sq = A2 * A2;
+                    eA += A1sq; eB += A2sq;
+                    inter += A1sq + A2sq + 2.0 * A1 * A2 * Math.cos(bP[k] - qP[k]);
+                }
+            }
+
+            double denom = eA + eB;
+            out[i] = (denom == 0.0) ? 0.0f
+                    : (float) ((0.5 * inter / denom) *
+                    ((eA > 0.0 && eB > 0.0) ? (2.0 * Math.sqrt(eA * eB) / denom) : 0.0));
+        });
+
+        return out;
     }
 
     @Override
     public ComparisonResult compareWithPhaseDelta(WavePattern a, WavePattern b) {
-        Complex[] wave1 = a.toComplex();
-        Complex[] wave2 = b.toComplex();
+        Objects.requireNonNull(a, "a must not be null");
+        Objects.requireNonNull(b, "b must not be null");
 
-        if (wave1.length != wave2.length)
+        double[] aA = a.amplitude(), aP = a.phase();
+        double[] bA = b.amplitude(), bP = b.phase();
+        final int len = aA.length;
+        if (len != aP.length || len != bA.length || len != bP.length) {
             throw new IllegalArgumentException("Pattern length mismatch");
-
-        double phaseDeltaSum = 0.0;
-        double energyNumerator = 0.0;
-        double energyDenominator = 0.0;
-
-        for (int i = 0; i < wave1.length; i++) {
-            Complex c1 = wave1[i];
-            Complex c2 = wave2[i];
-
-            Complex sum = c1.add(c2);
-            energyNumerator += sum.absSquared();
-
-            double e1 = c1.absSquared();
-            double e2 = c2.absSquared();
-            energyDenominator += e1 + e2;
-
-            double delta = normalizePhase(c2.phase() - c1.phase());
-            phaseDeltaSum += delta;
         }
 
-        float energy = (energyDenominator == 0.0)
-                ? 0.0f
-                : (float)(0.5 * energyNumerator / energyDenominator);
+        double eA = 0.0, eB = 0.0, inter = 0.0, dSum = 0.0;
 
-        double avgPhaseDelta = phaseDeltaSum / wave1.length;
+        for (int i = 0; i < len; i++) {
+            double A1 = aA[i], A2 = bA[i];
+            double A1sq = A1 * A1, A2sq = A2 * A2;
+            eA += A1sq; eB += A2sq;
 
-        return new ComparisonResult(energy, avgPhaseDelta);
-    }
+            double dphi = bP[i] - aP[i];
+            inter += A1sq + A2sq + 2.0 * A1 * A2 * Math.cos(dphi);
 
-    private static double normalizePhase(double delta) {
-        while (delta <= -Math.PI) delta += 2 * Math.PI;
-        while (delta > Math.PI) delta -= 2 * Math.PI;
-        return delta;
+            while (dphi <= -Math.PI) dphi += 2 * Math.PI;
+            while (dphi >  Math.PI) dphi -= 2 * Math.PI;
+            dSum += dphi;
+        }
+
+        double denom = eA + eB;
+        float energy = (denom == 0.0) ? 0.0f : (float) (0.5 * inter / denom);
+        return new ComparisonResult(energy, dSum / len);
     }
 }

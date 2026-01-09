@@ -16,6 +16,9 @@ import java.util.concurrent.ConcurrentSkipListMap;
 
 public class PhaseShardSelector {
 
+    private static final double PI = Math.PI;
+    private static final double TWO_PI = 2 * Math.PI;
+
     private final NavigableMap<Double, String> phaseShardMap;
     private final double epsilon;
     private final int totalShards;
@@ -25,8 +28,15 @@ public class PhaseShardSelector {
         if (phaseShardMap == null || phaseShardMap.isEmpty())
             throw new IllegalArgumentException("Phase shard map must not be null or empty.");
 
-        this.phaseShardMap = new ConcurrentSkipListMap<>(phaseShardMap);
-        this.epsilon = epsilon;
+        this.phaseShardMap = new ConcurrentSkipListMap<>();
+        for (Map.Entry<Double, String> e : phaseShardMap.entrySet()) {
+            double k = normalizePhase(e.getKey());
+            while (this.phaseShardMap.containsKey(k)) {
+                k = Math.nextUp(k);
+            }
+            this.phaseShardMap.put(k, e.getValue());
+        }
+        this.epsilon = Math.max(0.0, epsilon);
         this.totalShards = phaseShardMap.size();
         this.useExplicitRanges = true;
     }
@@ -46,16 +56,16 @@ public class PhaseShardSelector {
             return routeToShard(pattern);
         } else {
             double meanPhase = Arrays.stream(pattern.phase()).average().orElse(0.0);
-            int shardIndex = Math.floorMod(Double.hashCode(meanPhase * 1000), totalShards);
+            int shardIndex = Math.floorMod(Double.hashCode(meanPhase), totalShards);
             return "phase-" + shardIndex + ".segment";
         }
     }
 
     private String routeToShard(WavePattern pattern) {
-        double avgPhase = Arrays.stream(pattern.phase()).average().orElse(0.0);
+        double avgPhase = normalizePhase(Arrays.stream(pattern.phase()).average().orElse(0.0));
         Map.Entry<Double, String> entry = phaseShardMap.floorEntry(avgPhase);
-        if (entry == null) return phaseShardMap.firstEntry().getValue();
-        return entry.getValue();
+        if (entry != null) return entry.getValue();
+        return phaseShardMap.firstEntry().getValue();
     }
 
     public List<String> getRelevantShards(WavePattern query) {
@@ -63,11 +73,11 @@ public class PhaseShardSelector {
     }
 
     public double[] getPhaseRange(WavePattern pattern) {
-        double avgPhase = Arrays.stream(pattern.phase()).average().orElse(0.0);
+        double avgPhase = normalizePhase(Arrays.stream(pattern.phase()).average().orElse(0.0));
         if (useExplicitRanges) {
-            return new double[] { avgPhase - epsilon, avgPhase + epsilon };
+            return new double[]{ avgPhase - epsilon, avgPhase + epsilon };
         } else {
-            return new double[] { avgPhase, avgPhase };
+            return new double[]{ avgPhase, avgPhase };
         }
     }
 
@@ -79,24 +89,26 @@ public class PhaseShardSelector {
             }
             return Collections.unmodifiableList(result);
         }
-        return new ArrayList<>(phaseShardMap.values());
+        return Collections.unmodifiableList(new ArrayList<>(phaseShardMap.values()));
     }
 
-
     public static PhaseShardSelector fromManifest(Collection<ManifestIndex.PatternLocation> locations, double epsilon) {
-        Map<String, List<Double>> grouped = new HashMap<>();
-        for (ManifestIndex.PatternLocation loc : locations) {
-            grouped.computeIfAbsent(loc.segmentName(), k -> new ArrayList<>()).add(loc.phaseCenter());
-        }
-
         TreeMap<Double, String> map = new TreeMap<>();
-        for (Map.Entry<String, List<Double>> entry : grouped.entrySet()) {
-            String segment = entry.getKey();
-            List<Double> phases = entry.getValue();
-            double avg = phases.stream().mapToDouble(d -> d).average().orElse(0.0);
+        Map<String, double[]> accum = new HashMap<>();
+        for (ManifestIndex.PatternLocation loc : locations) {
+            accum.compute(loc.segmentName(), (k, v) -> {
+                double p = normalizePhase(loc.phaseCenter());
+                if (v == null) return new double[]{p, 1.0};
+                v[0] += p; v[1] += 1.0; return v;
+            });
+        }
+        for (Map.Entry<String, double[]> e : accum.entrySet()) {
+            String segment = e.getKey();
+            double avg = e.getValue()[0] / Math.max(1.0, e.getValue()[1]);
+            avg = normalizePhase(avg);
+            while (map.containsKey(avg)) avg = Math.nextUp(avg);
             map.put(avg, segment);
         }
-
         return new PhaseShardSelector(map, epsilon);
     }
 
@@ -105,7 +117,6 @@ public class PhaseShardSelector {
     }
 
     public String fallbackRouteIfLowCoherence(WavePattern query) {
-        // TODO: implement phase-degrading route fallback logic
         return null;
     }
 
@@ -120,9 +131,7 @@ public class PhaseShardSelector {
 
     public int indexOf(String segmentName) {
         List<String> ord = orderedShardList();
-        for (int i = 0; i < ord.size(); i++) {
-            if (ord.get(i).equals(segmentName)) return i;
-        }
+        for (int i = 0; i < ord.size(); i++) if (ord.get(i).equals(segmentName)) return i;
         return -1;
     }
 
@@ -130,11 +139,40 @@ public class PhaseShardSelector {
         if (!useExplicitRanges) {
             return List.of(selectShard(query));
         }
-        double avg = Arrays.stream(query.phase()).average().orElse(0.0);
-        double min = avg - customEps;
-        double max = avg + customEps;
-        Collection<String> hits = phaseShardMap.subMap(min, true, max, true).values();
-        return new ArrayList<>(hits.isEmpty() ? phaseShardMap.values() : hits);
+        if (phaseShardMap.isEmpty()) return List.of();
+
+        double avg = normalizePhase(Arrays.stream(query.phase()).average().orElse(0.0));
+        double eps = Math.max(0.0, customEps);
+
+        double min = avg - eps;
+        double max = avg + eps;
+
+        List<String> out = new ArrayList<>();
+        if (min < -PI) {
+            out.addAll(phaseShardMap.subMap(-PI, true, clamp(max, -PI, PI), true).values());
+            out.addAll(phaseShardMap.subMap(clamp(min + TWO_PI, -PI, PI), true, PI, true).values());
+        } else if (max > PI) {
+            out.addAll(phaseShardMap.subMap(clamp(min, -PI, PI), true, PI, true).values());
+            out.addAll(phaseShardMap.subMap(-PI, true, clamp(max - TWO_PI, -PI, PI), true).values());
+        } else {
+            out.addAll(phaseShardMap.subMap(clamp(min, -PI, PI), true, clamp(max, -PI, PI), true).values());
+        }
+
+        if (out.isEmpty()) {
+            return new ArrayList<>(phaseShardMap.values());
+        }
+        return new ArrayList<>(new LinkedHashSet<>(out));
+    }
+
+    private static double normalizePhase(double x) {
+        double y = x;
+        while (y <= -PI) y += TWO_PI;
+        while (y >   PI) y -= TWO_PI;
+        return y;
+    }
+
+    private static double clamp(double v, double lo, double hi) {
+        return Math.max(lo, Math.min(hi, v));
     }
 
     @Override

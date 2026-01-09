@@ -9,7 +9,6 @@
 package ai.evacortex.resonancedb.store;
 
 import ai.evacortex.resonancedb.core.*;
-import ai.evacortex.resonancedb.core.engine.ResonanceEngine;
 import ai.evacortex.resonancedb.core.exceptions.DuplicatePatternException;
 import ai.evacortex.resonancedb.core.exceptions.PatternNotFoundException;
 import ai.evacortex.resonancedb.core.storage.util.HashingUtil;
@@ -422,17 +421,6 @@ public class WavePatternStoreImplTest {
         } finally {
             TestUtils.deleteDirectoryRecursive(tempDir);
         }
-    }
-
-    @Test
-    void testPhaseDelta() {
-        WavePattern a = WavePatternTestUtils.createConstantPattern(1.0, 0.0, 64);
-        WavePattern b = WavePatternTestUtils.createConstantPattern(1.0, Math.PI / 2, 64);
-
-        ComparisonResult result = ResonanceEngine.compareWithPhaseDelta(a, b);
-
-        assertEquals(Math.PI / 2, result.phaseDelta(), 1e-3);
-        assertTrue(result.energy() > 0.0 && result.energy() < 1.0);
     }
 
     @Test

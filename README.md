@@ -1,48 +1,80 @@
-# ResonanceDB
-### A waveform-native database for context-resonant retrieval.
+# ResonanceDB  
+**A waveform-native database for context-resonant retrieval**
 
 ---
 
-## About 
+## About
 
-ResonanceDB is a next-generation semantic database designed to store and retrieve meaning-rich patterns using complex-valued waveforms.
-Instead of treating data as static vectors in geometric space, it represents information as structured waveforms - enabling retrieval by resonance, not distance.
+ResonanceDB is a next-generation semantic database designed to store and retrieve meaning-rich patterns using **complex-valued waveforms**.  
+Instead of treating data as static vectors in geometric space, it represents information as structured waveforms — enabling retrieval by **resonance, not distance**.
 
-Queries are resolved via constructive interference between patterns, yielding context-sensitive matches across modalities.
-With phase-sharded storage, memory-mapped segments, and optional SIMD acceleration, the system supports ultra-low latency recall even across millions of entries.
+Queries are resolved via **constructive interference** between patterns, yielding context-sensitive matches across modalities.  
+With **phase-sharded storage**, **memory-mapped segments**, and **optional SIMD acceleration**, the system supports ultra-low-latency recall even across millions of entries.
 
-### What makes it different
+---
+## 🧠 Resonance-Based Retrieval as a Classical Analogue of Grover’s Amplification
 
-| Feature                         | Why it matters                                                                                                                              |
-| ------------------------------- |---------------------------------------------------------------------------------------------------------------------------------------------|
-| **Meaning-first storage**       | Instead of fixed vectors, patterns are stored as waveforms that preserve context, intensity, and structure - closer to how cognition works. |
-| **Resonant retrieval**          | Finds results not by distance but by **interference** - surfacing patterns that align in meaning, not just position.                        |
-| **Phase-sharded scaling**       | Automatically routes patterns by average phase, enabling effortless horizontal growth and blazing-fast parallel search.                     |
-| **Performance-tunable kernels** | Pick Java for portability or native SIMD for speed - both backed by the same core logic.                                                    |
-| **Zero-copy memory**            | Access patterns directly from disk without unpacking - instant recall even on edge devices.                                                 |
-| **Crash-safe writes**           | Every pattern is atomically committed using checksum + commit flag - no corruption, no downtime.                                            |
-| **Modular by design**           | Easy to extend, integrate, or fork - the Gradle workspace is clean, isolated, and ready for evolution.                                      |
+ResonanceDB implements a **classical, software-based analogue of Grover-style amplitude amplification** adapted to semantic and cognitive search spaces.
 
+Unlike traditional vector databases that rely on linear scans or heuristic nearest-neighbor search, ResonanceDB employs a **phase-aware resonance kernel** that selectively enhances the effective contribution of semantically aligned patterns through **constructive interference**.
 
-### Typical use cases
+In this formulation, the resonance comparison mechanism plays a role **analogous to an oracle-guided amplification process**, increasing the relative prominence of coherent matches without requiring quantum hardware or probabilistic measurement.
 
-* **Memory for cognitive agents** - store affective or semantic traces that evolve over time, without reducing them to tokens.
-* **Hybrid reasoning systems** - combine symbolic DAGs with resonant memory for recall that adapts to phase and meaning.
-* **Multimodal AI** - unify image, text, and sensor data using a shared waveform substrate.
-* **Edge-native memory cache** - deploy on-device with zero-deserialization and memory-safe reads.
-* **Exploratory AI research** - prototype alternatives to vector search, embedding similarity, and symbolic memory.
+This approach realizes amplitude-amplification-like behavior within a **memory-mapped, phase-sharded, classical execution environment**, enabling scalable, deterministic retrieval over large semantic datasets.
 
->*See also: [Applications of Wave-Based Memory](./docs/whitepapers/Applications-of-ResonanceDB-in-AGI-Memory-and-Affective-Modeling.md)*
+> **Note:**
+> The specific architecture, algorithms, and execution model used to implement this resonance-based amplification mechanism are developed by EvaCortex Lab and **may be subject to one or more pending patent applications**.
+> No patent license is granted under this repository.
 
-### Technology snapshot
+---
 
-| Layer    | Snapshot                                                                                                                     |
-| -------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| Language | Java 22 + optional native C/SIMD (via Panama FFI)                                                                            |
-| Storage  | `.segment` files with memory-mapped access - each pattern is stored as complex-valued waveform (amplitude + phase)           |
-| Routing  | Patterns are routed by average phase φ̄; optional fallback strategies can be plugged in                                      |
-| Build    | Modular Gradle 8 workspace with clean project boundaries                                                                     |
-| License  | **Prosperity Public License 3.0** - free for non-commercial use; 30-day commercial evaluation                                |
+## What Makes It Different
+
+| Feature | Why It Matters |
+|------|------|
+| Meaning-first storage | Patterns are stored as waveforms preserving context, intensity, and structure — closer to cognitive representations than static vectors. |
+| Resonant retrieval | Results emerge through interference and coherence, not geometric proximity. |
+| Phase-sharded scaling | Patterns are routed by average phase, enabling horizontal scaling and parallel search. |
+| Performance-tunable kernels | Portable Java or native SIMD backends, sharing the same mathematical core. |
+| Zero-copy memory | Patterns are accessed directly from disk via memory mapping — no unpacking or deserialization. |
+| Crash-safe writes | Patterns are atomically committed using checksums and commit flags. |
+| Modular by design | Clean Gradle multi-project structure, easy to extend or integrate. |
+
+---
+
+## Typical Use Cases
+
+- **Memory for cognitive agents** — store semantic or affective traces that evolve over time.
+- **Hybrid reasoning systems** — combine symbolic DAGs with resonant memory.
+- **Multimodal AI** — unify text, image, and sensor data using a shared waveform substrate.
+- **Edge-native memory cache** — deploy on-device with zero-deserialization and memory-safe reads.
+- **Exploratory AI research** — prototype alternatives to vector search and embedding similarity.
+
+See also: *Applications of Wave-Based Memory*
+
+---
+
+## Technology Snapshot
+
+| Layer | Snapshot |
+|------|---------|
+| Language | Java 22 + optional native C/SIMD (via Panama FFI) |
+| Storage | `.segment` files with memory-mapped access; each pattern is stored as amplitude + phase |
+| Routing | Phase-based sharding by mean phase φ̄ |
+| Build | Modular Gradle 8 workspace |
+| License | Prosperity Public License 3.0 (non-commercial; 30-day commercial evaluation) |
+
+---
+
+## ⚡ Why Java 22?
+
+We chose Java 22 not for legacy reasons, but for the **Foreign Function & Memory (Panama) API**.
+
+This allows ResonanceDB to:
+
+* Remove garbage-collector involvement from performance-critical paths by operating on off-heap memory.
+* Approach C-level performance while preserving memory safety and strong encapsulation guarantees.
+* Use tightly packed, interleaved primitive memory layouts optimized for SIMD and CPU cache locality — a design specifically chosen for wave-based semantic processing.
 
 ---
 
@@ -50,8 +82,8 @@ With phase-sharded storage, memory-mapped segments, and optional SIMD accelerati
 
 ### ✅ Requirements
 
-- JDK **22+** (Panama FFI required)
-- GCC (for native `libresonance.so` compilation)
+- JDK 22+ (Panama FFI required)
+- GCC / Clang (for native kernel)
 - Gradle 8+
 
 ---
@@ -60,28 +92,22 @@ With phase-sharded storage, memory-mapped segments, and optional SIMD accelerati
 
 ResonanceDB supports two execution backends for comparing wave patterns:
 
-| Backend       | Description                                 | SIMD Optimized | Platform Dependent |
-|---------------|---------------------------------------------|----------------|---------------------|
-| `JavaKernel`  | Pure Java fallback (portable)               | ❌              | ❌                  |
-| `NativeKernel`| Panama FFI + C (uses `libresonance.so`)     | ✅              | ✅ (Linux/macOS)    |
+| Backend | Description | SIMD Optimized | Platform Dependent |
+|------|-------------|---------------|--------------------|
+| JavaKernel | Pure Java fallback | ❌ | ❌ |
+| NativeKernel | Panama FFI + C (libresonance) | ✅ | ✅ (Linux/macOS) |
 
 ---
 
 ## 🧱 How to Build
 
-### 🛠 1. Build the native library
-
-This step is **only needed if using `NativeKernel`**:
+### 🛠 1. Build the native library (optional)
 
 ```bash
 ./gradlew :resonance-native:buildNativeLib
 ````
 
-It generates `libresonance.so` under `resonance-native/libs/`.
-
-> ✅ Make sure `gcc` is available and your OS supports shared libraries.
-
----
+This generates `libresonance.so` (or platform equivalent) under `resonance-native/libs/`.
 
 ### 🔨 2. Build all modules
 
@@ -97,189 +123,134 @@ It generates `libresonance.so` under `resonance-native/libs/`.
 ./gradlew :resonance-cli:run
 ```
 
-The default CLI will initialize with `NativeKernel` if available.
+The CLI will initialize with `NativeKernel` if available, otherwise fall back to `JavaKernel`.
 
 ---
 
 ## 🔧 Selecting the Resonance Kernel
 
-By design, `resonance-core` is modular and **does not depend on `resonance-native`**.
-This ensures clean architecture and prevents cyclic dependencies.
+`resonance-core` is fully decoupled from `resonance-native`.
 
-You must **explicitly select the backend** in your application (CLI or service entry point):
+You must explicitly select the backend:
 
 ```java
 import ai.evacortex.resonancedb.core.engine.ResonanceEngine;
-import ai.evacortex.resonancedb.nativeffi.NativeKernel; // or JavaKernel
+import ai.evacortex.resonancedb.core.engine.NativeKernel;
 
 public class Main {
     public static void main(String[] args) {
-        ResonanceEngine.setBackend(new NativeKernel()); // or new JavaKernel()
-        ...
+        ResonanceEngine.setBackend(new NativeKernel());
     }
 }
 ```
 
-> ℹ️ If no backend is set, a fallback may be used depending on configuration.
+If no backend is set, a fallback may be used depending on configuration.
 
 ---
 
-## 📘 Example: Manually Creating a WavePattern
-
-To create a wave-based semantic pattern manually:
+## 📘 Example: Creating a WavePattern
 
 ```java
-double[] amplitude = {0.9, 0.6, 0.3, 0.0, 0.1}; // semantic intensity
-double[] phase = {0.0, Math.PI/4, Math.PI/2, Math.PI, 3*Math.PI/2}; // context/modality
+double[] amplitude = {0.9, 0.6, 0.3, 0.0, 0.1};
+double[] phase = {0.0, Math.PI/4, Math.PI/2, Math.PI, 3*Math.PI/2};
 
 WavePattern psi = new WavePattern(amplitude, phase);
-````
-
-Use this pattern to insert into the database or as a query:
-
-```java
 resonanceStore.insert(psi, Map.of("label", "custom input"));
+
 List<ResonanceMatch> results = resonanceStore.query(psi, 10);
 ```
----
-
-## 🛠 Runtime Notes
-
-* When using **`NativeKernel`**, ensure that:
-
-    * `libresonance.so` is compiled and on your `java.library.path`
-    * You are on a supported OS (Linux/macOS); Windows requires `.dll`
-* When using **`JavaKernel`**, no native code is needed
 
 ---
 
 ## 📦 Binary Segment Format
 
-Each `.segment` file in ResonanceDB consists of two parts:
-
-1. **Segment Header** (one per file)
-2. **WavePattern Entries** (multiple per file)
-
-### 🧱 1. Segment Header
-
-The segment begins with a binary header containing file-level metadata and atomicity markers:
+### 🧱 Segment Header
 
 ```
 [Magic (4 B)] [Version (2 B)] [Timestamp (8 B)] [Record Count (4 B)]
-[Last Offset (8 B)] [Checksum (4–32 B)] [Commit Flag (1 B)] [Padding (0–3 B)]
+[Last Offset (8 B)] [Checksum (4–32 B)] [Commit Flag (1 B)] [Padding]
 ```
 
-* `Magic`: fixed ASCII signature `RDSN` (`0x5244534E`)
-* `Version`: segment version (currently 1)
-* `Timestamp`: UNIX time (ms) of creation
-* `Record Count`: number of stored patterns
-* `Last Offset`: file offset of last valid pattern
-* `Checksum`: hash (e.g., CRC32) over all `WavePattern` entries; header and commit flag are excluded
-* `Commit Flag`: written *only after* successful checksum validation
-* Entire header is padded to a multiple of 4 bytes for alignment
+* Magic: `RDSN`
+* Commit flag is written only after successful checksum validation.
 
-> ✅ This header enables atomic validation after crash and supports safe remapping.
+This design enables atomic validation after crash scenarios and safe remapping.
 
 ---
 
-### 🧩 2. WavePattern Entries
-
-Each stored pattern is serialized as:
+### 🧩 WavePattern Entry
 
 ```
-[ID (16 B)] [Length (4 B)] [Reserved (4 B)] [Amplitude[] (8·L B)] [Phase[] (8·L B)]
+[ID (16 B)] [Length (4 B)] [Reserved (4 B)]
+[Amplitude[]] [Phase[]]
 ```
 
-* `ID`: 16-byte MD5 hash derived from `amplitude[] + phase[]`
-* `Length`: number of elements in `amplitude[]` and `phase[]` (must be equal)
-* `Meta Offset`: reserved (currently unused, placeholder for future metadata position)
-* `Amplitude[]`: array of `double` values (IEEE 754, little-endian)
-* `Phase[]`: array of `double` values (same length as amplitude)
-
-Each entry is **8-byte aligned**, and tombstones (logically deleted patterns) are retained structurally but skipped during reads.
+* ID: MD5 hash over amplitude + phase
+* Arrays stored as IEEE-754 doubles
+* Entries are 8-byte aligned
+* Tombstones may be retained but skipped during reads
 
 ---
 
-### 📚 Index and Metadata
+## 📚 Index and Metadata
 
-* **Manifest** (`manifest.idx`): maps each ID to `[segment name, byte offset, mean phase]`
-* **Metadata** (`pattern-meta.json`): stores auxiliary labels, tags, or annotations
-
----
-
-### ⚡ Access Model
-
-* All segments are loaded with `MappedByteBuffer` for **zero-copy** access
-* Reads are parallelized across segments via `PhaseShardSelector`
-* Writes are appended with validation and atomic commit semantics
+* `manifest.idx`: ID → segment, offset, mean phase
+* `pattern-meta.json`: auxiliary labels and annotations
 
 ---
 
 ## 🧭 Shard-Aware Routing
 
-Each `WavePattern` is assigned to a phase shard based on its average phase.  
-Routing is handled via the `PhaseShardSelector`:
-
-- **Explicit range map**: `[phaseStart .. phaseEnd] → segment`
-- **Fallback hash** routing is reserved but not active by default (`TODO` in current implementation).
-
-This enables scalable partitioning of stored waveforms and parallelized queries.
-
----
-
-## 🗺 Roadmap
-
-* [x] Gradle multi-project structure (`core`, `native`, `cli`)
-* [x] Binary storage format (`.segment`, `manifest.idx`)
-* [x] `WavePattern` serialization and ID hashing
-* [x] Panama FFI integration (`compare()` native backend)
-* [x] Configurable kernel backend (`JavaKernel`, `NativeKernel`)
-* [x] `query(WavePattern, topK)` with scoring and self-match boost
-* [x] Shard-aware routing and phase-based segment indexing
-* [x] Thread-safe in-memory caches
-* [ ] CLI interface for insert/update/query
-* [ ] Optional: Index caching (pluggable; not yet integrated)
+Each pattern is assigned to a shard based on average phase.
+Routing is handled by `PhaseShardSelector`, enabling parallel search and scalable growth.
 
 ---
 
 ## 📄 License & Commercial Use
 
-* The **core software** is licensed under the [Prosperity Public License 3.0](./LICENSE),
-  which permits **non-commercial use only**.
+Licensed under the **Prosperity Public License 3.0**.
 
-> 🔒 **Commercial use beyond a 30-day evaluation period requires a paid license.**
-> To obtain a commercial license, contact: [license@evacortex.ai](mailto:license@evacortex.ai)
+* Free for non-commercial use
+* Commercial use beyond 30 days requires a paid license
 
-* All **whitepapers and documentation** located in the `docs/` directory are licensed under the
-  [Creative Commons Attribution-NoDerivatives 4.0 International (CC BY-ND 4.0)](./LICENSE-docs) license.
-> 📄 The **whitepapers** may describe techniques or algorithms that are part of a pending patent application.  
-> Use of those methods in commercial products requires proper licensing, even if the implementation differs.
+Contact: **[license@evacortex.ai](mailto:license@evacortex.ai)**
+
+Documentation and whitepapers are licensed under **CC BY-ND 4.0**.
+
 ---
-
 
 ## 🧠 Patent Status
 
-A **provisional U.S. patent application** related to ResonanceDB was filed on **June 18, 2025** (USPTO), establishing legal priority.
+A provisional U.S. patent application related to ResonanceDB was filed on **June 18, 2025**.
 
-> Covered by one or more pending patents. Contact: [license@evacortex.ai](mailto:license@evacortex.ai)
+Certain techniques described here **may be covered by one or more pending patent applications**.
 
-No patent license is granted at this time.  
-Terms will be updated upon filing of the non-provisional application.
-
----
-
-### 🤖 Machine Learning & Training Use
-
-Use of this repository or its materials for training machine learning or
-artificial intelligence models may constitute commercial use.
-See [TRAINING-NOTICE.md](TRAINING-NOTICE.md).
+At present, no patents have been granted in connection with ResonanceDB.
+Any patent license, if and when applicable, is limited to the scope
+expressly provided under the Prosperity Public License 3.0 and applies
+only while you remain in full compliance with its terms.
 
 ---
 
+## 🤖 Machine Learning & Training Use
+
+Use of this repository or its materials for training, fine-tuning, or evaluating machine learning models **may constitute commercial use**.
+
+See `TRAINING-NOTICE.md`.
+In case of conflict, the LICENSE file controls.
+
+---
+
+## 🛡️ Algorithmic Integrity
+
+ResonanceDB exhibits a distinctive algorithmic structure arising from its phase-aware resonance model and SIMD-oriented execution.
+
+These characteristics may, in principle, produce identifiable computational or statistical signatures when replicated at scale.
+
+---
 
 ## 📫 Contact
 
-* Author: [Aleksandr Listopad](mailto:license@evacortex.ai)
-* Security & Licensing: `license@evacortex.ai`
-* SPDX Identifier: `SPDX-License-Identifier: Prosperity-3.0`
-
+**Author:** Aleksandr Listopad
+**Security & Licensing:** [license@evacortex.ai](mailto:license@evacortex.ai)
+**SPDX:** Prosperity-3.0
