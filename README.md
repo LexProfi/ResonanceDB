@@ -207,14 +207,17 @@ Routing is handled by `PhaseShardSelector`, enabling parallel search and scalabl
 
 ## 📄 License & Commercial Use
 
-Licensed under the **Prosperity Public License 3.0**.
+Licensed under the [Prosperity Public License 3.0](./LICENSE).
 
 * Free for non-commercial use
 * Commercial use beyond 30 days requires a paid license
 
 Contact: **[license@evacortex.ai](mailto:license@evacortex.ai)**
 
-Documentation and whitepapers are licensed under **CC BY-ND 4.0**.
+* All **whitepapers and documentation** located in the `docs/` directory are licensed under the
+  [Creative Commons Attribution-NoDerivatives 4.0 International (CC BY-ND 4.0)](./LICENSE-docs) license.
+> 📄 The **whitepapers** may describe techniques or algorithms that are part of a pending patent application.  
+> Use of those methods in commercial products may require separate patent licensing, even if the implementation differs.
 
 ---
 
@@ -235,8 +238,8 @@ only while you remain in full compliance with its terms.
 
 Use of this repository or its materials for training, fine-tuning, or evaluating machine learning models **may constitute commercial use**.
 
-See `TRAINING-NOTICE.md`.
-In case of conflict, the LICENSE file controls.
+See [TRAINING-NOTICE.md](./TRAINING-NOTICE.md).
+In case of conflict, the [LICENSE](./LICENSE) file controls.
 
 ---
 
