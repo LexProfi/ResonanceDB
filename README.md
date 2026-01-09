@@ -23,8 +23,7 @@ In this formulation, the resonance comparison mechanism plays a role **analogous
 This approach realizes amplitude-amplification-like behavior within a **memory-mapped, phase-sharded, classical execution environment**, enabling scalable, deterministic retrieval over large semantic datasets.
 
 > **Note:**
-> Note:
-The specific architecture, algorithms, and execution model used to implement this resonance-based amplification mechanism are developed by EvaCortex Lab and may be subject to one or more pending patent
+> The specific architecture, algorithms, and execution model used to implement this resonance-based amplification mechanism are developed by EvaCortex Lab and may be subject to one or more pending patent
 applications. Any patent license, if and when applicable, is limited to the scope expressly provided under the Prosperity Public License 3.0 and applies only while you remain in full compliance with its terms.
 ---
 
