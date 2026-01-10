@@ -21,8 +21,10 @@ ResonanceDB exhibits **amplitude-amplification-like behavior in a classical, det
 Unlike traditional vector databases that rely on linear scans, approximate nearest-neighbor heuristics, or purely geometric proximity, ResonanceDB employs a **phase-aware resonance kernel**.  
 This kernel selectively enhances the effective contribution of semantically aligned patterns through **single-pass, phase-coherent accumulation and interference-style aggregation**.
 
-The resulting behavior is **analogous** to amplitude amplification:  
+The resulting behavior is **functionally analogous** to amplitude amplification:
 coherent matches gain relative prominence, while incoherent or weakly aligned patterns are suppressed — without requiring quantum hardware, probabilistic measurement, or stochastic sampling.
+
+This analogy is descriptive rather than algorithmic and does not imply equivalence to any known quantum algorithm or quantum computational model.
 
 This mechanism operates within a **memory-mapped, phase-sharded, classical execution model**, enabling scalable and fully deterministic retrieval over large semantic datasets.
 
