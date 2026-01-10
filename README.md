@@ -8,35 +8,58 @@
 ResonanceDB is a next-generation semantic database designed to store and retrieve meaning-rich patterns using **complex-valued waveforms**.  
 Instead of treating data as static vectors in geometric space, it represents information as structured waveforms — enabling retrieval by **resonance, not distance**.
 
-Queries are resolved via **constructive interference** between patterns, yielding context-sensitive matches across modalities.  
-With **phase-sharded storage**, **memory-mapped segments**, and **optional SIMD acceleration**, the system supports ultra-low-latency recall even across millions of entries.
+Queries are resolved via **phase-coherent scoring and constructive interference** between patterns, yielding context-sensitive matches across modalities.  
+With **phase-sharded storage**, **memory-mapped segments**, and **optional SIMD acceleration**, the system supports ultra-low-latency, deterministic recall even across millions of entries.
 
 ---
-## 🧠 Resonance-Based Retrieval as a Classical Analogue of Grover’s Amplification
 
-ResonanceDB implements a **classical, software-based analogue of Grover-style amplitude amplification** adapted to semantic and cognitive search spaces.
+## 🧠 Resonance-Based Retrieval  
+### A Classical Analogue of Amplitude Amplification
 
-Unlike traditional vector databases that rely on linear scans or heuristic nearest-neighbor search, ResonanceDB employs a **phase-aware resonance kernel** that selectively enhances the effective contribution of semantically aligned patterns through **constructive interference**.
+ResonanceDB exhibits **amplitude-amplification-like behavior in a classical, deterministic execution environment**, adapted to semantic and cognitive search spaces.
 
-In this formulation, the resonance comparison mechanism plays a role **analogous to an oracle-guided amplification process**, increasing the relative prominence of coherent matches without requiring quantum hardware or probabilistic measurement.
+Unlike traditional vector databases that rely on linear scans, approximate nearest-neighbor heuristics, or purely geometric proximity, ResonanceDB employs a **phase-aware resonance kernel**.  
+This kernel selectively enhances the effective contribution of semantically aligned patterns through **single-pass, phase-coherent accumulation and interference-style aggregation**.
 
-This approach realizes amplitude-amplification-like behavior within a **memory-mapped, phase-sharded, classical execution environment**, enabling scalable, deterministic retrieval over large semantic datasets.
+The resulting behavior is **analogous** to amplitude amplification:  
+coherent matches gain relative prominence, while incoherent or weakly aligned patterns are suppressed — without requiring quantum hardware, probabilistic measurement, or stochastic sampling.
 
-> **Note:**
-> The specific architecture, algorithms, and execution model used to implement this resonance-based amplification mechanism are developed by EvaCortex Lab and may be subject to one or more pending patent
-applications. Any patent license, if and when applicable, is limited to the scope expressly provided under the Prosperity Public License 3.0 and applies only while you remain in full compliance with its terms.
+This mechanism operates within a **memory-mapped, phase-sharded, classical execution model**, enabling scalable and fully deterministic retrieval over large semantic datasets.
+
+> **Note:**  
+> The specific architecture, algorithms, and execution model used to implement this resonance-based amplification mechanism are developed by EvaCortex Lab and may be subject to one or more pending patent applications.  
+> No patent rights are granted except as expressly provided under the Prosperity Public License 3.0. Any such rights apply only while you remain in full compliance with its terms.
+
+---
+
+## 🔬 Amplitude-Balanced Resonance Normalization
+
+ResonanceDB’s scoring mechanism combines **phase-coherent inner-product accumulation** with an **explicit amplitude-balancing normalization**.
+
+In addition to directional (phase) alignment, the resonance score incorporates a normalization factor based on the **ratio between geometric and arithmetic energy means** of the compared patterns.  
+This design penalizes large energy (scale) imbalance even when directional alignment is high.
+
+As a result:
+
+- Patterns that are directionally aligned but vastly different in overall intensity do **not** receive artificially maximal scores.
+- Semantic stability improves in mixed-intensity or heterogeneous datasets.
+- The resulting score reflects both **coherence** and **balanced contribution**, rather than angle alone.
+
+While individual components of this mechanism resemble normalized inner products known from signal processing, the **combined amplitude-balanced, phase-aware scoring behavior** differs from standard cosine similarity and produces materially different ranking dynamics.
+
 ---
 
 ## What Makes It Different
 
 | Feature | Why It Matters |
 |------|------|
-| Meaning-first storage | Patterns are stored as waveforms preserving context, intensity, and structure — closer to cognitive representations than static vectors. |
-| Resonant retrieval | Results emerge through interference and coherence, not geometric proximity. |
-| Phase-sharded scaling | Patterns are routed by average phase, enabling horizontal scaling and parallel search. |
-| Performance-tunable kernels | Portable Java or native SIMD backends, sharing the same mathematical core. |
+| Waveform representation | Patterns are stored as amplitude + phase, preserving intensity, structure, and context — closer to cognitive representations than static vectors. |
+| Phase-coherent scoring | Retrieval is driven by interference-style aggregation, not purely geometric proximity. |
+| Amplitude-balanced normalization | Explicitly penalizes scale dominance, stabilizing semantic relevance under energy imbalance. |
+| Phase-sharded scaling | Patterns are routed by mean phase, enabling horizontal scaling and parallel search. |
+| Deterministic kernel interface | Java and native SIMD backends share the same mathematical contract and scoring behavior. |
 | Zero-copy memory | Patterns are accessed directly from disk via memory mapping — no unpacking or deserialization. |
-| Crash-safe writes | Patterns are atomically committed using checksums and commit flags. |
+| Crash-safe writes | Atomic commits using checksums and commit flags ensure safe recovery after failures. |
 | Modular by design | Clean Gradle multi-project structure, easy to extend or integrate. |
 
 ---
@@ -58,7 +81,7 @@ See also: *Applications of Wave-Based Memory*
 | Layer | Snapshot |
 |------|---------|
 | Language | Java 22 + optional native C/SIMD (via Panama FFI) |
-| Storage | `.segment` files with memory-mapped access; each pattern is stored as amplitude + phase |
+| Storage | `.segment` files with memory-mapped access; amplitude + phase per pattern |
 | Routing | Phase-based sharding by mean phase φ̄ |
 | Build | Modular Gradle 8 workspace |
 | License | Prosperity Public License 3.0 (non-commercial; 30-day commercial evaluation) |
@@ -67,13 +90,13 @@ See also: *Applications of Wave-Based Memory*
 
 ## ⚡ Why Java 22?
 
-We chose Java 22 not for legacy reasons, but for the **Foreign Function & Memory (Panama) API**.
+ResonanceDB uses Java 22 for its **Foreign Function & Memory (Panama) API**, not for legacy reasons.
 
-This allows ResonanceDB to:
+This enables:
 
-* Remove garbage-collector involvement from performance-critical paths by operating on off-heap memory.
-* Approach C-level performance while preserving memory safety and strong encapsulation guarantees.
-* Use tightly packed, interleaved primitive memory layouts optimized for SIMD and CPU cache locality — a design specifically chosen for wave-based semantic processing.
+- Off-heap operation without garbage-collector involvement on critical paths.
+- Near-C performance while preserving memory safety and strong encapsulation.
+- Tightly packed, interleaved primitive layouts optimized for SIMD and CPU cache locality — specifically chosen for waveform-based semantic processing.
 
 ---
 
@@ -81,20 +104,18 @@ This allows ResonanceDB to:
 
 ### ✅ Requirements
 
-- JDK 22+ (Panama FFI required)
+- JDK 22 +
 - GCC / Clang (for native kernel)
-- Gradle 8+
+- Gradle 8 +
 
 ---
 
 ## 🧩 Kernel Modes: Java vs Native
 
-ResonanceDB supports two execution backends for comparing wave patterns:
-
 | Backend | Description | SIMD Optimized | Platform Dependent |
 |------|-------------|---------------|--------------------|
 | JavaKernel | Pure Java fallback | ❌ | ❌ |
-| NativeKernel | Panama FFI + C (libresonance) | ✅ | ✅ (Linux/macOS) |
+| NativeKernel | Panama FFI + C (`libresonance`) | ✅ | ✅ (Linux/macOS) |
 
 ---
 
@@ -122,15 +143,11 @@ This generates `libresonance.so` (or platform equivalent) under `resonance-nativ
 ./gradlew :resonance-cli:run
 ```
 
-The CLI will initialize with `NativeKernel` if available, otherwise fall back to `JavaKernel`.
+The CLI initializes with `NativeKernel` if available, otherwise falls back to `JavaKernel`.
 
 ---
 
 ## 🔧 Selecting the Resonance Kernel
-
-`resonance-core` is fully decoupled from `resonance-native`.
-
-You must explicitly select the backend:
 
 ```java
 import ai.evacortex.resonancedb.core.engine.ResonanceEngine;
@@ -142,8 +159,6 @@ public class Main {
     }
 }
 ```
-
-If no backend is set, a fallback may be used depending on configuration.
 
 ---
 
@@ -162,18 +177,18 @@ List<ResonanceMatch> results = resonanceStore.query(psi, 10);
 ---
 
 ## 📦 Binary Segment Format
-
 ### 🧱 Segment Header
 
 ```
 [Magic (4 B)] [Version (2 B)] [Timestamp (8 B)] [Record Count (4 B)]
-[Last Offset (8 B)] [Checksum (4–32 B)] [Commit Flag (1 B)] [Padding]
+[Last Offset (8 B)] [Checksum (implementation-dependent)] [Commit Flag (1 B)] [Padding]
 ```
 
-* Magic: `RDSN`
-* Commit flag is written only after successful checksum validation.
+* **Magic:** `RDSN`
+* **Checksum:** implementation-dependent (e.g., CRC32, truncated hash)
+* **Commit flag** is written **only after successful checksum validation**
 
-This design enables atomic validation after crash scenarios and safe remapping.
+This layout enables **atomic segment validation** after crash scenarios and safe remapping of memory-mapped files without partial-write ambiguity.
 
 ---
 
@@ -184,40 +199,38 @@ This design enables atomic validation after crash scenarios and safe remapping.
 [Amplitude[]] [Phase[]]
 ```
 
-* ID: MD5 hash over amplitude + phase
-* Arrays stored as IEEE-754 doubles
-* Entries are 8-byte aligned
-* Tombstones may be retained but skipped during reads
+* **ID:** MD5 hash over amplitude + phase (content-addressed)
+* **Amplitude / Phase:** IEEE-754 `double`
+* **Alignment:** 8-byte aligned
+* **Tombstones:** may be retained for crash safety and compaction, but are skipped during reads
 
 ---
 
-## 📚 Index and Metadata
+## 📚 Index & Metadata
 
-* `manifest.idx`: ID → segment, offset, mean phase
-* `pattern-meta.json`: auxiliary labels and annotations
+* **`manifest.idx`** — maps `ID → (segment, offset, mean phase)`
+* **`pattern-meta.json`** — auxiliary labels, annotations, and external metadata
 
 ---
 
 ## 🧭 Shard-Aware Routing
 
-Each pattern is assigned to a shard based on average phase.
-Routing is handled by `PhaseShardSelector`, enabling parallel search and scalable growth.
+Patterns are assigned to shards based on **mean phase (φ̄)**.
+Routing is handled by `PhaseShardSelector`, enabling **parallel search**, **phase-locality**, and **scalable horizontal growth** without global reindexing.
 
 ---
 
 ## 📄 License & Commercial Use
 
-Licensed under the [Prosperity Public License 3.0](./LICENSE).
+Licensed under the **Prosperity Public License 3.0**.
 
 * Free for non-commercial use
 * Commercial use beyond 30 days requires a paid license
 
 Contact: **[license@evacortex.ai](mailto:license@evacortex.ai)**
 
-* All **whitepapers and documentation** located in the `docs/` directory are licensed under the
-  [Creative Commons Attribution-NoDerivatives 4.0 International (CC BY-ND 4.0)](./LICENSE-docs) license.
-> 📄 The **whitepapers** may describe techniques or algorithms that are part of a pending patent application.  
-> Use of those methods in commercial products may require separate patent licensing, even if the implementation differs.
+Whitepapers and documentation in `docs/` are licensed under
+**CC BY-ND 4.0**.
 
 ---
 
@@ -225,18 +238,14 @@ Contact: **[license@evacortex.ai](mailto:license@evacortex.ai)**
 
 A provisional U.S. patent application related to ResonanceDB was filed on **June 18, 2025**.
 
-Certain techniques described here **may be covered by one or more pending patent applications**.
-
-At present, no patents have been granted in connection with ResonanceDB.
-Any patent license, if and when applicable, is limited to the scope
-expressly provided under the Prosperity Public License 3.0 and applies
-only while you remain in full compliance with its terms.
+Certain techniques described here may be covered by one or more pending patent applications.
+No patent rights are granted except as expressly provided under the Prosperity Public License 3.0.
 
 ---
 
 ## 🤖 Machine Learning & Training Use
 
-Use of this repository or its materials for training, fine-tuning, or evaluating machine learning models **may constitute commercial use**.
+Use of this repository or its materials for training, fine-tuning, or evaluation of machine-learning systems **may constitute commercial use**.
 
 See [TRAINING-NOTICE.md](./TRAINING-NOTICE.md).
 In case of conflict, the [LICENSE](./LICENSE) file controls.
@@ -245,9 +254,15 @@ In case of conflict, the [LICENSE](./LICENSE) file controls.
 
 ## 🛡️ Algorithmic Integrity
 
-ResonanceDB exhibits a distinctive algorithmic structure arising from its phase-aware resonance model and SIMD-oriented execution.
+ResonanceDB’s observable behavior arises from the **specific composition** of:
 
-These characteristics may, in principle, produce identifiable computational or statistical signatures when replicated at scale.
+* phase-coherent scoring,
+* amplitude-balanced normalization,
+* phase-sharded routing,
+* memory-mapped execution, and
+* deterministic SIMD-oriented kernels.
+
+These characteristics result from system-level design choices, **not from any single mathematical primitive**, and may produce identifiable computational signatures when replicated at scale.
 
 ---
 
@@ -256,3 +271,4 @@ These characteristics may, in principle, produce identifiable computational or s
 **Author:** Aleksandr Listopad
 **Security & Licensing:** [license@evacortex.ai](mailto:license@evacortex.ai)
 **SPDX:** Prosperity-3.0
+
