@@ -253,7 +253,7 @@ No patent rights are granted except as expressly provided under the Prosperity P
 
 Use of this repository or its materials for training, fine-tuning, or evaluation of machine-learning systems **may constitute commercial use**.
 
-See [TRAINING-NOTICE.md](./TRAINING-NOTICE.md).
+See [TRAINING_NOTICE.md](./TRAINING_NOTICE.md).
 In case of conflict, the [LICENSE](./LICENSE) file controls.
 
 ---
