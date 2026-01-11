@@ -49,6 +49,10 @@ As a result:
 
 While individual components of this mechanism resemble normalized inner products known from signal processing, the **combined amplitude-balanced, phase-aware scoring behavior** differs from standard cosine similarity and produces materially different ranking dynamics.
 
+> **Implementation note:**  
+> The exact mathematical form, parameterization, thresholds, and integration of this amplitude-balancing normalization into the resonance score are implementation-defined and are not disclosed here.
+
+
 ---
 
 ## What Makes It Different
@@ -74,7 +78,7 @@ While individual components of this mechanism resemble normalized inner products
 - **Edge-native memory cache** — deploy on-device with zero-deserialization and memory-safe reads.
 - **Exploratory AI research** — prototype alternatives to vector search and embedding similarity.
 
-See also: *Applications of Wave-Based Memory*
+See also: [Applications of Wave-Based Memory](./docs/whitepapers/Applications-of-ResonanceDB-in-AGI-Memory-and-Affective-Modeling.md)
 
 ---
 

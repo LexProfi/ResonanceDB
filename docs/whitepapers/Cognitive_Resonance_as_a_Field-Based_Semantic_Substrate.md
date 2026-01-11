@@ -106,6 +106,13 @@ This yields a score in $\[0.0, 1.0]\$, with:
 * \$R = 1.0\$ for perfect alignment (same amplitude, same phase),
 * \$R = 0.0\$ for destructive interference (\$\Delta\varphi = \pi\$).
 
+
+> **Implementation disclaimer:**  
+> The formulation above is provided for conceptual and illustrative purposes only.  
+> It represents one non-limiting mathematical expression of resonance behavior within a broader class of system-level methods.  
+> The practical realization of the described effects depends on architectural choices, data layout, execution order, normalization dynamics, and kernel composition not disclosed in this document.  
+> This document does not enable a complete or sufficient implementation of the described system.
+
 ### 4.2 Query as Probe
 
 A semantic query is itself a **wave pattern**, injected into the field. The system responds with **resonant matches** — patterns that constructively interfere with the input wave.

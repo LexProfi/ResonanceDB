@@ -155,7 +155,7 @@ public interface ResonanceStore {
   void delete(String id);
   String replace(String id, WavePattern psi, Map<String, String> metadata);
   List<ResonanceMatch> query(WavePattern query, int topK);
-  float compare(WavePattern a, WavePattern b);
+  // compare(): conceptual interface; concrete kernel behavior is implementation-specific
   List<ResonanceMatchDetailed> queryDetailed(WavePattern query, int topK);
   InterferenceMap queryInterference(WavePattern query, int topK);
   List<InterferenceEntry> queryInterferenceMap(WavePattern query, int topK);
@@ -174,6 +174,12 @@ public interface ResonanceStore {
 ## 🧲 6. Comparison Kernel
 
 ### 6.1 Resonance Equation
+
+> **Implementation disclaimer:**  
+> The equation above represents a non-limiting conceptual model of resonance behavior.  
+> The observable properties of ResonanceDB arise from system-level execution dynamics, data layout, kernel composition, routing, and normalization strategies that are not fully specified here.  
+> This document does not disclose sufficient information to implement the described system or its comparison kernel.
+
 
 Each wave pattern is interpreted as:
 
@@ -315,4 +321,7 @@ Routing proceeds as follows:
 This architecture enables a performant, field-oriented, scalable system for storing and retrieving waveform-encoded semantic patterns. It combines deterministic semantics with memory-mapped speed and prepares for distributed cognitive reasoning.
 
 Future expansions include pluggable interference models, distributed query fabric, and hybrid symbolic-wavefront orchestration.
+
+This document describes architectural intent and interface-level structure, not a complete or enabling implementation.
+
 
