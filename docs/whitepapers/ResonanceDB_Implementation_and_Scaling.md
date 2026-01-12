@@ -175,12 +175,6 @@ public interface ResonanceStore {
 
 ### 6.1 Resonance Equation
 
-> **Implementation disclaimer:**  
-> The equation above represents a non-limiting conceptual model of resonance behavior.  
-> The observable properties of ResonanceDB arise from system-level execution dynamics, data layout, kernel composition, routing, and normalization strategies that are not fully specified here.  
-> This document does not disclose sufficient information to implement the described system or its comparison kernel.
-
-
 Each wave pattern is interpreted as:
 
 $$
@@ -202,6 +196,11 @@ Where:
 Additional diagnostics include:
 
 * `compareWithPhaseDelta()` — returns energy + signed phase delta $\Delta\varphi \in [-\pi, +\pi]$
+
+> **Implementation disclaimer:**  
+> The equation above represents a non-limiting conceptual model of resonance behavior.  
+> The observable properties of ResonanceDB arise from system-level execution dynamics, data layout, kernel composition, routing, and normalization strategies that are not fully specified here.  
+> This document does not disclose sufficient information to implement the described system or its comparison kernel.
 
 ---
 
