@@ -1,10 +1,13 @@
-> © 2025 Alexander Listopad  
-> Licensed under Creative Commons Attribution-NoDerivatives 4.0 International (CC BY-ND 4.0)  
+> © 2025-2026 Aleksandr Listopad
+> Licensed under Creative Commons Attribution-NoDerivatives 4.0 International (CC BY-ND 4.0).  
 > This document is part of the ResonanceDB documentation set.  
-> This license applies to documentation only — not to the software, which is covered by the Prosperity Public License 3.0.
+> This license applies to the text and any included figures/diagrams of this document only. The ResonanceDB software is licensed separately under the Prosperity Public License 3.0 (PPL 3.0).
+
 # 🎯 Applications of ResonanceDB in AGI, Memory, and Affective Modeling
-> ⚠ Patent Notice
-> This document describes technical methods and systems that are covered by pending and/or granted patents. No license to implement or use these methods is granted by this document or its license. For licensing inquiries, contact [license@evacortex.ai](mailto:license@evacortex.ai).
+> ⚠ Patent Notice  
+> This document describes technical methods and systems that may be covered by pending patent applications and/or other patent rights.  
+> No license to implement or use such methods is granted by this document or by the CC BY-ND 4.0 license. No patent license is granted, expressly or by implication.  
+> For implementation licensing inquiries, contact [license@evacortex.ai](mailto:license@evacortex.ai).
 ### *Use Cases of Wave-Based Semantic Storage Beyond Symbolic AI*
 
 ---
@@ -126,6 +129,8 @@ ResonanceDB enables a new class of cognitive systems by modeling meaning as a wa
 * **Affective Agent Core**: An emotionally grounded AGI that thinks in modulated ψ-fields.
 * **Semantic Firewall**: A cognitive interface that blocks or permits ψ-query based on identity-phase match.
 * **Resonant Prompt Tuner**: A frontend to LLMs where prompts are selected or shaped by resonance, not keywords.
+
+* All prototype scenarios are illustrative and do not describe implemented systems or disclose technical means of realization.
 
 ---
 

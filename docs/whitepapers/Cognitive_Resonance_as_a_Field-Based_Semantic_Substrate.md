@@ -1,11 +1,13 @@
-> © 2025 Alexander Listopad
-> Licensed under Creative Commons Attribution-NoDerivatives 4.0 International (CC BY-ND 4.0)
-> This document is part of the ResonanceDB documentation set.
-> This license applies to documentation only — not to the software, which is covered by the Prosperity Public License 3.0.
+> © 2025-2026 Aleksandr Listopad
+> Licensed under Creative Commons Attribution-NoDerivatives 4.0 International (CC BY-ND 4.0).  
+> This document is part of the ResonanceDB documentation set.  
+> This license applies to the textual and illustrative content of this document only. The ResonanceDB software is licensed separately under the Prosperity Public License 3.0 (PPL 3.0).
 
 # 🧠 Cognitive Resonance as a Field-Based Semantic Substrate
-> ⚠ Patent Notice
-> This document describes technical methods and systems that are covered by pending and/or granted patents. No license to implement or use these methods is granted by this document or its license. For licensing inquiries, contact [license@evacortex.ai](mailto:license@evacortex.ai).
+> ⚠ Patent Notice  
+> This document describes technical methods and systems that may be covered by pending patent applications and/or other patent rights.  
+> No license to implement or use such methods is granted by this document or by the CC BY-ND 4.0 license. No patent license is granted, expressly or by implication.  
+> For implementation licensing inquiries, contact [license@evacortex.ai](mailto:license@evacortex.ai).
 ### *From Isometry of Meaning to Wave-Based Reasoning*
 
 ---
@@ -112,6 +114,7 @@ This yields a score in $\[0.0, 1.0]\$, with:
 > It represents one non-limiting mathematical expression of resonance behavior within a broader class of system-level methods.  
 > The practical realization of the described effects depends on architectural choices, data layout, execution order, normalization dynamics, and kernel composition not disclosed in this document.  
 > This document does not enable a complete or sufficient implementation of the described system.
+> Any numeric ranges, boundary conditions, or interpretive examples are illustrative abstractions and do not define executable behavior.
 
 ### 4.2 Query as Probe
 
@@ -205,16 +208,18 @@ This allows integration with symbolic reasoning layers, without collapsing meani
 
 ## 🔒 10. Intellectual Property
 
-This concept is part of a pending patent covering:
+This work is subject to pending patent protection covering:
 
 * waveform-based semantic storage,
 * resonance-based retrieval,
 * isometry-based comparison and identity encoding.
 
-The software is dual-licensed under:
+The ResonanceDB software is dual-licensed under:
 
 * **Prosperity Public License 3.0** (non-commercial use),
 * commercial licensing via **[license@evacortex.ai](mailto:license@evacortex.ai)**.
+
+The statements in this section are informational only and do not grant any rights beyond those explicitly provided by applicable software licenses or separate written agreements.
 
 ---
 

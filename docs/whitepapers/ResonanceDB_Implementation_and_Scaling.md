@@ -1,11 +1,13 @@
-> © 2025 Alexander Listopad
-> Licensed under Creative Commons Attribution-NoDerivatives 4.0 International (CC BY-ND 4.0)
-> This document is part of the ResonanceDB documentation set.
-> This license applies to documentation only — not to the software, which is covered by the Prosperity Public License 3.0.
+> © 2025-2026 Aleksandr Listopad
+> Licensed under Creative Commons Attribution-NoDerivatives 4.0 International (CC BY-ND 4.0).  
+> This document is part of the ResonanceDB documentation set.  
+> This license applies to the text and any included figures/diagrams of this document only. The ResonanceDB software is licensed separately under the Prosperity Public License 3.0 (PPL 3.0).
 
 # 🧱 ResonanceDB: Implementation and Scaling
-> ⚠ Patent Notice
-> This document describes technical methods and systems that are covered by pending and/or granted patents. No license to implement or use these methods is granted by this document or its license. For licensing inquiries, contact [license@evacortex.ai](mailto:license@evacortex.ai).
+> ⚠ Patent Notice  
+> This document describes technical methods and systems that may be covered by pending patent applications and/or other patent rights.  
+> No license to implement or use such methods is granted by this document or by the CC BY-ND 4.0 license. No patent license is granted, expressly or by implication.  
+> For implementation licensing inquiries, contact [license@evacortex.ai](mailto:license@evacortex.ai).
 ### *Architectural Design, Storage Format, and Horizontal Expansion*
 
 ---
@@ -19,6 +21,7 @@ Where the first whitepaper introduced the ontological and theoretical foundation
 ---
 
 ## 🧩 2. Core Data Structure: WavePattern
+>The snippet is illustrative and non-normative and does not grant any rights to implement or reproduce the system.
 
 ```java
 public record WavePattern(double[] amplitude, double[] phase) {
@@ -69,6 +72,7 @@ All `.segment` files are mapped into memory using `MappedByteBuffer` in read-onl
 ---
 
 ### 3.2 Segment Encoding
+>The layouts below are illustrative summaries and omit operational details; they are not a complete specification and are not sufficient to implement a production system.
 
 Each `.segment` file stores a flat binary serialization of `WavePattern` entries. All values are encoded in **little-endian** format.
 
@@ -166,8 +170,8 @@ public interface ResonanceStore {
 
 ### Requirements:
 
-* All methods are thread-safe.
-* `compare()` is deterministic and stateless.
+* The interface is intended to be thread-safe.
+* `compare()` is intended to be deterministic and stateless.
 
 ---
 
@@ -270,7 +274,7 @@ Routing proceeds as follows:
 
 ## 🧵 8. Concurrency and Thread Safety
 
-* All segment writes are atomic.
+* Segment writes are performed using an append/commit approach to preserve consistency.
 * Read operations use `MappedByteBuffer` (read-only mode).
 * Metadata and manifest files are updated via locks or CAS.
 * Caches use `ConcurrentMap` or Caffeine.
@@ -305,13 +309,19 @@ Routing proceeds as follows:
 
 ---
 
-## 🗂️ 12. Dependencies & Licensing
+## 🗂️ 12. Dependencies & Implementation Context (Non-Normative)
 
-* Language: **Java 22+**
-* Binary format: **custom codec** or FlatBuffers
-* I/O: `MappedByteBuffer`, `FileChannel`
-* Optional: Index caching (pluggable; not yet integrated)
-* License: Apache 2.0 compatible only
+The following items describe the technology stack and third-party dependencies used by a reference implementation.  
+They do not define licensing terms for ResonanceDB itself.
+
+* Reference implementation language: **Java (JDK 22+)**
+* Storage access: `MappedByteBuffer`, `FileChannel`
+* Binary serialization: custom internal codec (illustrative; implementation-specific)
+* Optional components: index caching (pluggable; not required)
+
+**Third-party dependencies policy:**  
+Third-party libraries used by the reference implementation are intended to be selected to be compatible with permissive, Apache 2.0–compatible licensing.  
+This statement applies to dependencies only and does not modify or replace the licensing terms of the ResonanceDB software or this document.
 
 ---
 
