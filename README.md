@@ -217,7 +217,7 @@ ResonanceDB is provided under the repository **[LICENSE](./LICENSE)**, which rep
 
 **Training / automated ingestion contexts.** The repository also includes **[TRAINING_NOTICE.md](./TRAINING_NOTICE.md)**, which provides the Contributor’s interpretive clarification and advance enforcement position regarding how the Prosperity Public License 3.0.0 applies in certain technical contexts (including machine learning training and submission to third-party hosted AI services). If anything in the Training Notice appears inconsistent with the [LICENSE](./LICENSE) file, the [LICENSE](./LICENSE) file controls.
 
-TRAINING_NOTICE.md is published as non-binding compliance guidance and an advance notice of the Contributor’s interpretation and enforcement posture; it does not add obligations beyond the LICENSE.
+**[TRAINING_NOTICE.md](./TRAINING_NOTICE.md)** is published as advance notice of the Contributor’s interpretation and enforcement posture; it does not add obligations beyond the **[LICENSE](./LICENSE)**.
 
 * Free for non-commercial use under the terms of the [LICENSE](./LICENSE)
 * Commercial use beyond the built-in thirty (30) day commercial trial requires a paid license.
