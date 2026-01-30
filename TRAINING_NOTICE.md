@@ -12,9 +12,9 @@
 
 This document provides the Contributor’s **good-faith interpretation** and **advance enforcement position** regarding how the **Prosperity Public License 3.0.0** applies to certain technical contexts involving machine learning systems, automated ingestion, and third-party AI services.
 
-This notice is **not** a substitute for the `LICENSE` file and does **not** edit, replace, amend, narrow, expand, or otherwise modify the verbatim text of the Prosperity Public License 3.0.0 reproduced in the `LICENSE` file.
+This notice is **not** a substitute for the [LICENSE](./LICENSE) file and does **not** edit, replace, amend, narrow, expand, or otherwise modify the verbatim text of the Prosperity Public License 3.0.0 reproduced in the [LICENSE](./LICENSE) file.
 
-**Controlling terms.** In the event of any inconsistency (or perceived inconsistency) between this notice and the `LICENSE` file (including the verbatim Prosperity text), the `LICENSE` file controls. Any such inconsistent statement in this notice must be read as **non-binding** and **informational** only.
+**Controlling terms.** In the event of any inconsistency (or perceived inconsistency) between this notice and the [LICENSE](./LICENSE) file (including the verbatim Prosperity text), the [LICENSE](./LICENSE) file controls. Any such inconsistent statement in this notice must be read as **non-binding** and **informational** only.
 
 **Role of this notice.** For avoidance of doubt, this notice exists to:
 
@@ -126,8 +126,8 @@ Use of the Prosperity-Licensed Materials to develop, train, or evaluate machine 
 
 If you redistribute, mirror, or include the Prosperity-Licensed Materials in datasets, corpora, archives, or collections (including model-training datasets), the Contributor strongly recommends that you include:
 
-* the `LICENSE` file; and
-* this `TRAINING_NOTICE.md`.
+* the [LICENSE](./LICENSE) file; and
+* this [TRAINING_NOTICE.md](./TRAINING_NOTICE.md).
 
 This recommendation is intended to help downstream recipients understand the Contributor’s compliance and enforcement posture in training-related contexts and to reduce ambiguity.
 
