@@ -1,46 +1,58 @@
-Copyright © 2025 Alexander Listopad
-SPDX-License-Identifier: CC-BY-ND-4.0
+# License: Creative Commons Attribution–NoDerivatives 4.0 International (CC BY-ND 4.0)
 
-This documentation is part of the ResonanceDB documentation set.
-
-Permission is granted to **copy and redistribute** the material in any medium or format, **under the following terms**:
+The full text of this license is available at:  
+https://creativecommons.org/licenses/by-nd/4.0/legalcode
 
 ---
 
-## License: Creative Commons Attribution-NoDerivatives 4.0 International (CC BY-ND 4.0)
+## You are free to:
 
-The full text of this license is available at:
-https://creativecommons.org/licenses/by-nd/4.0/legalcode
+- **Share** — copy and redistribute the material in any medium or format  
+  for any purpose, including commercial use.
 
-You are free to:
-- **Share** — copy and redistribute the material in any medium or format
-  for any purpose, even commercially.
+---
 
-Under the following terms:
-- **Attribution** — You must give appropriate credit to the author (Alexander Listopad), provide a link to the license, and indicate if changes were made.
-- **NoDerivatives** — If you remix, transform, or build upon the material, you may not distribute the modified material.
+## Under the following terms:
 
-No additional restrictions — You may not apply legal terms or technological measures that legally restrict others from doing anything the license permits.
+- **Attribution** — You must give appropriate credit to the author  
+  (**Aleksandr Listopad**), provide a link to the license,  
+  and indicate if changes were made.
+
+- **NoDerivatives** — If you remix, transform, or build upon the material,  
+  you may not distribute the modified material.
+
+- **No additional restrictions** — You may not apply legal terms or  
+  technological measures that legally restrict others from doing  
+  anything the license permits.
 
 ---
 
 ## Scope
 
-This license applies **only to documentation**, including all `.md` and `.pdf` files located in the `docs/` and `whitepapers/` directories.
+This license applies **only to documentation authored and published as part of the ResonanceDB documentation set**, including `.md` and `.pdf` files located under `docs/`.
 
-This license **does not apply** to the ResonanceDB software source code, which is separately licensed under the [Prosperity Public License 3.0](./LICENSE).
+**Third-party or externally published materials** that may be included under `docs/` (including arXiv preprint PDFs and any other items bearing their own copyright or license notices) are **not** relicensed by this file and remain governed by their respective terms and notices.
+
+This license **does not apply** to the ResonanceDB software source code, which is separately licensed under the **Prosperity Public License 3.0**.
 
 ---
 
-## Commercial Use Notice
+## Notice Regarding Software Licensing
 
-This documentation may be used commercially under the terms of CC BY-ND 4.0.
-However, **use of documentation in conjunction with commercial deployments of the software requires a valid commercial software license.**
+This documentation is licensed under **CC BY-ND 4.0** independently of the
+ResonanceDB software.
 
-For details, contact:
+Nothing in this documentation license grants any rights to use, deploy,
+distribute, or commercialize the ResonanceDB software source code.
+
+Any use of the ResonanceDB software remains governed exclusively by the
+software license stated in the repository, including any applicable
+commercial license, if obtained.
+
+For commercial licensing inquiries regarding the software, contact:  
 **license@evacortex.ai**
 
 ---
 
-License version: 1.0
-Date: June 2025
+**License version:** 1.0  
+**Date:** June 2025

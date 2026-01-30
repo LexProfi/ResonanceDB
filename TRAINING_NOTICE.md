@@ -1,151 +1,142 @@
-# TRAINING NOTICE — Machine Learning and Model Training Use
+# TRAINING NOTICE — Machine Learning, Model Training, and Automated Ingestion
 
-**Effective date:** 2026-01-08 (first publication in this repository)  
-**Applies to:** ResonanceDB source code, documentation, specifications, and related materials (“Materials”)
+**Publication date (first publication in this repository):** 2026-01-08
 
----
+**Applies to:** ResonanceDB source code and other materials in this repository that are licensed under the Prosperity Public License 3.0.0 (the “Prosperity-Licensed Materials”).
 
-## 1. Purpose of This Notice
-
-This notice is provided **for avoidance of doubt** and explains the Contributor’s interpretation of how the term **“commercial use”** under the **Prosperity Public License 3.0** applies to **machine learning, artificial intelligence, and model training activities**.
-
-This notice **does not replace, amend, or modify** the LICENSE file.  
-In the event of conflict, the LICENSE file controls.
-
-This notice is intended to clarify the scope of permitted and restricted uses and to provide clear guidance to users, organizations, and downstream recipients.
+**Exclusions:** This notice does **not** apply to documentation, whitepapers, preprints, or other materials that are licensed under separate licenses (including, without limitation, Creative Commons licenses), nor to third-party materials included in this repository under their respective licenses.
 
 ---
 
-## 2. Definition of Training as Use
+## 1. Purpose, Status, and Relationship to the LICENSE
 
-For purposes of this project, **using the Materials for training, fine-tuning, pretraining, alignment, evaluation, distillation, or dataset creation intended for any of the foregoing** constitutes **use of the software and associated materials** within the meaning of the **Prosperity Public License 3.0**.
+This document provides the Contributor’s **good-faith interpretation** and **advance enforcement position** regarding how the **Prosperity Public License 3.0.0** applies to certain technical contexts involving machine learning systems, automated ingestion, and third-party AI services.
 
-This includes, but is not limited to:
+This notice is **not** a substitute for the `LICENSE` file and does **not** edit, replace, amend, narrow, expand, or otherwise modify the verbatim text of the Prosperity Public License 3.0.0 reproduced in the `LICENSE` file.
 
-- ingestion into training datasets or corpora,
-- feature extraction or embedding generation,
-- gradient-based or statistical learning,
-- supervised, unsupervised, or self-supervised learning,
-- reinforcement learning with human or synthetic feedback,
-- dataset curation or transformation derived from the Materials,
-- automated analysis intended to improve, evaluate, align, or inform a model that is deployed, offered, or intended for deployment.
+**Controlling terms.** In the event of any inconsistency (or perceived inconsistency) between this notice and the `LICENSE` file (including the verbatim Prosperity text), the `LICENSE` file controls. Any such inconsistent statement in this notice must be read as **non-binding** and **informational** only.
 
-For avoidance of doubt, **training-related activities are treated as “use of the software”**, not merely informational or observational use.
+**Role of this notice.** For avoidance of doubt, this notice exists to:
+
+* reduce ambiguity in emerging technical uses (including training and automated ingestion);
+* provide advance notice of how the Contributor will evaluate compliance under the Prosperity Public License 3.0.0 in these contexts; and
+* provide an evidentiary record of the Contributor’s interpretation and enforcement posture.
 
 ---
 
-## 3. Commercial Training Use
+## 2. Training and Model Development as “Use” (Interpretive Clarification)
 
-Training or use of the Materials in connection with any of the following is treated as **commercial use** for purposes of the Prosperity Public License 3.0:
+For purposes of interpretation, compliance evaluation, and enforcement under the Prosperity Public License 3.0.0, the Contributor considers the following activities to constitute **“use of the software”** when they involve the Prosperity-Licensed Materials (in whole or in part):
 
-- a commercial entity or for-profit organization,
-- any commercial research lab, internal R&D group, or contract research activity,
-- a product, service, or platform offered commercially,
-- internal tooling supporting commercial products or services,
-- foundation models, APIs, or systems offered for a fee or monetized directly or indirectly,
-- any use intended to produce, improve, benchmark, validate, or inform systems that will be deployed in a commercial setting or used to obtain commercial advantage.
+* training, fine-tuning, pretraining, alignment, evaluation, benchmarking, or distillation of machine learning or AI systems;
+* dataset or corpus creation intended for any of the foregoing; and
+* automated analysis intended to improve, evaluate, align, benchmark, or otherwise inform a model or system that is deployed, offered, or intended for deployment.
 
-This classification applies **regardless of whether**:
+**Interpretive clarification.**  
+This section does **not** redefine any term of the Prosperity Public License 3.0.0. It describes how the Contributor will evaluate certain factual patterns as “use” under the **ordinary meaning** of that license for purposes of compliance assessment and enforcement.
 
-- the trained model reproduces the source code verbatim,
-- the trained model exposes similar APIs or interfaces,
-- the implementation differs technically,
-- the training data is mixed with other sources,
-- the resulting model weights are non-reversible or non-extractable.
+This includes, without limitation:
 
-Commercial use beyond the 30-day evaluation period requires a **paid commercial license**.  
-For licensing inquiries, contact: **license@evacortex.ai**.
+* ingestion into training datasets, corpora, or evaluation sets;
+* feature extraction, embedding generation, representation learning, or automated summarization for training purposes;
+* gradient-based, statistical, or heuristic learning;
+* supervised, unsupervised, or self-supervised learning;
+* reinforcement learning with human or synthetic feedback;
+* dataset curation, transformation, labeling, augmentation, or filtering derived from the Prosperity-Licensed Materials.
+
+For avoidance of doubt, training-related activities are treated as **use** where undertaken to develop, evaluate, or improve a model or system. Passive reading, inspection, or ordinary compilation/testing of the Software is not, by itself, “training.”
 
 ---
 
-## 4. Non-Commercial Training Exceptions (Narrow Construction)
+## 3. Training in Commercial Settings (Interpretation of “Commercial Use”)
 
-The following uses are generally treated as **non-commercial**, consistent with the **Personal Uses** and **Noncommercial Organizations** sections of the Prosperity Public License 3.0, **but only if all conditions in Section 4.2 are met**.
+This section explains how the Contributor will assess whether training-related “use” is **for a commercial purpose** under the Prosperity Public License 3.0.0.
 
-### 4.1 Examples of potentially non-commercial uses (subject to conditions)
+For purposes of interpretation and enforcement, training-related use of the Prosperity-Licensed Materials will be treated as **commercial use** when it occurs:
 
-- purely personal, non-commercial research with no anticipated commercial application,
-- academic research conducted by non-commercial institutions,
-- research conducted by government or public research organizations,
-- charitable or educational use,
-- model training performed solely for open scientific publication with no commercial deployment or monetization.
+* by or for a commercial entity or for-profit organization;
+* within a commercial research lab, internal R&D group, or contract research setting;
+* in connection with a product, service, or platform offered commercially;
+* as internal tooling that supports commercial products or services;
+* in the development, evaluation, or operation of foundation models, APIs, or systems offered for a fee or monetized directly or indirectly; or
+* in any activity intended to produce, improve, validate, benchmark, or inform systems that will be deployed in a commercial setting or used to obtain commercial advantage.
 
-### 4.2 Mandatory conditions for any non-commercial exception
+This assessment applies regardless of whether:
 
-A use in Section 4.1 is **non-commercial only if**:
+* the trained system reproduces source code verbatim;
+* the trained system exposes similar APIs or interfaces;
+* the technical implementation differs;
+* the training data is mixed with other sources; or
+* the resulting weights or parameters are non-reversible or non-extractable.
 
-1. **No commercial advantage.**  
-   The activity is not intended to generate, support, enable, or confer any direct or indirect commercial advantage, including productization, commercialization, paid services, paid consulting, or competitive business benefit.
+**Commercial trial and commercial licensing.** The Prosperity Public License 3.0.0 permits a thirty (30) day commercial trial. Commercial use beyond that built-in trial requires a separate paid commercial license.
 
-2. **No for-profit involvement.**  
-   The activity is not conducted (in whole or in part) on behalf of, funded by, sponsored by, partnered with, or contractually obligated to any for-profit entity, commercial lab, venture-backed entity, or commercial affiliate, whether directly or indirectly.
+For commercial licensing inquiries, contact: **[license@evacortex.ai](mailto:license@evacortex.ai)**.
 
-3. **No contract research / procurement / paid deliverables.**  
-   The activity is not part of contract research, procurement, paid deliverables, paid benchmarking, paid evaluation, or any arrangement where outputs are delivered to a commercial party (including as part of a “pilot”, “POC”, “internal assessment”, or “vendor evaluation”).
+---
 
-4. **No restricted dissemination of the Materials.**  
-   Subject to applicable law and the LICENSE, the **Materials**, and any **derivatives that incorporate protectable expression from the Materials**, are not distributed, licensed, packaged, or made available in a manner that enables commercial use of the Materials (or such derivatives) without a separate commercial license from the Contributor.
+## 4. Non-Commercial Research Use (Consistency With Prosperity Exceptions)
 
-5. **No operational deployment.**  
-   The resulting model is not deployed in production, used in operational decision-making, integrated into a commercial workflow, or used in providing services for a fee.
+Nothing in this notice is intended to restrict or override the **Personal Uses** or **Noncommercial Organizations** provisions of the Prosperity Public License 3.0.0.
 
-6. **No re-transfer for commercial training.**  
-   The Materials (or derivatives primarily derived from the Materials) are not knowingly provided, transferred, or made available to a third party for commercial training, evaluation, alignment, or distillation **in violation of this notice or the LICENSE**.
+Accordingly, use of the Prosperity-Licensed Materials by a **Noncommercial Organization**, as defined in the Prosperity Public License 3.0.0, is treated as **non-commercial** to the extent and for so long as such use falls within the scope permitted by the Prosperity Public License 3.0.0.
 
-If any condition above is not met, the use is treated as **commercial** (or otherwise **not permitted under the non-commercial exception**) for purposes of the Prosperity Public License 3.0.
+### 4.1 Research involving commercial counterparties (evidentiary and compliance framing)
 
-### 4.3 Government and public research clarification
+In arrangements involving both noncommercial and commercial participants, the Contributor may evaluate the **factual substance** of the arrangement when assessing compliance and enforcement (for example: who controls the work, who receives the benefit, and whether a commercial entity is itself making use of the Software).
 
 For avoidance of doubt:
 
-- “Government or public research organizations” in Section 4.1 includes only **non-commercial research activity** that satisfies all conditions in Section 4.2.
-- Government, public-sector, defense, security, or dual-use contexts frequently involve commercial procurement, contractors, or deployment. If the activity supports procurement, operational deployment, contractor deliverables, commercialization, or any for-profit partner, it is treated as **commercial use**.
+* A commercial entity that uses the Prosperity-Licensed Materials (directly or indirectly) must independently ensure its own compliance with the Prosperity Public License 3.0.0, including the commercial trial limitation and any requirement to obtain a paid commercial license beyond that trial.
+* This section is not intended to redefine “Noncommercial Organizations” or otherwise alter any exception in the Prosperity Public License 3.0.0.
 
-If a use transitions from non-commercial research to commercial deployment, commercialization, procurement, or contract deliverables, **a commercial license is required at that time (and for any continued use)**.
+### 4.2 Transition to commercial deployment
 
----
-
-## 5. Downstream Submissions and Third-Party Systems
-
-Users **may not submit** the Materials to **third-party machine learning or artificial intelligence systems** operated commercially (including hosted APIs and foundation models) **for training, fine-tuning, evaluation, distillation, or alignment**, unless separately authorized by the Contributor.
-
-Submission described as “analysis”, “testing”, or “experimentation” that **knowingly** enables or facilitates training, evaluation, distillation, or alignment is treated as prohibited submission under this Section.
-
-The Prosperity Public License 3.0 does **not grant sublicensing rights** for commercial use, including for machine learning training.
-
-The Contributor **does not authorize** and **is not responsible for** unauthorized downstream submissions of the Materials to third-party systems, including submissions made by individual users without appropriate rights or permissions.
-
-No implied consent or implied license is granted by publication of this repository or by unauthorized third-party submission of its contents.
+If your use of the Prosperity-Licensed Materials (or any work you create using them) transitions from non-commercial research into any activity that constitutes **commercial use** under the Prosperity Public License 3.0.0 (including, without limitation, commercial deployment, commercialization, provision of paid services, or delivery of outputs for commercial advantage), then commercial use beyond the built-in thirty (30) day trial requires a paid commercial license.
 
 ---
 
-## 6. Relationship to Patent Rights
+## 5. Submissions to Third-Party AI Systems (Hosted Services)
 
-ResonanceDB is subject to one or more **pending patent applications** covering certain techniques described or implemented in the Materials.
+Submitting the Prosperity-Licensed Materials (in whole or in part) to third-party AI systems operated commercially (including hosted APIs, SaaS platforms, foundation models, large language models (LLMs), code assistants, embedding services, inference platforms, and cloud-based AI services) can create compliance and IP risks, including retention and secondary use outside your control.
 
-No patent license is granted beyond what is expressly provided
-under the Prosperity Public License 3.0, and any such license
-applies only while the user remains in full compliance with its terms.
+For purposes of interpretation and enforcement, where such submission is undertaken in a manner that **enables or facilitates** training, evaluation, distillation, alignment, benchmarking, or model improvement by the third party, the Contributor will generally treat that activity as **“use”** and (where undertaken for commercial advantage or in commercial settings) as **commercial use** under the Prosperity Public License 3.0.0.
 
-Use of the Materials to develop or train machine learning systems that implement, approximate, reproduce, or are derived from techniques described in this repository **may implicate patent rights**, even if the resulting implementation differs technically.
+Characterizing such submission as “analysis”, “testing”, or “experimentation” does not alter this assessment if the factual substance of the submission knowingly enables or facilitates model improvement by a third party.
 
-Any patent license, if and when granted, will apply **only while the user remains in full compliance** with the Prosperity Public License 3.0 and any applicable commercial licensing terms.
+For avoidance of doubt:
+
+* This section addresses hosted systems where retention, reuse, or training may occur outside your control.
+* The Prosperity Public License 3.0.0 grants rights only to the extent stated in its text, and does not provide any additional permissions to authorize third-party commercial training or reuse beyond those rights.
+* No implied consent or implied license is granted by publication of this repository for third-party training or reuse beyond the rights expressly granted under the Prosperity Public License 3.0.0.
 
 ---
 
-## 7. Notice to Dataset and Model Distributors
+## 6. Relationship to Patent Rights (Notice)
 
-If you redistribute, mirror, or include the Materials in datasets, corpora, archives, or collections (including model-training datasets), you should include:
+Certain techniques described or implemented in the Prosperity-Licensed Materials may be subject to one or more pending patent applications.
 
-- the LICENSE file, and
-- this TRAINING NOTICE.
+No patent license is granted beyond what is expressly provided under the Prosperity Public License 3.0.0, and any such license applies only while the user remains in full compliance with its terms.
 
-This notice applies to all uses occurring **on or after the effective date**, including retraining, fine-tuning, evaluation, distillation, and derivative dataset creation, **regardless of when the Materials were originally obtained**.
+Use of the Prosperity-Licensed Materials to develop, train, or evaluate machine learning systems that implement, approximate, reproduce, or are derived from techniques described in this repository may implicate patent rights, even where the resulting implementation differs technically.
+
+---
+
+## 7. Notice to Dataset and Model Distributors (Downstream Transparency)
+
+If you redistribute, mirror, or include the Prosperity-Licensed Materials in datasets, corpora, archives, or collections (including model-training datasets), the Contributor strongly recommends that you include:
+
+* the `LICENSE` file; and
+* this `TRAINING_NOTICE.md`.
+
+This recommendation is intended to help downstream recipients understand the Contributor’s compliance and enforcement posture in training-related contexts and to reduce ambiguity.
+
+Nothing in this section is intended to add to or modify the Prosperity Public License 3.0.0 “Notices” rule or to impose additional binding notice obligations beyond those contained in the Prosperity Public License 3.0.0.
 
 ---
 
 ## 8. Contact
 
-For commercial licensing, machine learning training permissions, compliance clarification, or patent-related inquiries, contact:
+For commercial licensing, training permissions, compliance clarification, or patent-related inquiries, contact:
 
-**license@evacortex.ai**
+**[license@evacortex.ai](mailto:license@evacortex.ai)**

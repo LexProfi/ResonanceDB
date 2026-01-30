@@ -1,112 +1,171 @@
 # ResonanceDB License v1.0 · 2025-06-01
-SPDX-License-Identifier: Prosperity-3.0  
-Copyright © 2025 Alexander Listopad
 
-ResonanceDB is free for **non-commercial purposes** under the Prosperity
-Public License 3.0. Commercial use beyond the built-in 30-day evaluation
-requires a paid license (contact license@evacortex.ai).
+SPDX-License-Identifier: LicenseRef-ResonanceDB-License-v1.0
+Copyright © 2025 Aleksandr Listopad
+
+ResonanceDB is licensed under the **Prosperity Public License 3.0.0** (reproduced verbatim below). Any repository-specific notices in this `LICENSE` file and in other files referenced herein are provided **for avoidance of doubt only** and do **not** replace, amend, narrow, expand, or otherwise modify the Prosperity Public License 3.0.0.
+
+ResonanceDB is made available under the Prosperity Public License 3.0.0, which permits free noncommercial use and a thirty (30) day commercial trial.
+
+For commercial licensing inquiries, contact:
+**[license@evacortex.ai](mailto:license@evacortex.ai)**
 
 ---
 
-## Patent Notice
+## 1. Structure of This License File
 
-The authors intend to seek patent protection covering certain
-techniques implemented in ResonanceDB.
+This `LICENSE` file contains:
 
-At present, no patents have been granted in connection with
-ResonanceDB. Any patent license, if and when applicable, is
-limited to the scope expressly provided under the Prosperity
-Public License 3.0 and applies only while you remain in full
-compliance with its terms.
+1. a short repository-specific preamble (this section and the notices below); and
+2. the **verbatim text** of the **Prosperity Public License 3.0.0**.
 
-Upon filing, this notice will be updated to reflect the
-application number and filing date.
+The Prosperity Public License 3.0.0 text reproduced below is **not edited**.
+
+**SPDX clarification.**
+The SPDX identifier `LicenseRef-ResonanceDB-License-v1.0` refers to this complete `LICENSE` file as a whole, including the repository-specific preamble, notices, and the verbatim text of the Prosperity Public License 3.0.0 reproduced below.
+
+---
+
+## 2. Repository Notices (Scope, Intent, and Effect)
+
+### 2.1 Read together with other notices
+
+This `LICENSE` file is intended to be read together with:
+
+* the accompanying `TRAINING_NOTICE.md`; and
+* any other licensing or compliance notices included in this repository.
+
+### 2.2 Baseline license grant (controlling)
+
+The **Prosperity Public License 3.0.0** reproduced below governs the baseline copyright and patent permissions granted for the Software, including the non-commercial grant and the thirty (30) day commercial trial.
+
+### 2.3 Technical-context notice (ML/training, automated ingestion, third-party AI systems)
+
+Certain technical usage contexts can create ambiguity in how the Prosperity Public License 3.0.0 is evaluated in practice, including without limitation:
+
+* **machine learning training** (including fine-tuning, pretraining, alignment, evaluation, distillation, or dataset creation intended for any of the foregoing),
+* **model optimization** and benchmarking,
+* **dataset construction** or corpus assembly derived from the Software,
+* **automated ingestion** of the Software into systems intended to produce, evaluate, or improve models, and
+* **submission of the Software to third-party AI systems** (including hosted APIs, SaaS platforms, foundation models, LLMs, code assistants, embedding services, inference platforms, and cloud-based AI services).
+
+For avoidance of doubt, the accompanying `TRAINING_NOTICE.md` is published to:
+
+* provide the Contributor’s **good-faith interpretation** of how existing terms of the Prosperity Public License 3.0.0 apply in the above contexts; and
+* provide advance notice of the Contributor’s **compliance and enforcement position**, including the Contributor’s view of what constitutes “use” and (where applicable) “commercial use” in those contexts.
+
+**No license modification.** `TRAINING_NOTICE.md` is an interpretive and compliance notice only. It does **not** create new license terms, does **not** add conditions beyond the Prosperity Public License 3.0.0, and does **not** grant any rights not expressly granted by the Prosperity Public License 3.0.0.
+
+### 2.4 Resolution of inconsistencies
+
+Nothing in any repository notice edits the verbatim text of the Prosperity Public License 3.0.0 reproduced below.
+
+If any statement in any notice could be read as inconsistent with the Prosperity Public License 3.0.0, that statement must be read as **non-binding** and **informational** only, and the Prosperity Public License 3.0.0 controls.
+
+---
+
+## 3. Patent Notice
+
+The Contributor intends to seek and/or has sought patent protection covering certain architectural, algorithmic, and system-level techniques implemented in or described by ResonanceDB.
+
+A U.S. provisional patent application related to ResonanceDB was filed on **June 18, 2025**.
+As of the date of this notice, no patent has been granted in connection with ResonanceDB.
+
+Any patent license, if and when applicable, arises **solely under and subject to the conditions of the Prosperity Public License 3.0.0** and applies only while you remain in full compliance with its terms.
+
+No broader, implied, or additional patent rights are granted by publication of this repository, by distribution of the software, or by any supplemental documentation, notice, statement, or conduct.
+
+This notice may be updated to reflect relevant application numbers, filing dates, or patent status, without altering the scope or effect of the license granted herein.
 
 ---
 
 ## Prosperity Public License 3.0.0
-*(verbatim text — do not edit; copied from
-<https://prosperitylicense.com/versions/3.0.0>)*
+
+*(verbatim text — do not edit; reproduced from [https://prosperitylicense.com/versions/3.0.0](https://prosperitylicense.com/versions/3.0.0))*
+
+---
 
 # The Prosperity Public License 3.0.0
 
-Contributor: Alexander Listopad
+Contributor: Aleksandr Listopad
 
-Source Code: https://github.com/LexProfi/ResonanceDB
+Source Code:
+[https://github.com/LexProfi/ResonanceDB](https://github.com/LexProfi/ResonanceDB)
+
+---
 
 ## Purpose
 
-This license allows you to use and share this software for noncommercial
-purposes for free and to try this software for commercial purposes for
-thirty days.
+This license allows you to use and share this software for noncommercial purposes for free and to try this software for commercial purposes for thirty days.
+
+---
 
 ## Agreement
 
-In order to receive this license, you have to agree to its rules. Those
-rules are both obligations under that agreement and conditions to
-your license. Don’t do anything with this software that triggers a rule
-you can’t or won’t follow.
+In order to receive this license, you have to agree to its rules. Those rules are both obligations under that agreement and conditions to your license. Don’t do anything with this software that triggers a rule you can’t or won’t follow.
+
+---
 
 ## Notices
 
-Make sure everyone who gets a copy of any part of this software from
-you, with or without changes, also gets the text of this license and
-the contributor and source code lines above.
+Make sure everyone who gets a copy of any part of this software from you, with or without changes, also gets the text of this license and the contributor and source code lines above.
+
+---
 
 ## Commercial Trial
 
-Limit your use of this software for commercial purposes to a thirty-day
-trial period. If you use this software for work, your company gets one
-trial period for all personnel, not one trial per person.
+Limit your use of this software for commercial purposes to a thirty-day trial period. If you use this software for work, your company gets one trial period for all personnel, not one trial per person.
+
+---
 
 ## Contributions Back
 
-Developing feedback, changes, or additions that you contribute back to the
-contributor on the terms of a standardized public software license such as
-the Blue Oak Model License 1.0.0, the Apache License 2.0, the MIT license,
-or the two-clause BSD license doesn’t count as use for a commercial purpose.
+Developing feedback, changes, or additions that you contribute back to the contributor on the terms of a standardized public software license such as the Blue Oak Model License 1.0.0, the Apache License 2.0, the MIT license, or the two-clause BSD license doesn’t count as use for a commercial purpose.
+
+---
 
 ## Personal Uses
 
-Personal use for research, experiment, and testing for the benefit of public
-knowledge, personal study, private entertainment, hobby projects, amateur
-pursuits, or religious observance, without any anticipated commercial
-application, doesn’t count as use for a commercial purpose.
+Personal use for research, experiment, and testing for the benefit of public knowledge, personal study, private entertainment, hobby projects, amateur pursuits, or religious observance, without any anticipated commercial application, doesn’t count as use for a commercial purpose.
+
+---
 
 ## Noncommercial Organizations
 
-Use by any charitable organization, educational institution, public research
-organization, public safety or health organization, environmental protection
-organization, or government institution doesn’t count as use for a commercial
-purpose regardless of the source of funding or obligations resulting from the
-funding.
+Use by any charitable organization, educational institution, public research organization, public safety or health organization, environmental protection organization, or government institution doesn’t count as use for a commercial purpose regardless of the source of funding or obligations resulting from the funding.
+
+---
 
 ## Defense
 
-Don’t make any legal claim against anyone accusing this software, with or
-without changes, alone or with other technology, of infringing any patent.
+Don’t make any legal claim against anyone accusing this software, with or without changes, alone or with other technology, of infringing any patent.
+
+---
 
 ## Copyright
 
-The contributor licenses you to do everything with this software that would
-otherwise infringe their copyright in it.
+The contributor licenses you to do everything with this software that would otherwise infringe their copyright in it.
+
+---
 
 ## Patent
 
-The contributor licenses you to do everything with this software that would
-otherwise infringe any patents they can license or become able to license.
+The contributor licenses you to do everything with this software that would otherwise infringe any patents they can license or become able to license, **subject to the conditions of this license**.
+
+---
 
 ## Reliability
 
 The contributor can’t revoke this license.
 
+---
+
 ## Excuse
 
-You’re excused for unknowingly breaking **Notices** if you take all practical
-steps to comply within thirty days of learning you broke the rule.
+You’re excused for unknowingly breaking **Notices** if you take all practical steps to comply within thirty days of learning you broke the rule.
+
+---
 
 ## No Liability
 
-As far as the law allows, this software comes as is, without any warranty or
-condition, and the contributor won’t be liable to anyone for any damages
-related to this software or this license, under any kind of legal claim.
+As far as the law allows, this software comes as is, without any warranty or condition, and the contributor won’t be liable to anyone for any damages related to this software or this license, under any kind of legal claim.
