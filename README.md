@@ -239,24 +239,33 @@ Certain techniques described in this repository may be covered by pending patent
 
 ## 🛡️ Algorithmic Integrity
 
-The observable behavior of ResonanceDB results from the **combined interaction** of multiple architectural elements, including, without limitation:
+The observable behavior of ResonanceDB arises from the **system-level interaction** of multiple architectural elements, including, without limitation:
 
-* phase-coherent scoring mechanisms,
-* amplitude-balancing normalization,
-* phase-based routing strategies,
-* memory-mapped execution models, and
-* deterministic kernel implementations.
+- phase-coherent scoring mechanisms,
 
-Descriptions provided in this repository are **architectural and illustrative in nature**. They are intended to convey system-level concepts and design rationale, and **do not disclose** the internal parameters, execution ordering, optimization strategies, or decision logic employed in the operational implementation.
+- amplitude-balancing normalization,
+
+- phase-based routing strategies,
+
+- memory-mapped execution models, and
+
+- deterministic kernel implementations.
+
+Taken together, these elements give rise to **stable, characteristic behavioral effects** that are observable **in system operation and at scale**. Such effects are **emergent properties of the architecture as a whole**, rather than the result of any single algorithmic primitive, parameter choice, or isolated implementation detail.
+
+Descriptions provided in this repository are **architectural and illustrative in nature**. They are intended to convey high-level system concepts, design rationale, and observable behavior, and **do not disclose** complete internal parameters, execution ordering, optimization strategies, tuning decisions, or decision logic employed in any particular deployment or implementation.
 
 Accordingly, nothing in this section shall be interpreted as:
 
-* an admission of algorithmic or functional equivalence to any other system;
-* a disclosure of trade secrets or proprietary implementation details;
-* a representation or guarantee that the described behavior is independently reproducible; or
-* a grant of any license or right beyond those expressly provided under the applicable license(s).
+- an admission of algorithmic, functional, or implementation equivalence to any other system;
 
-Any rights to use, reproduce, or implement the described techniques arise, if at all, **solely under and subject to** the terms of the applicable license(s).
+- a disclosure of trade secrets or proprietary implementation details;
+
+- a contractual representation or guarantee of independent reproducibility under all conditions; or
+
+- a grant of any license or right beyond those expressly provided under the applicable license(s).
+
+Any rights to use, reproduce, implement, or prepare derivative works from the techniques described herein arise, if at all, **solely under and subject** to the terms of the applicable license(s).
 
 ---
 
