@@ -30,6 +30,7 @@ import java.util.function.Function;
 import static java.lang.Math.*;
 import static org.junit.jupiter.api.Assertions.*;
 
+@Disabled("Dataset quality — run manually from IDE")
 @TestInstance(TestInstance.Lifecycle.PER_METHOD)
 public class RetrievalQualityEvaluationTest {
 

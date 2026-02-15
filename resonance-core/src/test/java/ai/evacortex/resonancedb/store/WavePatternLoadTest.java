@@ -11,6 +11,7 @@ package ai.evacortex.resonancedb.store;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
 import ai.evacortex.resonancedb.core.storage.WavePatternStoreImpl;
 import ai.evacortex.resonancedb.core.storage.responce.ResonanceMatch;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -28,7 +29,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-//@Disabled("Smoke benchmark — run manually from IDE")
+@Disabled("Smoke benchmark — run manually from IDE")
 public class WavePatternLoadTest {
 
     private static final int PATTERN_COUNT = Integer.getInteger("patterns", 200_000);
