@@ -1,29 +1,59 @@
-# ---- build stage ----
 FROM eclipse-temurin:22-jdk AS build
 WORKDIR /src
+
+COPY gradlew settings.gradle* build.gradle* gradle.properties* ./
+COPY gradle/ ./gradle/
+
+RUN set -eux; \
+    test -f ./gradlew; \
+    test -f ./gradle/wrapper/gradle-wrapper.properties; \
+    test -f ./gradle/wrapper/gradle-wrapper.jar
+
 COPY . .
 
-# Важно: check включает генерацию THIRD_PARTY_NOTICES + запрет GPL
-# resonance-server:assembleServer собирает единый дистрибутив (server + cli + licenses)
 RUN ./gradlew --no-daemon clean check :resonance-server:assembleServer
 
-# ---- runtime stage ----
+RUN set -eux; \
+    test -f resonance-server/build/server/server/bin/resonance-server; \
+    test -f resonance-server/build/server/server/bin/resonance-server.bat; \
+    test -d resonance-server/build/server/cli/bin; \
+    test -f resonance-server/build/server/licenses/LICENSE; \
+    test -f resonance-server/build/server/licenses/TRAINING_NOTICE.md; \
+    test -f resonance-server/build/server/licenses/THIRD_PARTY_NOTICES.md; \
+    test -f resonance-server/build/server/server/VERSION || true
+
 FROM eclipse-temurin:22-jre
 WORKDIR /app
 
-RUN useradd -r -u 10001 appuser
+RUN set -eux; \
+    groupadd -r -g 10001 appuser; \
+    useradd  -r -u 10001 -g 10001 -d /nonexistent -s /usr/sbin/nologin appuser; \
+    mkdir -p /data; \
+    chown -R appuser:appuser /data
 
-# runtime bundle
 COPY --from=build /src/resonance-server/build/server/ /app/
 
-RUN chown -R appuser:appuser /app
+RUN set -eux; \
+    chmod +x /app/server/bin/* /app/cli/bin/*; \
+    sed -i 's/\r$//' /app/server/bin/* /app/cli/bin/* || true; \
+    chown -R appuser:appuser /app
+
 USER appuser
 
-ENV PORT=8080
-EXPOSE 8080
+ENV PORT=31415
+ENV RESONANCE_DB_ROOT=/data
 
-# если приложению нужны preview/native-access — прокидываем без правок Gradle
-ENV JAVA_TOOL_OPTIONS="--enable-preview --enable-native-access=ALL-UNNAMED"
+EXPOSE 31415
 
-# стартуем REST-сервер (CLI лежит рядом: /app/cli/bin/resonance-cli)
-CMD ["/app/server/bin/resonance-rest"]
+ENV JAVA_TOOL_OPTIONS="\
+-XX:+UseG1GC \
+-XX:G1HeapRegionSize=8m \
+-XX:MaxGCPauseMillis=100 \
+-Xms512m -Xmx512m \
+-Dresonance.kernel.native=false"
+
+HEALTHCHECK --interval=10s --timeout=2s --start-period=10s --retries=6 \
+  CMD /app/cli/bin/resonance-cli health --url "http://127.0.0.1:${PORT}/health" || exit 1
+
+ENTRYPOINT ["/app/server/bin/resonance-server"]
+CMD ["--db=/data", "--port=31415"]

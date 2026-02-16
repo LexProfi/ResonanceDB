@@ -185,9 +185,14 @@ tasks.register('cleanNative', Delete) {
     delete outputDir
 }
 
-tasks.build {
-    dependsOn 'copyNativeLib'
-    finalizedBy 'validateNativeLib'
+def buildNativeByDefault = project.hasProperty("withNativeBuild") &&
+        project.property("withNativeBuild").toString() == "true"
+
+if (buildNativeByDefault) {
+    tasks.build {
+        dependsOn 'copyNativeLib'
+        finalizedBy 'validateNativeLib'
+    }
 }
 
 if (isWindows) {

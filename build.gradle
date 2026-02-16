@@ -1,21 +1,27 @@
 import java.time.Year
 
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import org.gradle.maven.MavenModule
+import org.gradle.maven.MavenPomArtifact
+
 plugins {
     id 'com.github.hierynomus.license' version '0.16.1' apply false
 }
 
 allprojects {
-    group   = 'ai.evacortex.resonancedb'
-    version = '0.1.0'
-
     repositories { mavenCentral() }
 }
 
-subprojects {
+def licenseScanModules = ['resonance-core', 'resonance-rest', 'resonance-server', 'resonance-cli']
+
+def headerCheckedModules = ['resonance-core', 'resonance-rest', 'resonance-server', 'resonance-cli']
+
+configure(subprojects.findAll { it.name in headerCheckedModules }) {
     apply plugin: 'java-library'
     apply plugin: 'com.github.hierynomus.license'
-    ext.year        = Year.now().value
-    ext.patentLine  = 'Patent notice: The authors intend to seek patent protection for this software.'
+
+    ext.year       = Year.now().value
+    ext.patentLine = 'Patent notice: The authors intend to seek patent protection for this software.'
 
     license {
         header = rootProject.file('config/header.txt')
@@ -24,8 +30,150 @@ subprojects {
     }
 
     tasks.withType(Jar).configureEach {
-        from("${rootProject.projectDir}/LICENSE") {
-            into 'META-INF'
+        from(rootProject.file('LICENSE')) { into 'META-INF' }
+
+        def training = rootProject.file('TRAINING_NOTICE.md')
+        if (training.exists()) {
+            from(training) { into 'META-INF' }
+        }
+
+        def thirdParty = rootProject.file('THIRD_PARTY_NOTICES.md')
+        if (thirdParty.exists()) {
+            from(thirdParty) { into 'META-INF' }
         }
     }
+}
+
+def forbiddenLicenseTokens = [
+        "agpl", "lgpl", "gpl",
+        "affero general public", "lesser general public", "gnu general public"
+]
+
+def licenseOverrides = [
+        "com.google.guava:guava": "Apache License, Version 2.0|https://www.apache.org/licenses/LICENSE-2.0.txt",
+        "com.google.guava:failureaccess": "Apache License, Version 2.0|https://www.apache.org/licenses/LICENSE-2.0.txt",
+        "com.google.guava:listenablefuture": "Apache License, Version 2.0|https://www.apache.org/licenses/LICENSE-2.0.txt"
+]
+
+def skipBoms = false
+
+tasks.register("generateThirdPartyNotices") {
+    group = "compliance"
+    description = "Generate THIRD_PARTY_NOTICES.md from resolved Maven POM licenses (no extra plugins)."
+
+    doLast {
+        def moduleIds = new LinkedHashSet<ModuleComponentIdentifier>()
+
+        licenseScanModules.each { name ->
+            def prj = findProject(":$name")
+            if (prj == null) return
+
+            def cfg = prj.configurations.findByName("runtimeClasspath")
+            if (cfg == null || !cfg.canBeResolved) return
+
+            cfg.incoming.resolutionResult.allComponents { comp ->
+                def id = comp.id
+                if (id instanceof ModuleComponentIdentifier) {
+                    moduleIds.add((ModuleComponentIdentifier) id)
+                }
+            }
+        }
+
+        if (moduleIds.isEmpty()) {
+            rootProject.file("THIRD_PARTY_NOTICES.md").text =
+                    "# Third-Party Notices\n\n_No third-party dependencies detected._\n"
+            return
+        }
+
+        def query = dependencies.createArtifactResolutionQuery()
+                .forComponents(moduleIds)
+                .withArtifacts(MavenModule, MavenPomArtifact)
+                .execute()
+
+        def rows = []
+        def forbiddenHits = []
+
+        query.resolvedComponents.each { rc ->
+            def mid = rc.id
+            def g = mid.group
+            def a = mid.module
+            def v = mid.version
+
+            if (skipBoms) {
+                def al = a.toLowerCase()
+                if (al.endsWith("-bom") || al.contains("bom")) {
+                    return
+                }
+            }
+
+            def pomArtifacts = rc.getArtifacts(MavenPomArtifact)
+            def pomFile = pomArtifacts ? pomArtifacts[0].file : null
+
+            def licenses = []
+            def projUrl = null
+
+            if (pomFile != null && pomFile.exists()) {
+                def pom = new XmlSlurper(false, false).parse(pomFile)
+                projUrl = pom.url?.text()
+                pom.licenses.license.each { l ->
+                    def ln = l.name?.text()
+                    def lu = l.url?.text()
+                    if (ln || lu) {
+                        licenses << [name: ln, url: lu]
+                    }
+                }
+            }
+
+            if (licenses.isEmpty()) {
+                licenses << [name: "UNKNOWN", url: ""]
+            }
+
+            def key = "${g}:${a}"
+            def ov = licenseOverrides[key]
+            if (ov != null) {
+                if (licenses.size() == 1 && ((licenses[0].name ?: "UNKNOWN") == "UNKNOWN")) {
+                    def parts = ov.split("\\|", 2)
+                    licenses = [[name: parts[0], url: parts.length > 1 ? parts[1] : ""]]
+                }
+            }
+
+            licenses.each { l ->
+                def blob = ((l.name ?: "") + " " + (l.url ?: "")).toLowerCase()
+                if (forbiddenLicenseTokens.any { blob.contains(it) }) {
+                    forbiddenHits << "${g}:${a}:${v} -> ${l.name} ${l.url}".toString()
+                }
+            }
+
+            rows << [g: g, a: a, v: v, url: projUrl, licenses: licenses]
+        }
+
+        def out = new StringBuilder()
+        out.append("# Third-Party Notices\n\n")
+        out.append("License info below is derived from Maven POM metadata.\n\n")
+        out.append("## Components\n\n")
+
+        rows.sort { it.g + ":" + it.a + ":" + it.v }.each { r ->
+            out.append("### ${r.g}:${r.a}:${r.v}\n")
+            if (r.url) out.append("- Project: ${r.url}\n")
+            out.append("- Licenses:\n")
+            r.licenses.each { l ->
+                def line = "  - ${l.name ?: 'UNKNOWN'}"
+                if (l.url) line += " — ${l.url}"
+                out.append(line).append("\n")
+            }
+            out.append("\n")
+        }
+
+        rootProject.file("THIRD_PARTY_NOTICES.md").text = out.toString()
+
+        if (!forbiddenHits.isEmpty()) {
+            throw new GradleException(
+                    "Forbidden license detected (GPL/AGPL/LGPL). Details:\n" + forbiddenHits.join("\n")
+            )
+        }
+    }
+}
+
+tasks.matching { it.name == "check" }.configureEach {
+    dependsOn("generateThirdPartyNotices")
 }

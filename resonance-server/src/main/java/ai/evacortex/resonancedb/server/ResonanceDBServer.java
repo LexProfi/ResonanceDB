@@ -34,8 +34,8 @@ public final class ResonanceDBServer {
         int port = clampPort(parseInt(firstNonBlank(
                 a.get("port"),
                 System.getenv("RESONANCE_SERVER_PORT"),
-                "8080"
-        ), 8080));
+                "31415"
+        ), 31415));
 
         String maxBody = firstNonBlank(
                 a.get("maxBodyBytes"),
@@ -79,7 +79,7 @@ public final class ResonanceDBServer {
 
     private static int clampPort(int port) {
         if (port >= 1 && port <= 65_535) return port;
-        return 8080;
+        return 31415;
     }
 
     private static void showSystemInfo(Path dbRoot, int port) {

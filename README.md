@@ -142,13 +142,165 @@ This produces `libresonance.so` (or the platform equivalent) under `resonance-na
 
 ---
 
-## ▶️ Run CLI
+## 🐳 Docker Image (Operational)
+
+The following instructions describe how to build and run a containerized ResonanceDB server instance for local or controlled deployment environments.
+
+### Build image
 
 ```bash
-./gradlew :resonance-cli:run
+docker build -t resonancedb-server .
 ```
 
-The CLI initializes with `NativeKernel` when available and falls back to `JavaKernel` otherwise.
+### Run container
+
+```bash
+docker run --rm \
+  -p 31415:31415 \
+  -v $(pwd)/data:/data \
+  --name resonance-server \
+  resonancedb-server
+```
+
+Environment variables:
+
+| Variable                      | Description                   | Default |
+| ----------------------------- | ----------------------------- | ------- |
+| RESONANCE_DB_ROOT             | Storage directory             | /data   |
+| RESONANCE_SERVER_PORT         | HTTP port                     | 31415   |
+| RESONANCE_REST_MAX_BODY_BYTES | Max request body size (bytes) | 8388608 |
+
+---
+
+## 🌐 REST Endpoints (JSON)
+
+Base URL:
+
+```
+http://localhost:31415
+```
+
+All endpoints accept and return `application/json`.
+
+---
+
+### GET /health
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "timeUtc": "2026-01-01T00:00:00Z"
+}
+```
+
+---
+
+### POST /compare
+
+Request:
+
+```json
+{
+  "a": { "amplitude": [1, 0.5], "phase": [0, 0.1] },
+  "b": { "amplitude": [1, 0.5], "phase": [0, 0.1] }
+}
+```
+
+Response:
+
+```json
+{ "score": 0.9987 }
+```
+
+---
+
+### POST /query
+
+Request:
+
+```json
+{
+  "query": { "amplitude": [1, 0.5], "phase": [0, 0.1] },
+  "topK": 10
+}
+```
+
+Response:
+
+```json
+[
+  { "id": "...", "energy": 0.9234 }
+]
+```
+
+---
+
+### POST /queryDetailed
+
+Response element example:
+
+```json
+{
+  "id": "...",
+  "energy": 0.9234,
+  "phaseDelta": 0.021,
+  "zone": "CORE",
+  "zoneScore": 0.88
+}
+```
+
+---
+
+### POST /insert
+
+Request:
+
+```json
+{
+  "pattern": { "amplitude": [1, 0.5], "phase": [0, 0.1] },
+  "metadata": { "label": "example" }
+}
+```
+
+Response:
+
+```json
+{ "id": "4ac2f2ce35ce804869c76dec8199c079" }
+```
+
+---
+
+### POST /replace
+
+```json
+{
+  "id": "existing-id",
+  "pattern": { "amplitude": [1, 0.5], "phase": [0, 0.1] },
+  "metadata": { "label": "updated" }
+}
+```
+
+---
+
+### POST /delete
+
+```json
+{ "id": "existing-id" }
+```
+
+Response:
+
+```json
+{ "ok": true }
+```
+
+---
+
+Additional endpoints (`/queryInterference`, `/queryInterferenceMap`, `/queryComposite`, `/queryCompositeDetailed`) follow the same pattern structure and return extended resonance or interference diagnostics.
+
+Operational documentation only. See [LICENSE](./LICENSE) for governing terms.
 
 ---
 

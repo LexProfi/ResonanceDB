@@ -1,2 +1,2 @@
 rootProject.name = 'ResonanceDB'
-include 'resonance-core', 'resonance-native', 'resonance-cli'
+include 'resonance-core', 'resonance-native', 'resonance-cli', 'resonance-rest', 'resonance-server'

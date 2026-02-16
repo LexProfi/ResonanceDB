@@ -22,6 +22,39 @@ application {
     ]
 }
 
+distributions {
+    main {
+        distributionBaseName = "resonance-server"
+    }
+}
+
+tasks.named("distZip") {
+    archiveVersion = project.version.toString()
+}
+
+tasks.named("distTar") {
+    archiveVersion = project.version.toString()
+}
+
+
+/**
+ * Generates a simple VERSION file that is embedded into the assembled server bundle.
+ * Source of truth is Gradle's project.version (set in root build, or via -PreleaseVersion=...).
+ */
+tasks.register("writeVersionFile") {
+    group = "distribution"
+    description = "Generate VERSION file from project.version"
+
+    def outDir = layout.buildDirectory.dir("generated/version")
+    outputs.dir(outDir)
+
+    doLast {
+        def f = outDir.get().file("VERSION").asFile
+        f.parentFile.mkdirs()
+        f.text = "${project.version}\n"
+    }
+}
+
 tasks.register("assembleServer", Sync) {
     group = "distribution"
     description = "Assemble ResonanceDB Server bundle (server + cli + legal files)."
@@ -29,6 +62,7 @@ tasks.register("assembleServer", Sync) {
     dependsOn ":generateThirdPartyNotices"
     dependsOn ":resonance-server:installDist"
     dependsOn ":resonance-cli:installDist"
+    dependsOn "writeVersionFile"
 
     into(layout.buildDirectory.dir("server"))
 
@@ -38,6 +72,11 @@ tasks.register("assembleServer", Sync) {
 
     from(project(":resonance-cli").layout.buildDirectory.dir("install/resonance-cli")) {
         into "cli"
+    }
+
+    // Embed version marker into the runtime bundle (server/ VERSION).
+    from(layout.buildDirectory.dir("generated/version")) {
+        into "server"
     }
 
     from(rootProject.file("LICENSE")) { into "licenses" }
