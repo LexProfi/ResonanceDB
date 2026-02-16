@@ -1,0 +1,52 @@
+plugins {
+    id 'java'
+    id 'application'
+    id 'base'
+}
+
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(22) }
+}
+
+dependencies {
+    implementation project(':resonance-core')
+    implementation project(':resonance-rest')
+}
+
+application {
+    mainClass = 'ai.evacortex.resonancedb.server.ResonanceDBServer'
+    applicationDefaultJvmArgs = [
+            '--enable-preview',
+            '--enable-native-access=ALL-UNNAMED',
+            '-Dfile.encoding=UTF-8'
+    ]
+}
+
+tasks.register("assembleServer", Sync) {
+    group = "distribution"
+    description = "Assemble ResonanceDB Server bundle (server + cli + legal files)."
+
+    dependsOn ":generateThirdPartyNotices"
+    dependsOn ":resonance-server:installDist"
+    dependsOn ":resonance-cli:installDist"
+
+    into(layout.buildDirectory.dir("server"))
+
+    from(project(":resonance-server").layout.buildDirectory.dir("install/resonance-server")) {
+        into "server"
+    }
+
+    from(project(":resonance-cli").layout.buildDirectory.dir("install/resonance-cli")) {
+        into "cli"
+    }
+
+    from(rootProject.file("LICENSE")) { into "licenses" }
+    from(rootProject.file("TRAINING_NOTICE.md")) { into "licenses" }
+    from(rootProject.file("THIRD_PARTY_NOTICES.md")) { into "licenses" }
+
+    duplicatesStrategy = DuplicatesStrategy.FAIL
+}
+
+tasks.named("build") {
+    dependsOn("assembleServer")
+}
