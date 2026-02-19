@@ -155,10 +155,11 @@ docker build -t resonancedb-server .
 ### Run container
 
 ```bash
-docker run --rm \
+docker run -d \
+  --name resonancedb-server \
   -p 31415:31415 \
   -v $(pwd)/data:/data \
-  --name resonance-server \
+  --restart unless-stopped \
   resonancedb-server
 ```
 
