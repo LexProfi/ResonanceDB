@@ -1,6 +1,6 @@
 /*
  * ResonanceDB — Waveform Semantic Engine
- * Copyright © 2025 Aleksandr Listopad
+ * Copyright © 2025-2026 Aleksandr Listopad
  * SPDX-License-Identifier: LicenseRef-ResonanceDB-License-v1.0
  *
  * Patent notice: The authors intend to seek patent protection for this software.
@@ -29,7 +29,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-@Disabled("Smoke benchmark — run manually from IDE")
+//@Disabled("Smoke benchmark — run manually from IDE")
 public class WavePatternLoadTest {
 
     private static final int PATTERN_COUNT = Integer.getInteger("patterns", 200_000);
