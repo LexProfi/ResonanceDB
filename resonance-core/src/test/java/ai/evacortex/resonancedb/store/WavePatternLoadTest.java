@@ -29,7 +29,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-//@Disabled("Smoke benchmark — run manually from IDE")
+@Disabled("Smoke benchmark — run manually from IDE")
 public class WavePatternLoadTest {
 
     private static final int PATTERN_COUNT = Integer.getInteger("patterns", 200_000);
