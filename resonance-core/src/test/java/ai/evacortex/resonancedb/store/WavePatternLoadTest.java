@@ -147,10 +147,11 @@ public class WavePatternLoadTest {
     @Test
     public void runTopKQueries() throws Exception {
 
-        System.out.printf("=== TOP‑K Queries from %s ===%n", DB_ROOT);
+        System.out.printf("=== TOP-K Queries from %s ===%n", DB_ROOT);
         showSystemInfo();
+        Path segmentsDir = DB_ROOT.resolve("segments");
+
         try (WavePatternStoreImpl store = new WavePatternStoreImpl(DB_ROOT)) {
-            Path segmentsDir = DB_ROOT.resolve("segments");
             warmUpSSD(segmentsDir);
 
             long totalBytes = Files.walk(segmentsDir)
@@ -164,28 +165,45 @@ public class WavePatternLoadTest {
                     }).sum();
 
             System.out.printf("Database size: %.2f MB%n", totalBytes / 1024.0 / 1024.0);
-            ThreadLocalRandom rnd = ThreadLocalRandom.current();
 
+            final int warmupIters = Math.max(0, Integer.getInteger("bench.warmupIters", 10));
+            final int warmupQueries = Math.max(0, warmupIters * 2);
             for (int k : TOP_K_BUCKETS) {
-                System.out.printf("Running %,d queries for top‑%d...\n", QUERY_REPS, k);
+                System.out.printf("Running %,d queries for top-%d...%n", QUERY_REPS, k);
+                ThreadLocalRandom rnd = ThreadLocalRandom.current();
+                WavePattern[] warmups = new WavePattern[warmupQueries];
+                for (int i = 0; i < warmupQueries; i++) {
+                    warmups[i] = randomPattern(PATTERN_LEN, rnd);
+                }
+                WavePattern[] queries = new WavePattern[QUERY_REPS];
+                for (int i = 0; i < QUERY_REPS; i++) {
+                    queries[i] = randomPattern(PATTERN_LEN, rnd);
+                }
+                for (int i = 0; i < warmupQueries; i++) {
+                    store.query(warmups[i], k);
+                }
                 List<Long> times = new ArrayList<>(QUERY_REPS);
                 for (int i = 0; i < QUERY_REPS; i++) {
-                    WavePattern q = randomPattern(PATTERN_LEN, rnd);
                     long t0 = System.nanoTime();
-                    store.query(q, k);
+                    store.query(queries[i], k);
                     times.add(System.nanoTime() - t0);
                 }
+
                 System.out.println();
-                System.out.printf("TOP %3d | min %.3f ms | p50 %.3f | p95 %.3f | p99 %.3f | max %.3f | avg %.3f%n%n",
+                System.out.printf(
+                        "TOP %3d | min %.3f ms | p50 %.3f | p95 %.3f | p99 %.3f | max %.3f | avg %.3f%n%n",
                         k,
                         Collections.min(times) / 1e6,
                         percentile(times, 50),
                         percentile(times, 95),
                         percentile(times, 99),
                         Collections.max(times) / 1e6,
-                        times.stream().mapToLong(Long::longValue).average().orElse(0) / 1e6);
+                        times.stream().mapToLong(Long::longValue).average().orElse(0) / 1e6
+                );
             }
-            System.out.printf("Finished at: %s%n", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+
+            System.out.printf("Finished at: %s%n",
+                    LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
         }
     }
 

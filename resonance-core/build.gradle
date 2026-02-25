@@ -48,8 +48,6 @@ tasks.withType(Test).configureEach {
     def preset  = (project.findProperty('preset') ?: 'ide').toString().toLowerCase()
     systemProperty 'resonance.kernel.native', (kernel == 'native') ? 'true' : 'false'
     systemProperty 'file.encoding', 'UTF-8'
-    systemProperty 'user.language', 'ru'
-    systemProperty 'user.country',  'RU'
     systemProperty 'bench.warmupIters', '10'
 
     def baseArgs = [
@@ -98,8 +96,6 @@ tasks.register('testJavaPerf', Test) {
 
     systemProperty 'resonance.kernel.native', 'false'
     systemProperty 'file.encoding', 'UTF-8'
-    systemProperty 'user.language', 'ru'
-    systemProperty 'user.country',  'RU'
 
     jvmArgs = [
             '--enable-preview',
@@ -123,8 +119,6 @@ tasks.register('testNativePerf', Test) {
 
     systemProperty 'resonance.kernel.native', 'true'
     systemProperty 'file.encoding', 'UTF-8'
-    systemProperty 'user.language', 'ru'
-    systemProperty 'user.country',  'RU'
 
     jvmArgs = [
             '--enable-preview',
@@ -148,8 +142,6 @@ tasks.register('testJavaPerfHeavy', Test) {
 
     systemProperty 'resonance.kernel.native', 'false'
     systemProperty 'file.encoding', 'UTF-8'
-    systemProperty 'user.language', 'ru'
-    systemProperty 'user.country',  'RU'
 
     jvmArgs = [
             '--enable-preview',

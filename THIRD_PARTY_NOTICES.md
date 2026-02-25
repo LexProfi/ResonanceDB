@@ -4,6 +4,11 @@ License info below is derived from Maven POM metadata.
 
 ## Components
 
+### at.yawk.lz4:lz4-java:1.10.1
+- Project: https://github.com/yawkat/lz4-java
+- Licenses:
+  - Apache License, Version 2.0 — https://www.apache.org/licenses/LICENSE-2.0
+
 ### com.fasterxml.jackson.core:jackson-annotations:2.17.1
 - Project: https://github.com/FasterXML/jackson
 - Licenses:
@@ -50,11 +55,6 @@ License info below is derived from Maven POM metadata.
 ### com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava
 - Licenses:
   - Apache License, Version 2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt
-
-### net.jpountz.lz4:lz4:1.3.0
-- Project: https://github.com/jpountz/lz4-java
-- Licenses:
-  - The Apache Software License, Version 2.0 — http://www.apache.org/licenses/LICENSE-2.0.txt
 
 ### org.checkerframework:checker-qual:3.42.0
 - Project: https://checkerframework.org/
