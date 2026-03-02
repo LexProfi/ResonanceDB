@@ -37,7 +37,6 @@ public final class WavePatternValidator {
 
     public WavePattern toWavePattern(WavePatternDto dto) {
         if (dto == null) {
-            // Previously Jackson would NPE later; keep it as a clean 400 bad_request.
             throw new BadRequestException("WavePattern is required");
         }
 
@@ -50,8 +49,8 @@ public final class WavePatternValidator {
         if (amplitude.length != phase.length) {
             throw new BadRequestException("WavePattern amplitude/phase length mismatch");
         }
-        if (amplitude.length == 0) {
-            throw new BadRequestException("WavePattern length must be > 0");
+        if (amplitude.length != cfg.patternLen()) {
+            throw new BadRequestException("WavePattern invalid length: expected=" + cfg.patternLen() + ", got=" + amplitude.length);
         }
 
         if (cfg.validateFiniteWaveValues()) {
@@ -59,7 +58,6 @@ public final class WavePatternValidator {
             validateFinite(phase, "phase");
         }
 
-        // Preserve original behavior: pass arrays as-is (no copy) to avoid extra allocations.
         return new WavePattern(amplitude, phase);
     }
 

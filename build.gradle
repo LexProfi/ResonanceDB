@@ -44,6 +44,16 @@ configure(subprojects.findAll { it.name in headerCheckedModules }) {
     }
 }
 
+configure(subprojects.findAll { it.name in ['resonance-core', 'resonance-rest', 'resonance-server', 'resonance-cli'] }) {
+    tasks.withType(Test).configureEach {
+        useJUnitPlatform()
+
+        systemProperty 'file.encoding', 'UTF-8'
+        systemProperty 'resonance.pattern.len', System.getProperty('resonance.pattern.len', '1536')
+        systemProperty 'resonance.kernel.native', System.getProperty('resonance.kernel.native', 'false')
+    }
+}
+
 def forbiddenLicenseTokens = [
         "agpl", "lgpl", "gpl",
         "affero general public", "lesser general public", "gnu general public"

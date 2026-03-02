@@ -27,7 +27,8 @@ public record ResonanceRestConfig(
         String corsAllowHeaders,
         int defaultTopK,
         int maxTopK,
-        boolean validateFiniteWaveValues
+        boolean validateFiniteWaveValues,
+        int patternLen
 ) {
 
     public ResonanceRestConfig {
@@ -51,35 +52,17 @@ public record ResonanceRestConfig(
             throw new IllegalArgumentException("defaultTopK must be <= maxTopK, got defaultTopK="
                     + defaultTopK + " maxTopK=" + maxTopK);
         }
+
+        if (patternLen <= 0) {
+            throw new IllegalArgumentException("patternLen must be > 0, got: " + patternLen);
+        }
     }
 
-    /**
-     * Build configuration from System properties.
-     *
-     * <p>Preserves the original behavior:
-     * <ul>
-     *   <li>{@code resonance.rest.maxBodyBytes} controls the max request body (default 8 MiB).</li>
-     *   <li>TopK: default 10, clamp to 10_000.</li>
-     *   <li>CORS: allow all origins by default ("*").</li>
-     * </ul>
-     *
-     * <p>Additional properties (safe defaults, do not change behavior unless set):
-     * <ul>
-     *   <li>{@code resonance.rest.corsOrigin} (default "*")</li>
-     *   <li>{@code resonance.rest.corsMethods} (default "GET,POST,OPTIONS")</li>
-     *   <li>{@code resonance.rest.corsHeaders} (default "Content-Type")</li>
-     *   <li>{@code resonance.rest.topK.default} (default 10)</li>
-     *   <li>{@code resonance.rest.topK.max} (default 10000)</li>
-     *   <li>{@code resonance.rest.validateFiniteWaveValues} (default false)</li>
-     * </ul>
-     */
     public static ResonanceRestConfig fromSystemProperties(int port, int maxBodyBytesDefault) {
-        // Keep strict backward-compat: prefer the already-parsed default from ResonanceDBRest.
         int maxBody = getInt("resonance.rest.maxBodyBytes", maxBodyBytesDefault);
         if (maxBody <= 0) maxBody = maxBodyBytesDefault;
 
         String corsOrigin = getString("resonance.rest.corsOrigin", "*");
-        // Preserve original preflight behavior: always these values unless explicitly overridden.
         String corsMethods = getString("resonance.rest.corsMethods", "GET,POST,OPTIONS");
         String corsHeaders = getString("resonance.rest.corsHeaders", "Content-Type");
 
@@ -89,10 +72,12 @@ public record ResonanceRestConfig(
         int maxTopK = getInt("resonance.rest.topK.max", 10_000);
         if (maxTopK <= 0) maxTopK = 10_000;
 
-        // If someone sets a weird combination, keep it safe and predictable.
         if (defTopK > maxTopK) defTopK = maxTopK;
 
         boolean validateFinite = getBool("resonance.rest.validateFiniteWaveValues", false);
+
+        int patternLen = getInt("resonance.pattern.len", 1536);
+        if (patternLen <= 0) patternLen = 1536;
 
         return new ResonanceRestConfig(
                 port,
@@ -102,7 +87,8 @@ public record ResonanceRestConfig(
                 corsHeaders,
                 defTopK,
                 maxTopK,
-                validateFinite
+                validateFinite,
+                patternLen
         );
     }
 
@@ -123,7 +109,6 @@ public record ResonanceRestConfig(
         if (v == null) return def;
         v = v.trim();
         if (v.isEmpty()) return def;
-        // Accept common variants; anything else => default for safety.
         if ("true".equalsIgnoreCase(v) || "1".equals(v) || "yes".equalsIgnoreCase(v) || "y".equalsIgnoreCase(v)) {
             return true;
         }

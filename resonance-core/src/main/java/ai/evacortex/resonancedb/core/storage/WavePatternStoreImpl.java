@@ -44,6 +44,10 @@ import java.util.stream.Stream;
 @SuppressWarnings("resource")
 public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
+    private static final int DEFAULT_PATTERN_LEN = 1536;
+
+    private final int patternLen;
+
     private static final int BUCKETS =
             Integer.getInteger("resonance.segment.buckets", 64);
 
@@ -178,6 +182,12 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     }
 
     public WavePatternStoreImpl(Path dbRoot) {
+        this.patternLen = Integer.getInteger("resonance.pattern.len", DEFAULT_PATTERN_LEN);
+
+        if (this.patternLen <= 0) {
+            throw new IllegalArgumentException("resonance.pattern.len must be > 0, got: " + this.patternLen);
+        }
+
         this.rootDir = dbRoot;
         this.manifest = ManifestIndex.loadOrCreate(dbRoot.resolve("index/manifest.idx"));
         this.manifest.ensureFileExists();
@@ -202,6 +212,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         this.scheduler = Executors.newScheduledThreadPool(1);
 
         loadAllWritersFromManifest();
+        verifyPatternLengthOnOpen();
         this.shardSelectorRef = new AtomicReference<>(createShardSelector());
 
         scheduler.scheduleAtFixedRate(() ->
@@ -231,11 +242,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     @Override
     public String insert(WavePattern psi, Map<String, String> metadata)
             throws DuplicatePatternException, InvalidWavePatternException {
-
-        Objects.requireNonNull(psi, "psi must not be null");
-        if (psi.amplitude().length != psi.phase().length) {
-            throw new InvalidWavePatternException("Amplitude / phase length mismatch");
-        }
+        validateWavePatternLen(psi);
 
         String idKey = HashingUtil.computeContentHash(psi);
         HashingUtil.parseAndValidateMd5(idKey);
@@ -311,10 +318,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     public String replace(String oldId, WavePattern newPattern, Map<String, String> newMetadata)
             throws PatternNotFoundException, InvalidWavePatternException, DuplicatePatternException {
 
-        Objects.requireNonNull(newPattern, "newPattern must not be null");
-        if (newPattern.amplitude().length != newPattern.phase().length) {
-            throw new InvalidWavePatternException("Amplitude / phase length mismatch");
-        }
+        validateWavePatternLen(newPattern);
 
         HashingUtil.parseAndValidateMd5(oldId);
         String newId = HashingUtil.computeContentHash(newPattern);
@@ -384,7 +388,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
     @Override
     public List<ResonanceMatch> query(WavePattern query, int topK) {
-        Objects.requireNonNull(query, "query must not be null");
+
+        validateWavePatternLen(query);
         if (topK <= 0) return List.of();
 
         try (var ignored = AutoLock.read(globalLock)) {
@@ -425,7 +430,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
     @Override
     public List<ResonanceMatchDetailed> queryDetailed(WavePattern query, int topK) {
-        Objects.requireNonNull(query, "query must not be null");
+        validateWavePatternLen(query);
         if (topK <= 0) return List.of();
 
         try (var ignored = AutoLock.read(globalLock)) {
@@ -482,7 +487,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
     @Override
     public List<ResonanceMatch> queryComposite(List<WavePattern> patterns, List<Double> weights, int topK) {
-        Objects.requireNonNull(patterns, "patterns must not be null");
+        patterns.forEach(this::validateWavePatternLen);
         if (patterns.isEmpty()) throw new InvalidWavePatternException("Empty pattern list in composite query");
         WavePattern superposed = WavePatternUtils.superpose(patterns, weights);
         return query(superposed, topK);
@@ -490,7 +495,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
     @Override
     public List<ResonanceMatchDetailed> queryCompositeDetailed(List<WavePattern> patterns, List<Double> weights, int topK) {
-        Objects.requireNonNull(patterns, "patterns must not be null");
+        patterns.forEach(this::validateWavePatternLen);
         if (patterns.isEmpty()) throw new InvalidWavePatternException("Empty pattern list in composite query");
         WavePattern superposed = WavePatternUtils.superpose(patterns, weights);
         return queryDetailed(superposed, topK);
@@ -498,6 +503,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
     @Override
     public float compare(WavePattern a, WavePattern b) {
+        validateWavePatternLen(a);
+        validateWavePatternLen(b);
         return resonanceKernel.compare(a, b);
     }
 
@@ -859,6 +866,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     }
 
     public boolean containsExactPattern(WavePattern pattern) {
+        validateWavePatternLen(pattern);
         return manifest.contains(HashingUtil.computeContentHash(pattern));
     }
 
@@ -1040,6 +1048,46 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         int active = queryPool.getActiveThreadCount();
         if (active <= 0) active = Math.max(1, queryPool.getPoolSize());
         return active;
+    }
+
+    private void validateWavePatternLen(WavePattern p) {
+        Objects.requireNonNull(p, "psi must not be null");
+        int a = p.amplitude().length;
+        int ph = p.phase().length;
+
+        if (a != ph) {
+            throw new InvalidWavePatternException("Amplitude / phase length mismatch: amp=" + a + ", phase=" + ph);
+        }
+        if (a != patternLen) {
+            throw new InvalidWavePatternException("Invalid pattern length: expected=" + patternLen + ", got=" + a);
+        }
+    }
+
+    private void verifyPatternLengthOnOpen() {
+        Set<String> segments = manifest.getAllSegmentNames();
+        if (segments.isEmpty()) return;
+
+        for (String seg : segments) {
+            CachedReader r = readerCache.get(seg);
+            if (r == null) continue;
+
+            r.acquire();
+            try {
+                var sample = r.samplePatternLength();
+                if (sample.isEmpty()) continue;
+
+                int len = sample.getAsInt();
+                if (len != patternLen) {
+                    throw new InvalidWavePatternException(
+                            "DB pattern length mismatch on open: expected=" + patternLen +
+                                    ", got=" + len + " in segment=" + seg +
+                                    ". Set -Dresonance.pattern.len=" + len + " to open this DB, or rebuild the DB."
+                    );
+                }
+            } finally {
+                r.release();
+            }
+        }
     }
 
     private abstract static class QueryTask<T> extends RecursiveTask<List<T>> {

@@ -17,6 +17,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
@@ -26,51 +27,52 @@ import static org.junit.jupiter.api.Assertions.*;
 @TestInstance(TestInstance.Lifecycle.PER_METHOD)
 class RollbackManifestTest {
 
+    private static final String PROP_PATTERN_LEN = "resonance.pattern.len";
+
     private Path tempDir;
     private WavePatternStoreImpl store;
 
     @BeforeEach
-    public void setUp() throws Exception {
+    void setUp() throws Exception {
         tempDir = Files.createTempDirectory("resdb-test-rollback");
         store = new WavePatternStoreImpl(tempDir);
     }
 
     @AfterEach
-    public void tearDown() {
-        store.close();
-        deleteRecursively(tempDir.toFile());
-    }
-
-    private void deleteRecursively(java.io.File file) {
-        if (file.isDirectory()) {
-            for (java.io.File child : file.listFiles()) {
-                deleteRecursively(child);
+    void tearDown() throws IOException {
+        try {
+            if (store != null) store.close();
+        } finally {
+            if (tempDir != null) {
+                TestUtils.deleteDirectoryRecursive(tempDir);
             }
         }
-        file.delete();
+    }
+
+    private static int len() {
+        return Integer.getInteger(PROP_PATTERN_LEN, 1536);
     }
 
     @Test
-    public void testInsertFailureDoesNotPolluteManifest() {
-        WavePattern pattern = WavePatternTestUtils.createRandomPattern(512, 1234L);
+    void testInsertFailureDoesNotPolluteManifest() {
+        int patternLen = len();
+        WavePattern pattern = WavePatternTestUtils.createRandomPattern(patternLen, 1234L);
         assertDoesNotThrow(() -> store.insert(pattern, Map.of()));
-
         assertThrows(DuplicatePatternException.class, () -> store.insert(pattern, Map.of()));
-
         assertTrue(store.containsExactPattern(pattern));
     }
 
     @Test
-    public void testReplaceFailureRollback() {
-        WavePattern original = WavePatternTestUtils.createRandomPattern(512, 5678L);
-        WavePattern conflicting = WavePatternTestUtils.createRandomPattern(512, 9012L);
-
+    void testReplaceFailureRollback() {
+        int patternLen = len();
+        WavePattern original = WavePatternTestUtils.createRandomPattern(patternLen, 5678L);
+        WavePattern conflicting = WavePatternTestUtils.createRandomPattern(patternLen, 9012L);
         assertDoesNotThrow(() -> store.insert(original, Map.of("tag", "original")));
         store.insert(conflicting, Map.of("tag", "conflict"));
-
+        String originalId = HashingUtil.computeContentHash(original);
         assertThrows(DuplicatePatternException.class, () ->
-                store.replace(HashingUtil.computeContentHash(original), conflicting, Map.of("new", "value")));
-
+                store.replace(originalId, conflicting, Map.of("new", "value"))
+        );
         assertTrue(store.containsExactPattern(original));
         assertTrue(store.containsExactPattern(conflicting));
     }

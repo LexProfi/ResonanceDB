@@ -49,6 +49,7 @@ tasks.withType(Test).configureEach {
     systemProperty 'resonance.kernel.native', (kernel == 'native') ? 'true' : 'false'
     systemProperty 'file.encoding', 'UTF-8'
     systemProperty 'bench.warmupIters', '10'
+    systemProperty 'resonance.pattern.len', '1536'
 
     def baseArgs = [
             '--enable-preview',
@@ -94,6 +95,7 @@ tasks.register('testJavaPerf', Test) {
     maxParallelForks = 1
     forkEvery = 0
 
+    systemProperty 'resonance.pattern.len', '1536'
     systemProperty 'resonance.kernel.native', 'false'
     systemProperty 'file.encoding', 'UTF-8'
 
@@ -117,6 +119,7 @@ tasks.register('testNativePerf', Test) {
     maxParallelForks = 1
     forkEvery = 0
 
+    systemProperty 'resonance.pattern.len', '1536'
     systemProperty 'resonance.kernel.native', 'true'
     systemProperty 'file.encoding', 'UTF-8'
 
@@ -140,6 +143,7 @@ tasks.register('testJavaPerfHeavy', Test) {
     maxParallelForks = 1
     forkEvery = 0
 
+    systemProperty 'resonance.pattern.len', '1536'
     systemProperty 'resonance.kernel.native', 'false'
     systemProperty 'file.encoding', 'UTF-8'
 

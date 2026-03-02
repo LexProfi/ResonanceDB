@@ -8,12 +8,12 @@
  */
 package ai.evacortex.resonancedb.rest;
 
+import ai.evacortex.resonancedb.rest.dto.*;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.TestInstance;
+import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.net.ServerSocket;
@@ -27,19 +27,26 @@ import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public final class ResonanceDBRestEndpointIT {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final Duration TIMEOUT = Duration.ofSeconds(10);
+    private static final ObjectMapper MAPPER = new ObjectMapper().findAndRegisterModules();
+    private static final String PROP_PATTERN_LEN = "resonance.pattern.len";
 
     private HttpClient http;
     private ResonanceDBRest rest;
-    private Path dbRoot;
     private int port;
+    private Path dbRoot;
+
+    private static int patternLen() {
+        return Integer.getInteger(PROP_PATTERN_LEN, 1536);
+    }
 
     @BeforeAll
     void startServer() throws Exception {
@@ -47,88 +54,114 @@ public final class ResonanceDBRestEndpointIT {
                 .connectTimeout(TIMEOUT)
                 .build();
 
-        this.dbRoot = Files.createTempDirectory("resonancedb-rest-it-");
         this.port = findFreePort();
+        this.dbRoot = Files.createTempDirectory("resonancedb-rest-it-");
 
         this.rest = ResonanceDBRest.withEmbeddedStore(dbRoot, port);
+        assertNotNull(rest, "ResonanceDBRest.withEmbeddedStore(...) returned null");
         this.rest.start();
+
+        HttpResponse<String> r = get("/health");
+        assertEquals(200, r.statusCode(), "server didn't start properly: " + r.body());
     }
 
     @AfterAll
     void stopServer() throws Exception {
-        if (rest != null) rest.close();
+        if (rest != null) {
+            try {
+                rest.close();
+            } finally {
+                rest = null;
+            }
+        }
         deleteRecursively(dbRoot);
+        dbRoot = null;
     }
-
 
     @Test
     void health_ok() throws Exception {
         HttpResponse<String> r = get("/health");
-        assertEquals(200, r.statusCode());
+
+        assertEquals(200, r.statusCode(), r.body());
         assertHeaderContains(r, "content-type", "application/json");
         assertHeaderContains(r, "cache-control", "no-store");
         assertEquals("*", header(r, "access-control-allow-origin"));
 
-        JsonNode json = parse(r.body());
-        assertEquals("ok", json.get("status").asText());
-        assertTrue(json.get("timeUtc").asText().endsWith("Z"), "timeUtc must be Instant ISO-8601 with Z");
+        HealthResponse json = read(r, HealthResponse.class);
+        assertEquals("ok", json.status());
+        assertNotNull(json.timeUtc());
+        assertTrue(json.timeUtc().toString().endsWith("Z"), "timeUtc must be Instant ISO-8601 with Z");
     }
 
     @Test
     void insert_query_replace_delete_happyPath() throws Exception {
-        HttpResponse<String> ins = postJson("/insert",
-                "{\\\"pattern\\\":{\\\"amplitude\\\":[1,0.5,0.1],\\\"phase\\\":[0,0.1,0.2]},\\\"metadata\\\":{\\\"name\\\":\\\"test\\\"}}");
-        assertEquals(200, ins.statusCode());
-        String id = parse(ins.body()).get("id").asText();
-        assertTrue(id.matches("^[0-9a-fA-F]{32}$"), "id must be 32-hex MD5");
+        int len = patternLen();
 
-        HttpResponse<String> q = postJson("/query",
-                "{\\\"query\\\":{\\\"amplitude\\\":[1,0.5,0.1],\\\"phase\\\":[0,0.1,0.2]},\\\"topK\\\":5}");
-        assertEquals(200, q.statusCode());
-        JsonNode qArr = parse(q.body());
-        assertTrue(qArr.isArray());
+        WavePatternDto p1 = constantDto(1.0, 0.1, len);
+        HttpResponse<String> ins = post("/insert", new InsertRequest(p1, Map.of("name", "test")));
+        assertEquals(200, ins.statusCode(), ins.body());
+        String oldId = read(ins, IdResponse.class).id();
+        assertTrue(oldId.matches("^[0-9a-fA-F]{32}$"), "id must be 32-hex MD5");
+        HttpResponse<String> q1 = post("/query", new QueryRequest(p1, 5));
+        assertEquals(200, q1.statusCode(), q1.body());
+        assertQueryArrayContainsId(q1.body(), oldId, "query(inserted) must contain inserted id");
+        WavePatternDto p2 = constantDto(2.0, 0.2, len);
+        HttpResponse<String> rep = post("/replace", new ReplaceRequest(oldId, p2, Map.of("name", "updated")));
+        assertEquals(200, rep.statusCode(), rep.body());
+        String newId = read(rep, IdResponse.class).id();
+        assertNotNull(newId);
+        assertTrue(newId.matches("^[0-9a-fA-F]{32}$"), "id must be 32-hex MD5");
+        assertNotEquals(oldId, newId, "replace must change id because id is a content hash");
+        HttpResponse<String> q2 = post("/query", new QueryRequest(p2, 5));
+        assertEquals(200, q2.statusCode(), q2.body());
+        assertQueryArrayContainsId(q2.body(), newId, "query(updated) must contain replaced id");
+        HttpResponse<String> delOld = post("/delete", new DeleteRequest(oldId));
+        assertTrue(
+                delOld.statusCode() == 404 || delOld.statusCode() == 409,
+                "deleting old id must fail (expected 404/409), got: " + delOld.statusCode() + " body=" + delOld.body()
+        );
 
-        HttpResponse<String> rep = postJson("/replace",
-                "{\\\"id\\\":\\\"" + id + "\\\",\\\"pattern\\\":{\\\"amplitude\\\":[2,1,0.5],\\\"phase\\\":[0,0.2,0.4]},\\\"metadata\\\":{\\\"name\\\":\\\"updated\\\"}}");
-        assertEquals(200, rep.statusCode());
-        assertEquals(id, parse(rep.body()).get("id").asText(), "replace should keep the same id key");
-
-        HttpResponse<String> del = postJson("/delete",
-                "{\\\"id\\\":\\\"" + id + "\\\"}");
-        assertEquals(200, del.statusCode());
-        assertTrue(parse(del.body()).get("ok").asBoolean());
+        HttpResponse<String> delNew = post("/delete", new DeleteRequest(newId));
+        assertEquals(200, delNew.statusCode(), delNew.body());
+        assertTrue(read(delNew, OkResponse.class).ok());
     }
 
     @Test
     void insert_duplicate_returns_409_duplicate() throws Exception {
-        HttpResponse<String> ins1 = postJson("/insert",
-                "{\\\"pattern\\\":{\\\"amplitude\\\":[9,8,7],\\\"phase\\\":[0,0.1,0.2]},\\\"metadata\\\":{}}");
-        assertEquals(200, ins1.statusCode());
-        String id = parse(ins1.body()).get("id").asText();
+        int len = patternLen();
+        WavePatternDto p = constantDto(9.0, 0.3, len);
 
-        HttpResponse<String> ins2 = postJson("/insert",
-                "{\\\"pattern\\\":{\\\"amplitude\\\":[9,8,7],\\\"phase\\\":[0,0.1,0.2]},\\\"metadata\\\":{}}");
-        assertEquals(409, ins2.statusCode());
-        JsonNode err = parse(ins2.body());
-        assertEquals("duplicate", err.get("code").asText());
-        assertTrue(err.get("message").asText().contains(id));
+        HttpResponse<String> ins1 = post("/insert", new InsertRequest(p, Map.of()));
+        assertEquals(200, ins1.statusCode(), ins1.body());
+        String id = read(ins1, IdResponse.class).id();
+
+        HttpResponse<String> ins2 = post("/insert", new InsertRequest(p, Map.of()));
+        assertEquals(409, ins2.statusCode(), ins2.body());
+
+        ErrorResponse err = read(ins2, ErrorResponse.class);
+        assertEquals("duplicate", err.code());
+        assertNotNull(err.message());
+        assertTrue(err.message().contains(id), "error message must mention existing id");
     }
 
     @Test
     void bad_json_returns_400_bad_json() throws Exception {
         HttpResponse<String> r = postRaw("/query", "{bad json}");
-        assertEquals(400, r.statusCode());
-        JsonNode err = parse(r.body());
-        assertEquals("bad_json", err.get("code").asText());
+        assertEquals(400, r.statusCode(), r.body());
+
+        ErrorResponse err = read(r, ErrorResponse.class);
+        assertEquals("bad_json", err.code());
     }
 
     @Test
     void empty_body_returns_400_bad_request() throws Exception {
         HttpResponse<String> r = postRaw("/query", "");
-        assertEquals(400, r.statusCode());
-        JsonNode err = parse(r.body());
-        assertEquals("bad_request", err.get("code").asText());
-        assertTrue(err.get("message").asText().toLowerCase().contains("empty"));
+        assertEquals(400, r.statusCode(), r.body());
+
+        ErrorResponse err = read(r, ErrorResponse.class);
+        assertEquals("bad_request", err.code());
+        assertNotNull(err.message());
+        assertTrue(err.message().toLowerCase().contains("empty"));
     }
 
     @Test
@@ -139,10 +172,20 @@ public final class ResonanceDBRestEndpointIT {
                 .build();
 
         HttpResponse<String> r = http.send(req, HttpResponse.BodyHandlers.ofString());
-        assertEquals(204, r.statusCode());
+        assertEquals(204, r.statusCode(), r.body());
         assertEquals("*", header(r, "access-control-allow-origin"));
         assertNotNull(header(r, "access-control-allow-methods"));
         assertNotNull(header(r, "access-control-allow-headers"));
+    }
+
+    private static WavePatternDto constantDto(double amp, double phase, int len) {
+        double[] a = new double[len];
+        double[] p = new double[len];
+        for (int i = 0; i < len; i++) {
+            a[i] = amp;
+            p[i] = phase;
+        }
+        return new WavePatternDto(a, p);
     }
 
     private HttpResponse<String> get(String path) throws Exception {
@@ -153,9 +196,8 @@ public final class ResonanceDBRestEndpointIT {
         return http.send(req, HttpResponse.BodyHandlers.ofString());
     }
 
-    private HttpResponse<String> postJson(String path, String escapedJson) throws Exception {
-        String json = escapedJson.replace("\\\"", "\"");
-        return postRaw(path, json);
+    private HttpResponse<String> post(String path, Object body) throws Exception {
+        return postRaw(path, MAPPER.writeValueAsString(body));
     }
 
     private HttpResponse<String> postRaw(String path, String body) throws Exception {
@@ -171,8 +213,22 @@ public final class ResonanceDBRestEndpointIT {
         return URI.create("http://localhost:" + port + path);
     }
 
-    private static JsonNode parse(String body) throws IOException {
-        return MAPPER.readTree(body);
+    private static <T> T read(HttpResponse<String> r, Class<T> type) throws IOException {
+        return MAPPER.readValue(r.body(), type);
+    }
+
+    private static void assertQueryArrayContainsId(String body, String expectedId, String messageIfMissing) throws IOException {
+        JsonNode arr = MAPPER.readTree(body);
+        assertTrue(arr.isArray(), "query must return JSON array");
+        boolean found = false;
+        for (JsonNode n : arr) {
+            JsonNode idNode = n.get("id");
+            if (idNode != null && expectedId.equalsIgnoreCase(idNode.asText())) {
+                found = true;
+                break;
+            }
+        }
+        assertTrue(found, messageIfMissing + " (expectedId=" + expectedId + ")");
     }
 
     private static String header(HttpResponse<?> r, String nameLower) {
@@ -194,41 +250,19 @@ public final class ResonanceDBRestEndpointIT {
     }
 
     private static void deleteRecursively(Path root) throws IOException {
-        if (root == null) return;
-        if (!Files.exists(root)) return;
+        if (root == null || !Files.exists(root)) return;
 
         Files.walkFileTree(root, new SimpleFileVisitor<>() {
-
             @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
-                try {
-                    Files.deleteIfExists(file);
-                } catch (IOException e) {
-                    try {
-                        file.toFile().setWritable(true);
-                        Files.deleteIfExists(file);
-                    } catch (IOException ex) {
-                        throw ex;
-                    }
-                }
+                Files.deleteIfExists(file);
                 return FileVisitResult.CONTINUE;
             }
 
             @Override
             public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
-                if (exc != null) {
-                    throw exc;
-                }
-                try {
-                    Files.deleteIfExists(dir);
-                } catch (IOException e) {
-                    try {
-                        dir.toFile().setWritable(true);
-                        Files.deleteIfExists(dir);
-                    } catch (IOException ex) {
-                        throw ex;
-                    }
-                }
+                if (exc != null) throw exc;
+                Files.deleteIfExists(dir);
                 return FileVisitResult.CONTINUE;
             }
         });

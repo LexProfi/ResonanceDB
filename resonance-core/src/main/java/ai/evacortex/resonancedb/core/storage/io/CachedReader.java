@@ -209,4 +209,14 @@ public class CachedReader implements AutoCloseable {
             }
         }
     }
+
+    public OptionalInt samplePatternLength() {
+        if (closed) return OptionalInt.empty();
+        if (offsetMap.isEmpty()) return OptionalInt.empty();
+        long off = offsetMap.values().iterator().next();
+        int pos = (int) (off + 1 + 16);
+        if (pos < 0 || pos + 4 > mmap.capacity()) return OptionalInt.empty();
+        int len = mmap.getInt(pos);
+        return OptionalInt.of(len);
+    }
 }
