@@ -102,14 +102,16 @@ public final class JavaKernel implements ResonanceKernel {
                 for (int k = 0; k < len; k++) {
                     double A1 = qA[k], A2 = bA[k];
                     double A1sq = A1 * A1, A2sq = A2 * A2;
-                    eA += A1sq; eB += A2sq;
+                    eA += A1sq;
+                    eB += A2sq;
                     inter += (A1 + A2) * (A1 + A2);
                 }
             } else {
                 for (int k = 0; k < len; k++) {
                     double A1 = qA[k], A2 = bA[k];
                     double A1sq = A1 * A1, A2sq = A2 * A2;
-                    eA += A1sq; eB += A2sq;
+                    eA += A1sq;
+                    eB += A2sq;
                     inter += A1sq + A2sq + 2.0 * A1 * A2 * Math.cos(bP[k] - qP[k]);
                 }
             }
@@ -135,23 +137,36 @@ public final class JavaKernel implements ResonanceKernel {
             throw new IllegalArgumentException("Pattern length mismatch");
         }
 
-        double eA = 0.0, eB = 0.0, inter = 0.0, dSum = 0.0;
+        double eA = 0.0, eB = 0.0, inter = 0.0;
+        double sinSum = 0.0, cosSum = 0.0;
 
         for (int i = 0; i < len; i++) {
             double A1 = aA[i], A2 = bA[i];
             double A1sq = A1 * A1, A2sq = A2 * A2;
-            eA += A1sq; eB += A2sq;
+            eA += A1sq;
+            eB += A2sq;
 
             double dphi = bP[i] - aP[i];
             inter += A1sq + A2sq + 2.0 * A1 * A2 * Math.cos(dphi);
 
             while (dphi <= -Math.PI) dphi += 2 * Math.PI;
-            while (dphi >  Math.PI) dphi -= 2 * Math.PI;
-            dSum += dphi;
+            while (dphi > Math.PI) dphi -= 2 * Math.PI;
+
+            sinSum += Math.sin(dphi);
+            cosSum += Math.cos(dphi);
         }
 
         double denom = eA + eB;
-        float energy = (denom == 0.0) ? 0.0f : (float) (0.5 * inter / denom);
-        return new ComparisonResult(energy, dSum / len);
+        float energy;
+        if (denom == 0.0) {
+            energy = 0.0f;
+        } else {
+            double base = 0.5 * inter / denom;
+            double ampF = (eA > 0.0 && eB > 0.0) ? 2.0 * Math.sqrt(eA * eB) / denom : 0.0;
+            energy = (float) (base * ampF);
+        }
+
+        double phaseDelta = Math.atan2(sinSum, cosSum);
+        return new ComparisonResult(energy, phaseDelta);
     }
 }

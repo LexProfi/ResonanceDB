@@ -230,6 +230,32 @@ abstract class ResonanceKernelContractTest {
             assertTrue(s1 >= 0.0f && s1 <= 1.0f, "Bounds failed at iter " + t);
         }
     }
+
+    @Test
+    void compareWithPhaseDelta_energy_matches_compare_on_general_case() {
+        WavePattern a = rampAmpPattern(0.2, 0.003, 0.4, 1024);
+        WavePattern b = rampAmpPattern(0.9, -0.0005, 1.1, 1024);
+
+        float compare = kernel().compare(a, b);
+        ComparisonResult detailed = kernel().compareWithPhaseDelta(a, b);
+
+        assertEquals(compare, detailed.energy(), 1e-6,
+                "compareWithPhaseDelta().energy() must match compare()");
+    }
+
+    @Test
+    void compareWithPhaseDelta_energy_matches_compare_fuzz() {
+        for (int i = 0; i < 20; i++) {
+            WavePattern a = randomPattern(513, 100 + i);
+            WavePattern b = randomPattern(513, 200 + i);
+
+            float compare = kernel().compare(a, b);
+            ComparisonResult detailed = kernel().compareWithPhaseDelta(a, b);
+
+            assertEquals(compare, detailed.energy(), 1e-6,
+                    "Mismatch at iter " + i);
+        }
+    }
 }
 
 @DisplayName("ResonanceKernel contract tests (JavaKernel)")

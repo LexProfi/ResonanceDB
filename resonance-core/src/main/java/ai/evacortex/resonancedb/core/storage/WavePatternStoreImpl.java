@@ -593,7 +593,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
         final int len = query.amplitude().length;
         final int overfetch = tune.overfetchForTopK(topK);
-        final int localCap = Math.max(Math.max(32, topK), topK * overfetch);
+        //final int localCap = Math.max(Math.max(32, topK), topK * overfetch);
+        final int localCap = Math.max(topK, 8);
 
         final PriorityQueue<HeapItemDetailed> heap = new PriorityQueue<>(localCap, cmp);
 
@@ -616,7 +617,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
                 boolean idEq = id.equals(queryId);
                 boolean exactEq = energy > 1.0f - EXACT_MATCH_EPS;
-                double priority = zoneScore + energy + (idEq ? 1.0 : 0.0) + (exactEq ? 0.5 : 0.0);
+                double priority = energy + (idEq ? 1.0 : 0.0) + (exactEq ? 0.5 : 0.0);
 
                 HeapItemDetailed item = new HeapItemDetailed(
                         new ResonanceMatchDetailed(id, energy, cand, phaseShift, zone, zoneScore),

@@ -12,6 +12,7 @@ import ai.evacortex.resonancedb.core.*;
 import ai.evacortex.resonancedb.core.exceptions.DuplicatePatternException;
 import ai.evacortex.resonancedb.core.exceptions.InvalidWavePatternException;
 import ai.evacortex.resonancedb.core.exceptions.PatternNotFoundException;
+import ai.evacortex.resonancedb.core.math.WavePatternUtils;
 import ai.evacortex.resonancedb.core.storage.util.HashingUtil;
 import ai.evacortex.resonancedb.core.math.ResonanceZone;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
@@ -366,9 +367,9 @@ public class WavePatternStoreImplTest {
 
     @Test
     void testZoneScoreMonotonicityByZone() {
-        WavePattern core = constant(1.0, 0.0 + Math.random() * 1e-4);
-        WavePattern fringe = constant(1.0, 0.5 + Math.random() * 1e-4);
-        WavePattern shadow = constant(1.0, Math.PI + Math.random() * 1e-4);
+        WavePattern core = constant(1.0, 0.00001);
+        WavePattern fringe = constant(1.0, 0.50001);
+        WavePattern shadow = constant(1.0, Math.PI - 0.00001);
 
         String idCore = store.insert(core, Map.of());
         String idFringe = store.insert(fringe, Map.of());
@@ -385,9 +386,9 @@ public class WavePatternStoreImplTest {
             if (m.id().equals(idShadow)) scoreShadow = m.zoneScore();
         }
 
-        assertTrue(scoreCore >= 0.9, "core should have very high score");
-        assertTrue(scoreFringe > 0.1 && scoreFringe < scoreCore, "fringe should be intermediate");
-        assertTrue(scoreShadow < 0.05, "shadow should be near zero");
+        assertEquals(2.0, scoreCore, 1e-9, "CORE zoneScore must be 2.0");
+        assertEquals(1.0, scoreFringe, 1e-9, "FRINGE zoneScore must be 1.0");
+        assertEquals(0.0, scoreShadow, 1e-9, "SHADOW zoneScore must be 0.0");
     }
 
     @Test
@@ -648,5 +649,182 @@ public class WavePatternStoreImplTest {
         float actual = bMatch.get().energy();
 
         assertEquals(expected, actual, 1e-5, "Detailed match energy must match direct compare()");
+    }
+
+    @Test
+    void testQueryAndDetailedMustReturnSameIdsOrderAndEnergy() {
+        WavePattern p0 = constant(1.0, 0.0);
+        WavePattern p1 = constant(0.9, 0.25);
+        WavePattern p2 = constant(0.7, 0.6);
+        WavePattern p3 = constant(1.2, 1.1);
+        WavePattern p4 = constant(0.5, Math.PI);
+
+        store.insert(p0, Map.of("label", "p0"));
+        store.insert(p1, Map.of("label", "p1"));
+        store.insert(p2, Map.of("label", "p2"));
+        store.insert(p3, Map.of("label", "p3"));
+        store.insert(p4, Map.of("label", "p4"));
+
+        WavePattern query = constant(1.0, 0.35);
+        int topK = 3;
+
+        List<ResonanceMatch> plain = store.query(query, topK);
+        List<ResonanceMatchDetailed> detailed = store.queryDetailed(query, topK);
+
+        assertEquals(plain.size(), detailed.size(), "topK size must match");
+
+        for (int i = 0; i < plain.size(); i++) {
+            assertEquals(plain.get(i).id(), detailed.get(i).id(),
+                    "ID mismatch at rank " + i);
+            assertEquals(plain.get(i).energy(), detailed.get(i).energy(), 1e-6,
+                    "Energy mismatch at rank " + i);
+        }
+    }
+
+    @Test
+    void testQueryDetailedAndInterferenceMapMustBeConsistent() {
+        WavePattern p0 = constant(1.0, 0.0);
+        WavePattern p1 = constant(1.0, 0.4);
+        WavePattern p2 = constant(1.0, 0.9);
+
+        store.insert(p0, Map.of());
+        store.insert(p1, Map.of());
+        store.insert(p2, Map.of());
+
+        WavePattern query = constant(1.0, 0.2);
+        int topK = 3;
+
+        List<ResonanceMatchDetailed> detailed = store.queryDetailed(query, topK);
+        List<InterferenceEntry> map = store.queryInterferenceMap(query, topK);
+
+        assertEquals(detailed.size(), map.size());
+
+        for (int i = 0; i < detailed.size(); i++) {
+            ResonanceMatchDetailed d = detailed.get(i);
+            InterferenceEntry m = map.get(i);
+
+            assertEquals(d.id(), m.id(), "ID mismatch at rank " + i);
+            assertEquals(d.energy(), m.energy(), 1e-6, "Energy mismatch at rank " + i);
+            assertEquals(d.phaseDelta(), m.phaseShift(), 1e-6, "Phase mismatch at rank " + i);
+            assertEquals(d.zone(), m.zone(), "Zone mismatch at rank " + i);
+        }
+    }
+
+    @Test
+    void testQueryCompositeMustMatchQueryOnSuperposedPattern() {
+        WavePattern core = constant(1.0, 0.0);
+        WavePattern fringe = constant(1.0, 0.5);
+        WavePattern shadow = constant(1.0, Math.PI);
+
+        store.insert(core, Map.of("zone", "core"));
+        store.insert(fringe, Map.of("zone", "fringe"));
+        store.insert(shadow, Map.of("zone", "shadow"));
+
+        List<WavePattern> components = List.of(core, fringe);
+        List<Double> weights = List.of(0.5, 0.5);
+        WavePattern superposed = WavePatternUtils.superpose(components, weights);
+
+        int topK = 3;
+        List<ResonanceMatch> composite = store.queryComposite(components, weights, topK);
+        List<ResonanceMatch> direct = store.query(superposed, topK);
+
+        assertEquals(direct.size(), composite.size());
+
+        for (int i = 0; i < direct.size(); i++) {
+            assertEquals(direct.get(i).id(), composite.get(i).id(), "ID mismatch at rank " + i);
+            assertEquals(direct.get(i).energy(), composite.get(i).energy(), 1e-6,
+                    "Energy mismatch at rank " + i);
+        }
+    }
+
+    @Test
+    void testQueryCompositeDetailedMustMatchDetailedOnSuperposedPattern() {
+        WavePattern core = constant(1.0, 0.0);
+        WavePattern fringe = constant(1.0, 0.5);
+        WavePattern shadow = constant(1.0, Math.PI);
+
+        store.insert(core, Map.of("zone", "core"));
+        store.insert(fringe, Map.of("zone", "fringe"));
+        store.insert(shadow, Map.of("zone", "shadow"));
+
+        List<WavePattern> components = List.of(core, fringe);
+        List<Double> weights = List.of(0.5, 0.5);
+        WavePattern superposed = WavePatternUtils.superpose(components, weights);
+
+        int topK = 3;
+        List<ResonanceMatchDetailed> composite = store.queryCompositeDetailed(components, weights, topK);
+        List<ResonanceMatchDetailed> direct = store.queryDetailed(superposed, topK);
+
+        assertEquals(direct.size(), composite.size());
+
+        for (int i = 0; i < direct.size(); i++) {
+            assertEquals(direct.get(i).id(), composite.get(i).id(), "ID mismatch at rank " + i);
+            assertEquals(direct.get(i).energy(), composite.get(i).energy(), 1e-6,
+                    "Energy mismatch at rank " + i);
+            assertEquals(direct.get(i).phaseDelta(), composite.get(i).phaseDelta(), 1e-6,
+                    "Phase mismatch at rank " + i);
+            assertEquals(direct.get(i).zone(), composite.get(i).zone(),
+                    "Zone mismatch at rank " + i);
+        }
+    }
+
+    @Test
+    void testQueryAndDetailedEnergyMustMatchForSameReturnedIds() {
+        WavePattern p0 = constant(1.0, 0.0);
+        WavePattern p1 = constant(0.9, 0.25);
+        WavePattern p2 = constant(0.7, 0.6);
+        WavePattern p3 = constant(1.2, 1.1);
+        WavePattern p4 = constant(0.5, Math.PI);
+
+        store.insert(p0, Map.of("label", "p0"));
+        store.insert(p1, Map.of("label", "p1"));
+        store.insert(p2, Map.of("label", "p2"));
+        store.insert(p3, Map.of("label", "p3"));
+        store.insert(p4, Map.of("label", "p4"));
+
+        WavePattern query = constant(1.0, 0.35);
+        int topK = 5;
+
+        List<ResonanceMatch> plain = store.query(query, topK);
+        List<ResonanceMatchDetailed> detailed = store.queryDetailed(query, topK);
+
+        Map<String, Float> plainEnergy = plain.stream()
+                .collect(Collectors.toMap(ResonanceMatch::id, ResonanceMatch::energy));
+        Map<String, Float> detailedEnergy = detailed.stream()
+                .collect(Collectors.toMap(ResonanceMatchDetailed::id, ResonanceMatchDetailed::energy));
+
+        Set<String> common = new HashSet<>(plainEnergy.keySet());
+        common.retainAll(detailedEnergy.keySet());
+
+        assertFalse(common.isEmpty(), "Expected at least one shared id between query and queryDetailed");
+
+        for (String id : common) {
+            assertEquals(plainEnergy.get(id), detailedEnergy.get(id), 1e-6,
+                    "Energy mismatch for id " + id);
+        }
+    }
+
+    @Test
+    void testQueryAndDetailedAgreeForUnbalancedAmplitudeCandidate() {
+        WavePattern query = constant(1.0, 0.3);
+        WavePattern candidate = constant(0.2, 0.9);
+
+        String id = store.insert(candidate, Map.of("label", "candidate"));
+
+        List<ResonanceMatch> plain = store.query(query, 5);
+        List<ResonanceMatchDetailed> detailed = store.queryDetailed(query, 5);
+
+        ResonanceMatch p = plain.stream()
+                .filter(m -> m.id().equals(id))
+                .findFirst()
+                .orElseThrow();
+
+        ResonanceMatchDetailed d = detailed.stream()
+                .filter(m -> m.id().equals(id))
+                .findFirst()
+                .orElseThrow();
+
+        assertEquals(p.energy(), d.energy(), 1e-6,
+                "query and queryDetailed must agree on energy for the same id");
     }
 }
