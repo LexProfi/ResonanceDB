@@ -7,8 +7,6 @@ bin/
 # ─── Gradle ────────────────────────────────────────────────────────────────────
 .gradle/
 .gradle-cache/
-!gradle/wrapper/gradle-wrapper.jar
-!gradle-wrapper.properties
 
 # ─── Native Libraries ──────────────────────────────────────────────────────────
 libs/libresonance.so
@@ -43,8 +41,14 @@ Thumbs.db
 *.swo
 *.bak
 
-# ─── Generated ─────────────────────────────────────────────────────────────────
+# ─── Generated Archives / Packages ─────────────────────────────────────────────
 *.jar
 *.war
 *.zip
 *.tar.gz
+
+# ─── Required Gradle Wrapper Files (must stay in VCS) ─────────────────────────
+!gradlew
+!gradlew.bat
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
