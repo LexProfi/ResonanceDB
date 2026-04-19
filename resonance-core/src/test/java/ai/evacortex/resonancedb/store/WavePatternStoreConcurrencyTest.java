@@ -9,6 +9,7 @@
 package ai.evacortex.resonancedb.store;
 
 import ai.evacortex.resonancedb.core.exceptions.PatternNotFoundException;
+import ai.evacortex.resonancedb.core.storage.StoreRuntimeServices;
 import ai.evacortex.resonancedb.core.storage.util.HashingUtil;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
 import ai.evacortex.resonancedb.core.WavePatternTestUtils;
@@ -42,7 +43,8 @@ class WavePatternStoreConcurrencyTest {
 
     @BeforeEach
     void setUp() {
-        store = new WavePatternStoreImpl(tempDir);
+        StoreRuntimeServices runtime = StoreRuntimeServices.fromSystemProperties();
+        store = new WavePatternStoreImpl(tempDir, len(), runtime);
     }
 
     @AfterEach

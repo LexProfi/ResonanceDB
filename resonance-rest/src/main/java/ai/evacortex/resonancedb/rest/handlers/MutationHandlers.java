@@ -9,11 +9,13 @@
 package ai.evacortex.resonancedb.rest.handlers;
 
 import ai.evacortex.resonancedb.core.ResonanceStore;
+import ai.evacortex.resonancedb.core.corpus.CorpusService;
 import ai.evacortex.resonancedb.core.exceptions.DuplicatePatternException;
 import ai.evacortex.resonancedb.core.exceptions.InvalidWavePatternException;
 import ai.evacortex.resonancedb.core.exceptions.PatternNotFoundException;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
 import ai.evacortex.resonancedb.rest.dto.*;
+import ai.evacortex.resonancedb.rest.http.RestRouter;
 import ai.evacortex.resonancedb.rest.validation.WavePatternValidator;
 import com.sun.net.httpserver.HttpExchange;
 
@@ -22,17 +24,18 @@ import java.util.Objects;
 
 public final class MutationHandlers {
 
-    private final ResonanceStore store;
+    private final CorpusService corpora;
     private final WavePatternValidator validator;
 
-    public MutationHandlers(ResonanceStore store, WavePatternValidator validator) {
-        this.store = Objects.requireNonNull(store, "store");
+    public MutationHandlers(CorpusService corpora, WavePatternValidator validator) {
+        this.corpora = Objects.requireNonNull(corpora, "corpora");
         this.validator = Objects.requireNonNull(validator, "validator");
     }
 
     public IdResponse insert(HttpExchange ex, InsertRequest req)
             throws DuplicatePatternException, InvalidWavePatternException {
 
+        ResonanceStore store = resolveStore(ex);
         WavePattern psi = validator.toWavePattern(req.pattern());
         Map<String, String> md = (req.metadata() == null) ? Map.of() : req.metadata();
         String id = store.insert(psi, md);
@@ -42,6 +45,7 @@ public final class MutationHandlers {
     public IdResponse replace(HttpExchange ex, ReplaceRequest req)
             throws PatternNotFoundException, DuplicatePatternException, InvalidWavePatternException {
 
+        ResonanceStore store = resolveStore(ex);
         WavePattern psi = validator.toWavePattern(req.pattern());
         Map<String, String> md = (req.metadata() == null) ? Map.of() : req.metadata();
         String id = store.replace(req.id(), psi, md);
@@ -51,7 +55,13 @@ public final class MutationHandlers {
     public OkResponse delete(HttpExchange ex, DeleteRequest req)
             throws PatternNotFoundException {
 
+        ResonanceStore store = resolveStore(ex);
         store.delete(req.id());
         return new OkResponse(true);
+    }
+
+    private ResonanceStore resolveStore(HttpExchange ex) {
+        String corpusId = RestRouter.pathParam(ex, "corpusId");
+        return corpora.store(corpusId);
     }
 }

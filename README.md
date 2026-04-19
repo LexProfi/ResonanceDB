@@ -177,11 +177,13 @@ Environment variables:
 
 Base URL:
 
-```
+```text
 http://localhost:31415
 ```
 
 All endpoints accept and return `application/json`.
+
+> **Note:** the examples below use **heavily truncated** `amplitude` and `phase` arrays for readability. In real deployments, wave patterns are much larger — typically **1356+ dimensions**, and often higher depending on configuration.
 
 ---
 
@@ -198,32 +200,61 @@ Response:
 
 ---
 
-### POST /compare
+## Corpus-scoped routes
+
+All data operations are addressed to a specific corpus through the route:
+
+```text
+/corpora/{corpusId}/...
+```
+
+Example corpus base:
+
+```text
+http://localhost:31415/corpora/default
+```
+
+This means corpus identity is part of the resource path, not the JSON payload.
+
+---
+
+### POST /corpora/{corpusId}/compare
 
 Request:
 
 ```json
 {
-  "a": { "amplitude": [1, 0.5], "phase": [0, 0.1] },
-  "b": { "amplitude": [1, 0.5], "phase": [0, 0.1] }
+  "a": {
+    "amplitude": [1, 0.5],
+    "phase": [0, 0.1]
+  },
+  "b": {
+    "amplitude": [1, 0.5],
+    "phase": [0, 0.1]
+  }
 }
 ```
 
 Response:
 
 ```json
-{ "score": 0.9987 }
+{
+  "score": 0.9987
+}
 ```
 
 ---
 
-### POST /query
+### POST /corpora/{corpusId}/query
 
 Request:
 
 ```json
 {
-  "query": { "amplitude": [1, 0.5], "phase": [0, 0.1] },
+  "query": {
+    "amplitude": [1, 0.5],
+    "phase": [0, 0.1]
+  },
   "topK": 10
 }
 ```
@@ -232,13 +263,28 @@ Response:
 
 ```json
 [
-  { "id": "...", "energy": 0.9234 }
+  {
+    "id": "...",
+    "energy": 0.9234
+  }
 ]
 ```
 
 ---
 
-### POST /queryDetailed
+### POST /corpora/{corpusId}/queryDetailed
+
+Request:
+
+```json
+{
+  "query": {
+    "amplitude": [1, 0.5],
+    "phase": [0, 0.1]
+  },
+  "topK": 10
+}
+```
 
 Response element example:
 
@@ -254,52 +300,91 @@ Response element example:
 
 ---
 
-### POST /insert
+### POST /corpora/{corpusId}/insert
 
 Request:
 
 ```json
 {
-  "pattern": { "amplitude": [1, 0.5], "phase": [0, 0.1] },
-  "metadata": { "label": "example" }
+  "pattern": {
+    "amplitude": [1, 0.5],
+    "phase": [0, 0.1]
+  },
+  "metadata": {
+    "label": "example"
+  }
 }
 ```
 
 Response:
 
 ```json
-{ "id": "4ac2f2ce35ce804869c76dec8199c079" }
+{
+  "id": "4ac2f2ce35ce804869c76dec8199c079"
+}
 ```
 
 ---
 
-### POST /replace
+### POST /corpora/{corpusId}/replace
+
+Request:
 
 ```json
 {
   "id": "existing-id",
-  "pattern": { "amplitude": [1, 0.5], "phase": [0, 0.1] },
-  "metadata": { "label": "updated" }
+  "pattern": {
+    "amplitude": [1, 0.5],
+    "phase": [0, 0.1]
+  },
+  "metadata": {
+    "label": "updated"
+  }
 }
-```
-
----
-
-### POST /delete
-
-```json
-{ "id": "existing-id" }
 ```
 
 Response:
 
 ```json
-{ "ok": true }
+{
+  "id": "new-content-hash-id"
+}
 ```
 
 ---
 
-Additional endpoints (`/queryInterference`, `/queryInterferenceMap`, `/queryComposite`, `/queryCompositeDetailed`) follow the same pattern structure and return extended resonance or interference diagnostics.
+### POST /corpora/{corpusId}/delete
+
+Request:
+
+```json
+{
+  "id": "existing-id"
+}
+```
+
+Response:
+
+```json
+{
+  "ok": true
+}
+```
+
+---
+
+### Additional corpus-scoped endpoints
+
+The following endpoints use the same route pattern and the same wave-pattern JSON structure:
+
+* `POST /corpora/{corpusId}/queryInterference`
+* `POST /corpora/{corpusId}/queryInterferenceMap`
+* `POST /corpora/{corpusId}/queryComposite`
+* `POST /corpora/{corpusId}/queryCompositeDetailed`
+
+They return extended resonance, interference, or composite-query diagnostics.
+
+---
 
 Operational documentation only. See [LICENSE](./LICENSE) for governing terms.
 

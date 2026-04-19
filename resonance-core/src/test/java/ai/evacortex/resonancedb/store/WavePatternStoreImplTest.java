@@ -13,6 +13,7 @@ import ai.evacortex.resonancedb.core.exceptions.DuplicatePatternException;
 import ai.evacortex.resonancedb.core.exceptions.InvalidWavePatternException;
 import ai.evacortex.resonancedb.core.exceptions.PatternNotFoundException;
 import ai.evacortex.resonancedb.core.math.WavePatternUtils;
+import ai.evacortex.resonancedb.core.storage.StoreRuntimeServices;
 import ai.evacortex.resonancedb.core.storage.util.HashingUtil;
 import ai.evacortex.resonancedb.core.math.ResonanceZone;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
@@ -41,8 +42,9 @@ public class WavePatternStoreImplTest {
     Path tempDir;
 
     @BeforeEach
-    void setup() {
-        store = new WavePatternStoreImpl(tempDir);
+    void setUp() {
+        StoreRuntimeServices runtime = StoreRuntimeServices.fromSystemProperties();
+        store = new WavePatternStoreImpl(tempDir, len(), runtime);
     }
 
     @AfterEach

@@ -8,9 +8,14 @@
  */
 package ai.evacortex.resonancedb.rest;
 
-import ai.evacortex.resonancedb.core.ResonanceStore;
-import ai.evacortex.resonancedb.core.storage.WavePatternStoreImpl;
-import ai.evacortex.resonancedb.rest.dto.*;
+import ai.evacortex.resonancedb.core.corpus.CorpusService;
+import ai.evacortex.resonancedb.core.storage.FileSystemCorpusService;
+import ai.evacortex.resonancedb.rest.dto.CompareRequest;
+import ai.evacortex.resonancedb.rest.dto.CompositeQueryRequest;
+import ai.evacortex.resonancedb.rest.dto.DeleteRequest;
+import ai.evacortex.resonancedb.rest.dto.InsertRequest;
+import ai.evacortex.resonancedb.rest.dto.QueryRequest;
+import ai.evacortex.resonancedb.rest.dto.ReplaceRequest;
 import ai.evacortex.resonancedb.rest.error.ErrorMapper;
 import ai.evacortex.resonancedb.rest.handlers.HealthHandlers;
 import ai.evacortex.resonancedb.rest.handlers.MutationHandlers;
@@ -29,15 +34,18 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.file.Path;
-import java.util.*;
+import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class ResonanceDBRest implements Closeable {
 
-    private static final int MAX_BODY_BYTES = Integer.getInteger("resonance.rest.maxBodyBytes", 8 * 1024 * 1024);
-    private final ResonanceStore store;
-    private final Closeable storeCloseable;
+    private static final int MAX_BODY_BYTES =
+            Integer.getInteger("resonance.rest.maxBodyBytes", 8 * 1024 * 1024);
+
+    private final CorpusService corpusService;
+    private final AutoCloseable corpusServiceCloseable;
     private final HttpServer server;
     private final ExecutorService httpExec;
     private final ResonanceRestConfig cfg;
@@ -57,23 +65,19 @@ public final class ResonanceDBRest implements Closeable {
     private final QueryHandlers queryHandlers;
     private final MutationHandlers mutationHandlers;
 
-    /**
-     * Production ctor: HTTP executor is auto-selected (virtual threads).
-     * <p>
-     * IMPORTANT: we intentionally use virtual threads by default so HTTP never becomes the bottleneck;
-     * the store limits parallelism internally (queryPool + ioLimiter).
-     */
-    public ResonanceDBRest(ResonanceStore store, Closeable storeCloseable, int port) throws IOException {
-        this(store, storeCloseable, port, null);
+    private final AtomicBoolean stopped = new AtomicBoolean(false);
+
+    public ResonanceDBRest(CorpusService corpusService, int port) throws IOException {
+        this(corpusService, corpusService, port, null);
     }
 
-    /**
-     * Internal/testing ctor: allows overriding executor (pass null for default).
-     * Package-private by design (no external contract changes).
-     */
-    ResonanceDBRest(ResonanceStore store, Closeable storeCloseable, int port, ExecutorService executorOverride) throws IOException {
-        this.store = Objects.requireNonNull(store, "store must not be null");
-        this.storeCloseable = storeCloseable;
+    ResonanceDBRest(CorpusService corpusService,
+                    AutoCloseable corpusServiceCloseable,
+                    int port,
+                    ExecutorService executorOverride) throws IOException {
+
+        this.corpusService = Objects.requireNonNull(corpusService, "corpusService must not be null");
+        this.corpusServiceCloseable = corpusServiceCloseable;
         this.cfg = ResonanceRestConfig.fromSystemProperties(port, MAX_BODY_BYTES);
 
         this.server = HttpServer.create(new InetSocketAddress(cfg.port()), 0);
@@ -94,43 +98,58 @@ public final class ResonanceDBRest implements Closeable {
         this.topK = new TopK(cfg);
 
         this.healthHandlers = new HealthHandlers();
-        this.queryHandlers = new QueryHandlers(store, validator, topK);
-        this.mutationHandlers = new MutationHandlers(store, validator);
+        this.queryHandlers = new QueryHandlers(corpusService, validator, topK);
+        this.mutationHandlers = new MutationHandlers(corpusService, validator);
 
         router.get("/health", ex -> io.writeJson(ex, 200, healthHandlers.health(ex)));
-        router.postJson("/compare", CompareRequest.class, queryHandlers::compare);
-        router.postJson("/query", QueryRequest.class, queryHandlers::query);
-        router.postJson("/queryDetailed", QueryRequest.class, queryHandlers::queryDetailed);
-        router.postJson("/queryInterference", QueryRequest.class, queryHandlers::queryInterference);
-        router.postJson("/queryInterferenceMap", QueryRequest.class, queryHandlers::queryInterferenceMap);
-        router.postJson("/queryComposite", CompositeQueryRequest.class, queryHandlers::queryComposite);
-        router.postJson("/queryCompositeDetailed", CompositeQueryRequest.class, queryHandlers::queryCompositeDetailed);
-        router.postJson("/insert", InsertRequest.class, mutationHandlers::insert);
-        router.postJson("/replace", ReplaceRequest.class, mutationHandlers::replace);
-        router.postJson("/delete", DeleteRequest.class, mutationHandlers::delete);
+
+        router.postJson("/corpora/{corpusId}/compare", CompareRequest.class, queryHandlers::compare);
+        router.postJson("/corpora/{corpusId}/query", QueryRequest.class, queryHandlers::query);
+        router.postJson("/corpora/{corpusId}/queryDetailed", QueryRequest.class, queryHandlers::queryDetailed);
+        router.postJson("/corpora/{corpusId}/queryInterference", QueryRequest.class, queryHandlers::queryInterference);
+        router.postJson("/corpora/{corpusId}/queryInterferenceMap", QueryRequest.class, queryHandlers::queryInterferenceMap);
+        router.postJson("/corpora/{corpusId}/queryComposite", CompositeQueryRequest.class, queryHandlers::queryComposite);
+        router.postJson("/corpora/{corpusId}/queryCompositeDetailed", CompositeQueryRequest.class, queryHandlers::queryCompositeDetailed);
+
+        router.postJson("/corpora/{corpusId}/insert", InsertRequest.class, mutationHandlers::insert);
+        router.postJson("/corpora/{corpusId}/replace", ReplaceRequest.class, mutationHandlers::replace);
+        router.postJson("/corpora/{corpusId}/delete", DeleteRequest.class, mutationHandlers::delete);
     }
 
     public static ResonanceDBRest withEmbeddedStore(Path dbRoot, int port) throws IOException {
-        WavePatternStoreImpl impl = new WavePatternStoreImpl(dbRoot);
-        return new ResonanceDBRest(impl, impl, port);
+        FileSystemCorpusService corpora = new FileSystemCorpusService(dbRoot);
+        return new ResonanceDBRest(corpora, corpora, port, null);
     }
 
-    public void start() { server.start(); }
+    public void start() {
+        server.start();
+    }
 
     public void stop(int delaySeconds) {
+        if (!stopped.compareAndSet(false, true)) {
+            return;
+        }
+
         try {
             server.stop(Math.max(0, delaySeconds));
         } finally {
             httpExec.shutdownNow();
-            closeQuietly(storeCloseable);
+            closeQuietly(corpusServiceCloseable);
         }
     }
 
     @Override
-    public void close() { stop(0); }
+    public void close() {
+        stop(0);
+    }
 
-    private static void closeQuietly(Closeable c) {
-        if (c == null) return;
-        try { c.close(); } catch (Exception ignored) {}
+    private static void closeQuietly(AutoCloseable c) {
+        if (c == null) {
+            return;
+        }
+        try {
+            c.close();
+        } catch (Exception ignored) {
+        }
     }
 }

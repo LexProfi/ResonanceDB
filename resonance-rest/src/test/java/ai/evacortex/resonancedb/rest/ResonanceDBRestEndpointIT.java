@@ -38,6 +38,7 @@ public final class ResonanceDBRestEndpointIT {
     private static final Duration TIMEOUT = Duration.ofSeconds(10);
     private static final ObjectMapper MAPPER = new ObjectMapper().findAndRegisterModules();
     private static final String PROP_PATTERN_LEN = "resonance.pattern.len";
+    private static final String CORPUS_ID = "it-default";
 
     private HttpClient http;
     private ResonanceDBRest rest;
@@ -98,30 +99,36 @@ public final class ResonanceDBRestEndpointIT {
         int len = patternLen();
 
         WavePatternDto p1 = constantDto(1.0, 0.1, len);
-        HttpResponse<String> ins = post("/insert", new InsertRequest(p1, Map.of("name", "test")));
+        HttpResponse<String> ins = post(corpusPath("/insert"), new InsertRequest(p1, Map.of("name", "test")));
         assertEquals(200, ins.statusCode(), ins.body());
+
         String oldId = read(ins, IdResponse.class).id();
         assertTrue(oldId.matches("^[0-9a-fA-F]{32}$"), "id must be 32-hex MD5");
-        HttpResponse<String> q1 = post("/query", new QueryRequest(p1, 5));
+
+        HttpResponse<String> q1 = post(corpusPath("/query"), new QueryRequest(p1, 5));
         assertEquals(200, q1.statusCode(), q1.body());
         assertQueryArrayContainsId(q1.body(), oldId, "query(inserted) must contain inserted id");
+
         WavePatternDto p2 = constantDto(2.0, 0.2, len);
-        HttpResponse<String> rep = post("/replace", new ReplaceRequest(oldId, p2, Map.of("name", "updated")));
+        HttpResponse<String> rep = post(corpusPath("/replace"), new ReplaceRequest(oldId, p2, Map.of("name", "updated")));
         assertEquals(200, rep.statusCode(), rep.body());
+
         String newId = read(rep, IdResponse.class).id();
         assertNotNull(newId);
         assertTrue(newId.matches("^[0-9a-fA-F]{32}$"), "id must be 32-hex MD5");
         assertNotEquals(oldId, newId, "replace must change id because id is a content hash");
-        HttpResponse<String> q2 = post("/query", new QueryRequest(p2, 5));
+
+        HttpResponse<String> q2 = post(corpusPath("/query"), new QueryRequest(p2, 5));
         assertEquals(200, q2.statusCode(), q2.body());
         assertQueryArrayContainsId(q2.body(), newId, "query(updated) must contain replaced id");
-        HttpResponse<String> delOld = post("/delete", new DeleteRequest(oldId));
+
+        HttpResponse<String> delOld = post(corpusPath("/delete"), new DeleteRequest(oldId));
         assertTrue(
                 delOld.statusCode() == 404 || delOld.statusCode() == 409,
                 "deleting old id must fail (expected 404/409), got: " + delOld.statusCode() + " body=" + delOld.body()
         );
 
-        HttpResponse<String> delNew = post("/delete", new DeleteRequest(newId));
+        HttpResponse<String> delNew = post(corpusPath("/delete"), new DeleteRequest(newId));
         assertEquals(200, delNew.statusCode(), delNew.body());
         assertTrue(read(delNew, OkResponse.class).ok());
     }
@@ -131,11 +138,11 @@ public final class ResonanceDBRestEndpointIT {
         int len = patternLen();
         WavePatternDto p = constantDto(9.0, 0.3, len);
 
-        HttpResponse<String> ins1 = post("/insert", new InsertRequest(p, Map.of()));
+        HttpResponse<String> ins1 = post(corpusPath("/insert"), new InsertRequest(p, Map.of()));
         assertEquals(200, ins1.statusCode(), ins1.body());
         String id = read(ins1, IdResponse.class).id();
 
-        HttpResponse<String> ins2 = post("/insert", new InsertRequest(p, Map.of()));
+        HttpResponse<String> ins2 = post(corpusPath("/insert"), new InsertRequest(p, Map.of()));
         assertEquals(409, ins2.statusCode(), ins2.body());
 
         ErrorResponse err = read(ins2, ErrorResponse.class);
@@ -146,7 +153,7 @@ public final class ResonanceDBRestEndpointIT {
 
     @Test
     void bad_json_returns_400_bad_json() throws Exception {
-        HttpResponse<String> r = postRaw("/query", "{bad json}");
+        HttpResponse<String> r = postRaw(corpusPath("/query"), "{bad json}");
         assertEquals(400, r.statusCode(), r.body());
 
         ErrorResponse err = read(r, ErrorResponse.class);
@@ -155,7 +162,7 @@ public final class ResonanceDBRestEndpointIT {
 
     @Test
     void empty_body_returns_400_bad_request() throws Exception {
-        HttpResponse<String> r = postRaw("/query", "");
+        HttpResponse<String> r = postRaw(corpusPath("/query"), "");
         assertEquals(400, r.statusCode(), r.body());
 
         ErrorResponse err = read(r, ErrorResponse.class);
@@ -166,7 +173,7 @@ public final class ResonanceDBRestEndpointIT {
 
     @Test
     void cors_preflight_options_returns_204() throws Exception {
-        HttpRequest req = HttpRequest.newBuilder(uri("/query"))
+        HttpRequest req = HttpRequest.newBuilder(uri(corpusPath("/query")))
                 .method("OPTIONS", HttpRequest.BodyPublishers.noBody())
                 .timeout(TIMEOUT)
                 .build();
@@ -186,6 +193,10 @@ public final class ResonanceDBRestEndpointIT {
             p[i] = phase;
         }
         return new WavePatternDto(a, p);
+    }
+
+    private String corpusPath(String suffix) {
+        return "/corpora/" + CORPUS_ID + suffix;
     }
 
     private HttpResponse<String> get(String path) throws Exception {
@@ -250,7 +261,9 @@ public final class ResonanceDBRestEndpointIT {
     }
 
     private static void deleteRecursively(Path root) throws IOException {
-        if (root == null || !Files.exists(root)) return;
+        if (root == null || !Files.exists(root)) {
+            return;
+        }
 
         Files.walkFileTree(root, new SimpleFileVisitor<>() {
             @Override
@@ -261,7 +274,9 @@ public final class ResonanceDBRestEndpointIT {
 
             @Override
             public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
-                if (exc != null) throw exc;
+                if (exc != null) {
+                    throw exc;
+                }
                 Files.deleteIfExists(dir);
                 return FileVisitResult.CONTINUE;
             }

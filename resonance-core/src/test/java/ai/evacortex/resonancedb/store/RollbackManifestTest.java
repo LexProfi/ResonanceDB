@@ -30,12 +30,14 @@ class RollbackManifestTest {
     private static final String PROP_PATTERN_LEN = "resonance.pattern.len";
 
     private Path tempDir;
+    private StoreRuntimeServices runtime;
     private WavePatternStoreImpl store;
 
     @BeforeEach
     void setUp() throws Exception {
         tempDir = Files.createTempDirectory("resdb-test-rollback");
-        store = new WavePatternStoreImpl(tempDir);
+        runtime = StoreRuntimeServices.fromSystemProperties();
+        store = new WavePatternStoreImpl(tempDir, len(), runtime);
     }
 
     @AfterEach
