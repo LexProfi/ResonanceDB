@@ -467,11 +467,13 @@ See **[LICENSE](./LICENSE)**, **[LICENSE-docs](./LICENSE-docs)**, and **[TRAININ
 
 ---
 
-## 🧠 Patent Status
+## 🧠 Patent Notice
 
-A provisional U.S. patent application related to ResonanceDB was filed on **June 18, 2025**.
+Certain aspects of ResonanceDB and related technologies may be protected by patent applications, issued patents, foreign counterparts, continuations, divisionals, or future patent filings.
 
-Certain techniques described in this repository may be covered by pending patent applications. No patent rights are granted except as expressly provided under the repository **[LICENSE](./LICENSE)**, and no implied rights arise by estoppel or otherwise.
+No patent license or other intellectual property rights are granted by this repository, except as expressly provided under the repository **[LICENSE](./LICENSE)**. No implied rights arise by estoppel, waiver, exhaustion, or otherwise.
+
+All rights not expressly granted are reserved.
 
 ---
 

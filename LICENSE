@@ -66,17 +66,15 @@ If any statement in any notice could be read as inconsistent with the Prosperity
 
 ## 3. Patent Notice
 
-The Contributor intends to seek and/or has sought patent protection covering certain architectural, algorithmic, and system-level techniques implemented in or described by ResonanceDB.
+Certain aspects of ResonanceDB and related technologies, including without limitation wave-based semantic storage, phase-aware routing, resonance-based retrieval, phase-sharded storage, interference-based comparison, and related system-level implementation techniques, may be protected by one or more patent applications, issued patents, continuations, divisionals, reissues, reexaminations, foreign counterparts, PCT or national-phase applications, or future patent filings.
 
-A U.S. provisional patent application related to ResonanceDB was filed on **June 18, 2025**.
-As of the date of this notice, no patent has been granted in connection with ResonanceDB.
+Publication, distribution, access to, or use of this repository does not dedicate any invention, implementation technique, architecture, algorithm, or system design to the public domain.
 
-Any patent license, if and when applicable, arises **solely under and subject to the conditions of the Prosperity Public License 3.0.0** and applies only while you remain in full compliance with its terms.
+Except to the extent expressly licensed under the Prosperity Public License 3.0.0 reproduced below, no patent license, ownership interest, covenant not to sue, waiver, exhaustion, implied license, or other intellectual property right is granted by this repository, by distribution of the Software, by accompanying documentation, by public disclosure, or by any statement or conduct.
 
-No broader, implied, or additional patent rights are granted by publication of this repository, by distribution of the software, or by any supplemental documentation, notice, statement, or conduct.
+Any patent rights expressly licensed under the Prosperity Public License 3.0.0 are granted only within the scope of that license and only to persons or entities acting in compliance with its terms.
 
-This notice may be updated to reflect relevant application numbers, filing dates, or patent status, without altering the scope or effect of the license granted herein.
-
+All rights not expressly granted are reserved.
 ---
 
 ## Prosperity Public License 3.0.0
@@ -150,7 +148,7 @@ The contributor licenses you to do everything with this software that would othe
 
 ## Patent
 
-The contributor licenses you to do everything with this software that would otherwise infringe any patents they can license or become able to license, **subject to the conditions of this license**.
+The contributor licenses you to do everything with this software that would otherwise infringe any patents they can license or become able to license.
 
 ---
 
