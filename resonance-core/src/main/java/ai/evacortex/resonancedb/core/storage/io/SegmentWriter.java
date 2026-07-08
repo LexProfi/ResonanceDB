@@ -84,13 +84,16 @@ public class SegmentWriter implements AutoCloseable {
     }
 
     public long write(String hexId, WavePattern pattern) throws SegmentOverflowException {
+        byte[] idBytes = HexFormat.of().parseHex(hexId);
+        if (idBytes.length != 16) {
+            throw new InvalidWavePatternException("ID must be a 16-byte MD5 hex string (32 characters)");
+        }
+        return write(idBytes, pattern);
+    }
+
+    public long write(byte[] idBytes, WavePattern pattern) throws SegmentOverflowException {
         lock.writeLock().lock();
         try {
-            byte[] idBytes = HexFormat.of().parseHex(hexId);
-            if (idBytes.length != 16) {
-                throw new InvalidWavePatternException("ID must be a 16-byte MD5 hex string (32 characters)");
-            }
-
             int patternSize = WavePatternCodec.estimateSize(pattern, false);
             int blockSize = RECORD_HEADER_SIZE + patternSize;
             int alignedSize = align(blockSize);
@@ -116,13 +119,6 @@ public class SegmentWriter implements AutoCloseable {
 
             writeOffset.addAndGet(alignedSize);
             recordCount++;
-
-            int checksumOffset = headerSize;
-            int lengthToChecksum = (int) (writeOffset.get() - checksumOffset);
-
-            ByteBuffer checksumBuf = buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN);
-            checksumBuf.position(checksumOffset);
-            checksumBuf.limit(checksumOffset + lengthToChecksum);
 
             return offset;
         } finally {

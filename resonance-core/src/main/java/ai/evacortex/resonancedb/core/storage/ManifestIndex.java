@@ -74,6 +74,7 @@ public class ManifestIndex implements Closeable {
     }
 
     public void registerSegmentIfAbsent(String segmentName) {
+        if (knownSegments.contains(segmentName)) return;
         lock.writeLock().lock();
         try {
             knownSegments.add(segmentName);
@@ -170,6 +171,10 @@ public class ManifestIndex implements Closeable {
 
         } catch (IOException e) {
             System.err.printf("Manifest flush failed: %s%n", e);
+            try {
+                Path tmp = indexFile.resolveSibling(indexFile.getFileName().toString() + ".tmp");
+                Files.deleteIfExists(tmp);
+            } catch (IOException ignored) {}
             throw new RuntimeException("Failed to write manifest index", e);
         } finally {
             lock.readLock().unlock();

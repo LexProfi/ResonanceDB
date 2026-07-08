@@ -32,10 +32,13 @@ dependencies {
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
     options.release = 22
+    options.compilerArgs += ['--add-modules', 'jdk.incubator.vector']
 }
 
 tasks.withType(Test).configureEach {
-    useJUnitPlatform()
+    useJUnitPlatform {
+        excludeTags 'benchmark'
+    }
     maxParallelForks = 1
     forkEvery = 0
     testLogging {
@@ -51,9 +54,26 @@ tasks.withType(Test).configureEach {
     systemProperty 'bench.warmupIters', '10'
     systemProperty 'resonance.pattern.len', '1536'
 
+    // Forward bench.*, resonance.index.*, resonance.insert.* to test JVM
+    // Source 1: System properties (-D flags, may not reach Gradle daemon)
+    System.getProperties().each { key, value ->
+        def k = key.toString()
+        if (k.startsWith('bench.') || k.startsWith('resonance.index.') || k.startsWith('resonance.insert.')) {
+            systemProperty k, value.toString()
+        }
+    }
+    // Source 2: Project properties (-P flags, always available)
+    project.properties.each { key, value ->
+        def k = key.toString()
+        if (k.startsWith('bench.') || k.startsWith('resonance.index.') || k.startsWith('resonance.insert.')) {
+            systemProperty k, value.toString()
+        }
+    }
+
     def baseArgs = [
             '--enable-preview',
             '--enable-native-access=ALL-UNNAMED',
+            '--add-modules', 'jdk.incubator.vector',
             '-XX:ActiveProcessorCount=12',
             '-XX:+PerfDisableSharedMem',
             '-XX:+DisableAttachMechanism',
@@ -65,8 +85,14 @@ tasks.withType(Test).configureEach {
         heapArgs = [
                 '-Xms2g', '-Xmx4g',
                 '-XX:+UseZGC',
-                '-XX:+ZGenerational',
-                '-XX:ZUncommitDelay=30s'
+                '-XX:+ZGenerational'
+        ]
+    } else if (preset == 'mid') {
+        heapArgs = [
+                '-Xms1g', '-Xmx2g',
+                '-XX:+UseG1GC',
+                '-XX:G1HeapRegionSize=16m',
+                '-XX:MaxGCPauseMillis=200'
         ]
     } else {
         heapArgs = [
@@ -91,7 +117,9 @@ tasks.register('testJavaPerf', Test) {
     description = "Run performance tests with JavaKernel (preset=ide)"
     group = "verification"
 
-    useJUnitPlatform()
+    useJUnitPlatform {
+        includeTags 'benchmark'
+    }
     maxParallelForks = 1
     forkEvery = 0
 
@@ -102,6 +130,7 @@ tasks.register('testJavaPerf', Test) {
     jvmArgs = [
             '--enable-preview',
             '--enable-native-access=ALL-UNNAMED',
+            '--add-modules', 'jdk.incubator.vector',
             '-Xms512m', '-Xmx512m',
             '-XX:+UseG1GC',
             '-XX:G1HeapRegionSize=8m',
@@ -115,7 +144,9 @@ tasks.register('testNativePerf', Test) {
     description = "Run performance tests with NativeKernel (preset=ide)"
     group = "verification"
 
-    useJUnitPlatform()
+    useJUnitPlatform {
+        includeTags 'benchmark'
+    }
     maxParallelForks = 1
     forkEvery = 0
 
@@ -126,6 +157,7 @@ tasks.register('testNativePerf', Test) {
     jvmArgs = [
             '--enable-preview',
             '--enable-native-access=ALL-UNNAMED',
+            '--add-modules', 'jdk.incubator.vector',
             '-Xms512m', '-Xmx512m',
             '-XX:+UseG1GC',
             '-XX:G1HeapRegionSize=8m',
@@ -139,7 +171,9 @@ tasks.register('testJavaPerfHeavy', Test) {
     description = "Run performance tests with JavaKernel (preset=heavy)"
     group = "verification"
 
-    useJUnitPlatform()
+    useJUnitPlatform {
+        includeTags 'benchmark'
+    }
     maxParallelForks = 1
     forkEvery = 0
 
@@ -150,10 +184,10 @@ tasks.register('testJavaPerfHeavy', Test) {
     jvmArgs = [
             '--enable-preview',
             '--enable-native-access=ALL-UNNAMED',
+            '--add-modules', 'jdk.incubator.vector',
             '-Xms2g', '-Xmx4g',
             '-XX:+UseZGC',
             '-XX:+ZGenerational',
-            '-XX:ZUncommitDelay=30s',
             '-XX:+AlwaysPreTouch'
     ]
 

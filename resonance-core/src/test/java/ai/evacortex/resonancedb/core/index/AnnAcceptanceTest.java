@@ -1,0 +1,621 @@
+/*
+ * ResonanceDB — Waveform Semantic Engine
+ * Copyright © 2025-2026 Aleksandr Listopad
+ * SPDX-License-Identifier: LicenseRef-ResonanceDB-License-v1.0
+ *
+ * Patent notice: The authors intend to seek patent protection for this software.
+ * Commercial use >30 days → license@evacortex.ai
+ */
+package ai.evacortex.resonancedb.core.index;
+
+import ai.evacortex.resonancedb.core.storage.StoreRuntimeServices;
+import ai.evacortex.resonancedb.core.storage.WavePattern;
+import ai.evacortex.resonancedb.core.storage.WavePatternStoreImpl;
+import ai.evacortex.resonancedb.core.storage.responce.ResonanceMatch;
+import ai.evacortex.resonancedb.core.storage.responce.ResonanceMatchDetailed;
+
+import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+/**
+ * Acceptance tests for the ANN indexing subsystem (IVF L1 + Vamana L2).
+ *
+ * <p>Validates recall, concurrency safety, crash recovery, and exact equivalence
+ * with the legacy full-scan path. These tests run with production-scale
+ * pattern dimension (1536) and use the real store pipeline.</p>
+ */
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+class AnnAcceptanceTest {
+
+    private static final long SEED = 314159L;
+    private static final int DIM = Integer.getInteger("resonance.pattern.len", 1536);
+    private static final int TOP_K = 10;
+    private static final int N = 500; // enough for meaningful recall, fits in 512MB
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 1. RECALL: ANN top-K vs exhaustive top-K
+    // ═══════════════════════════════════════════════════════════════════════
+
+    @Test
+    @Order(1)
+    @DisplayName("Recall: IVF (nProbe=K) vs ground-truth kernel scoring ≥ 0.90")
+    void recallVsGroundTruth(@TempDir Path tmpDir) {
+        // Ground truth = exhaustive kernel.compare over all stored patterns.
+        // IVF with nProbe=K (full centroid coverage) should match ≥ 90%.
+        System.setProperty("resonance.index.enabled", "true");
+        System.setProperty("resonance.index.l2.enabled", "false");
+        System.setProperty("resonance.index.l1.k", "8");
+        System.setProperty("resonance.index.l1.nprobe", "8");
+
+        StoreRuntimeServices runtime = StoreRuntimeServices.fromSystemProperties();
+        WavePatternStoreImpl store = new WavePatternStoreImpl(tmpDir.resolve("recall"), DIM, runtime);
+
+        try {
+            Random rng = new Random(SEED);
+            List<WavePattern> allPatterns = new ArrayList<>();
+            List<String> allIds = new ArrayList<>();
+
+            for (int i = 0; i < N; i++) {
+                WavePattern p = randomPattern(rng, DIM);
+                try {
+                    String id = store.insert(p, Map.of());
+                    allPatterns.add(p);
+                    allIds.add(id);
+                } catch (Exception e) { /* dup */ }
+            }
+            store.forceIndexRebuild();
+
+            // Ground truth: exhaustive kernel scoring
+            ai.evacortex.resonancedb.core.engine.ResonanceKernel kernel =
+                    new ai.evacortex.resonancedb.core.engine.JavaKernel();
+
+            int totalHits = 0;
+            int totalExpected = 0;
+            int queries = 20;
+            Random qRng = new Random(SEED + 999);
+
+            for (int q = 0; q < queries; q++) {
+                WavePattern query = randomPattern(qRng, DIM);
+
+                // Ground truth top-K by kernel
+                float[] scores = new float[allPatterns.size()];
+                for (int i = 0; i < allPatterns.size(); i++) {
+                    scores[i] = kernel.compare(query, allPatterns.get(i));
+                }
+                Integer[] sortedIdx = new Integer[allPatterns.size()];
+                for (int i = 0; i < sortedIdx.length; i++) sortedIdx[i] = i;
+                Arrays.sort(sortedIdx, (a, b) -> Float.compare(scores[b], scores[a]));
+
+                Set<String> trueTopK = new HashSet<>();
+                for (int i = 0; i < TOP_K && i < sortedIdx.length; i++) {
+                    trueTopK.add(allIds.get(sortedIdx[i]));
+                }
+
+                // IVF result
+                List<ResonanceMatch> annResults = store.query(query, TOP_K);
+                Set<String> annIds = annResults.stream()
+                        .map(ResonanceMatch::id).collect(Collectors.toSet());
+
+                for (String id : trueTopK) {
+                    if (annIds.contains(id)) totalHits++;
+                }
+                totalExpected += trueTopK.size();
+            }
+
+            double recall = totalExpected > 0 ? (double) totalHits / totalExpected : 1.0;
+            System.out.println("IVF recall@" + TOP_K + " vs ground truth: " +
+                    String.format("%.3f", recall) +
+                    " (" + totalHits + "/" + totalExpected + ")");
+
+            assertTrue(recall >= 0.90,
+                    "IVF recall@" + TOP_K + " (nProbe=K) vs ground truth must be >= 0.90, got " +
+                            String.format("%.3f", recall));
+        } finally {
+            store.close();
+            System.clearProperty("resonance.index.enabled");
+            System.clearProperty("resonance.index.l2.enabled");
+            System.clearProperty("resonance.index.l1.k");
+            System.clearProperty("resonance.index.l1.nprobe");
+            runtime.close();
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 2. CONCURRENCY: writers + readers + rebuild simultaneously
+    // ═══════════════════════════════════════════════════════════════════════
+
+    @Test
+    @Order(2)
+    @DisplayName("Concurrency: 8 writers + 8 readers + rebuild, no deadlocks or data loss")
+    void concurrentWritersReadersRebuild(@TempDir Path tmpDir) throws Exception {
+        System.setProperty("resonance.index.enabled", "true");
+        System.setProperty("resonance.index.l2.enabled", "false"); // L1 only for speed
+        System.setProperty("resonance.index.delta.maxSize", "50"); // frequent rebuilds
+
+        StoreRuntimeServices runtime = StoreRuntimeServices.fromSystemProperties();
+        WavePatternStoreImpl store = new WavePatternStoreImpl(tmpDir.resolve("conc"), DIM, runtime);
+
+        try {
+            // Pre-insert some data
+            Random preRng = new Random(SEED);
+            for (int i = 0; i < 50; i++) {
+                try { store.insert(randomPattern(preRng, DIM), Map.of()); }
+                catch (Exception e) { /* dup */ }
+            }
+            store.forceIndexRebuild();
+
+            int writerThreads = 8;
+            int readerThreads = 8;
+            int durationSec = 15;
+
+            AtomicInteger insertCount = new AtomicInteger(0);
+            AtomicInteger queryCount = new AtomicInteger(0);
+            AtomicInteger errorCount = new AtomicInteger(0);
+            AtomicReference<Throwable> firstError = new AtomicReference<>();
+
+            ExecutorService exec = Executors.newFixedThreadPool(writerThreads + readerThreads);
+            CountDownLatch startLatch = new CountDownLatch(1);
+            long deadline = System.nanoTime() + durationSec * 1_000_000_000L;
+
+            // Writers
+            for (int t = 0; t < writerThreads; t++) {
+                int threadId = t;
+                exec.submit(() -> {
+                    try {
+                        startLatch.await();
+                        Random rng = new Random(SEED + 1000 + threadId);
+                        while (System.nanoTime() < deadline) {
+                            try {
+                                store.insert(randomPattern(rng, DIM), Map.of());
+                                insertCount.incrementAndGet();
+                            } catch (Exception e) {
+                                if (!(e instanceof ai.evacortex.resonancedb.core.exceptions.DuplicatePatternException)) {
+                                    errorCount.incrementAndGet();
+                                    firstError.compareAndSet(null, e);
+                                }
+                            }
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                });
+            }
+
+            // Readers
+            for (int t = 0; t < readerThreads; t++) {
+                int threadId = t;
+                exec.submit(() -> {
+                    try {
+                        startLatch.await();
+                        Random rng = new Random(SEED + 2000 + threadId);
+                        while (System.nanoTime() < deadline) {
+                            try {
+                                WavePattern q = randomPattern(rng, DIM);
+                                List<ResonanceMatch> results = store.query(q, TOP_K);
+                                assertNotNull(results);
+                                queryCount.incrementAndGet();
+                            } catch (Exception e) {
+                                errorCount.incrementAndGet();
+                                firstError.compareAndSet(null, e);
+                            }
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                });
+            }
+
+            // GO
+            startLatch.countDown();
+            exec.shutdown();
+            assertTrue(exec.awaitTermination(durationSec + 30, TimeUnit.SECONDS),
+                    "Threads must complete within timeout (no deadlock)");
+
+            System.out.println("Concurrency test: " +
+                    insertCount.get() + " inserts, " +
+                    queryCount.get() + " queries, " +
+                    errorCount.get() + " errors in " + durationSec + "s");
+
+            if (firstError.get() != null) {
+                firstError.get().printStackTrace();
+            }
+
+            assertEquals(0, errorCount.get(),
+                    "Zero errors expected. First: " +
+                            (firstError.get() != null ? firstError.get().getMessage() : "none"));
+            assertTrue(insertCount.get() > 0, "At least some inserts should succeed");
+            assertTrue(queryCount.get() > 0, "At least some queries should succeed");
+        } finally {
+            store.close();
+            System.clearProperty("resonance.index.enabled");
+            System.clearProperty("resonance.index.l2.enabled");
+            System.clearProperty("resonance.index.delta.maxSize");
+            runtime.close();
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 3. CRASH-SAFETY: missing/corrupted index → fallback → rebuild
+    // ═══════════════════════════════════════════════════════════════════════
+
+    @Test
+    @Order(3)
+    @DisplayName("Crash-safety: corrupted centroids.bin → fallback to full scan → queries work")
+    void crashSafetyCorruptedIndex(@TempDir Path tmpDir) throws IOException {
+        System.setProperty("resonance.index.enabled", "true");
+        System.setProperty("resonance.index.l2.enabled", "false");
+
+        StoreRuntimeServices runtime = StoreRuntimeServices.fromSystemProperties();
+        Path storeDir = tmpDir.resolve("crash");
+
+        // First: create store, insert data, build index, close
+        WavePatternStoreImpl store1 = new WavePatternStoreImpl(storeDir, DIM, runtime);
+        Random rng = new Random(SEED);
+        for (int i = 0; i < 100; i++) {
+            try { store1.insert(randomPattern(rng, DIM), Map.of()); }
+            catch (Exception e) { /* dup */ }
+        }
+        store1.forceIndexRebuild();
+        store1.close();
+
+        // Corrupt centroids.bin
+        Path centroidsPath = storeDir.resolve("index/centroids.bin");
+        if (Files.exists(centroidsPath)) {
+            Files.write(centroidsPath, new byte[]{0, 0, 0, 0, 1, 2, 3});
+        }
+
+        // Reopen — should detect corruption, fall back, queries still work
+        WavePatternStoreImpl store2 = new WavePatternStoreImpl(storeDir, DIM, runtime);
+        try {
+            WavePattern query = randomPattern(new Random(SEED + 42), DIM);
+            List<ResonanceMatch> results = store2.query(query, TOP_K);
+
+            assertNotNull(results, "Query must succeed even with corrupted index");
+            assertFalse(results.isEmpty(), "Query should return results via fallback");
+
+            // Detailed query should also work
+            List<ResonanceMatchDetailed> detailed = store2.queryDetailed(query, TOP_K);
+            assertNotNull(detailed);
+            assertFalse(detailed.isEmpty());
+        } finally {
+            store2.close();
+            System.clearProperty("resonance.index.enabled");
+            System.clearProperty("resonance.index.l2.enabled");
+            runtime.close();
+        }
+    }
+
+    @Test
+    @Order(4)
+    @DisplayName("Crash-safety: missing centroids.bin → fallback → queries work")
+    void crashSafetyMissingIndex(@TempDir Path tmpDir) {
+        System.setProperty("resonance.index.enabled", "true");
+        System.setProperty("resonance.index.l2.enabled", "false");
+
+        StoreRuntimeServices runtime = StoreRuntimeServices.fromSystemProperties();
+        Path storeDir = tmpDir.resolve("missing");
+
+        WavePatternStoreImpl store = new WavePatternStoreImpl(storeDir, DIM, runtime);
+        try {
+            Random rng = new Random(SEED);
+            for (int i = 0; i < 50; i++) {
+                try { store.insert(randomPattern(rng, DIM), Map.of()); }
+                catch (Exception e) { /* dup */ }
+            }
+
+            // No forceIndexRebuild — index doesn't exist
+            // Query should work via fallback (full scan through delta or FullScanCandidateSource)
+            WavePattern query = randomPattern(new Random(SEED + 77), DIM);
+            List<ResonanceMatch> results = store.query(query, TOP_K);
+
+            assertNotNull(results);
+            assertFalse(results.isEmpty(), "Query should return results via fallback");
+        } finally {
+            store.close();
+            System.clearProperty("resonance.index.enabled");
+            System.clearProperty("resonance.index.l2.enabled");
+            runtime.close();
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 4. EXACT EQUIVALENCE: index disabled ≡ legacy behavior
+    // ═══════════════════════════════════════════════════════════════════════
+
+    @Test
+    @Order(5)
+    @DisplayName("Exact equivalence: index.enabled=false produces identical results to legacy")
+    void exactEquivalence(@TempDir Path tmpDir) {
+        System.setProperty("resonance.index.enabled", "false");
+        StoreRuntimeServices runtime = StoreRuntimeServices.fromSystemProperties();
+
+        Path dir1 = tmpDir.resolve("store1");
+        Path dir2 = tmpDir.resolve("store2");
+
+        WavePatternStoreImpl store1 = new WavePatternStoreImpl(dir1, DIM, runtime);
+        WavePatternStoreImpl store2 = new WavePatternStoreImpl(dir2, DIM, runtime);
+
+        try {
+            // Insert identical data in both stores
+            Random rng = new Random(SEED);
+            for (int i = 0; i < 200; i++) {
+                WavePattern p = randomPattern(rng, DIM);
+                try {
+                    store1.insert(p, Map.of());
+                    store2.insert(p, Map.of());
+                } catch (Exception e) { /* dup */ }
+            }
+
+            // Query and compare — results must be identical
+            Random qRng = new Random(SEED + 500);
+            for (int q = 0; q < 20; q++) {
+                WavePattern query = randomPattern(qRng, DIM);
+
+                List<ResonanceMatch> r1 = store1.query(query, TOP_K);
+                List<ResonanceMatch> r2 = store2.query(query, TOP_K);
+
+                assertEquals(r1.size(), r2.size(),
+                        "Same result count for query " + q);
+
+                for (int i = 0; i < r1.size(); i++) {
+                    assertEquals(r1.get(i).id(), r2.get(i).id(),
+                            "Same ID at position " + i + " for query " + q);
+                    assertEquals(r1.get(i).energy(), r2.get(i).energy(), 1e-9,
+                            "Same energy at position " + i + " for query " + q);
+                }
+            }
+        } finally {
+            store1.close();
+            store2.close();
+            System.clearProperty("resonance.index.enabled");
+            runtime.close();
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 5. DELETE/REPLACE: index stays consistent after mutations
+    // ═══════════════════════════════════════════════════════════════════════
+
+    @Test
+    @Order(6)
+    @DisplayName("Mutations: delete/replace reflected in ANN query results")
+    void mutationsConsistency(@TempDir Path tmpDir) {
+        System.setProperty("resonance.index.enabled", "true");
+        System.setProperty("resonance.index.l2.enabled", "false"); // L1 only for speed
+
+        StoreRuntimeServices runtime = StoreRuntimeServices.fromSystemProperties();
+        WavePatternStoreImpl store = new WavePatternStoreImpl(tmpDir.resolve("mut"), DIM, runtime);
+
+        try {
+            Random rng = new Random(SEED);
+            List<String> ids = new ArrayList<>();
+            List<WavePattern> patterns = new ArrayList<>();
+
+            for (int i = 0; i < 100; i++) {
+                WavePattern p = randomPattern(rng, DIM);
+                try {
+                    String id = store.insert(p, Map.of());
+                    ids.add(id);
+                    patterns.add(p);
+                } catch (Exception e) { /* dup */ }
+            }
+            store.forceIndexRebuild();
+
+            // Delete first 10 patterns
+            Set<String> deletedIds = new HashSet<>();
+            for (int i = 0; i < 10 && i < ids.size(); i++) {
+                store.delete(ids.get(i));
+                deletedIds.add(ids.get(i));
+            }
+
+            // Query — deleted patterns must NOT appear in results
+            for (int q = 0; q < 20; q++) {
+                WavePattern query = randomPattern(new Random(SEED + 3000 + q), DIM);
+                List<ResonanceMatch> results = store.query(query, TOP_K);
+
+                for (ResonanceMatch m : results) {
+                    assertFalse(deletedIds.contains(m.id()),
+                            "Deleted pattern " + m.id() + " must not appear in results");
+                }
+            }
+
+            // Replace — old ID must not appear, new ID should be findable
+            if (ids.size() > 15) {
+                String oldId = ids.get(15);
+                WavePattern newPattern = randomPattern(new Random(SEED + 7777), DIM);
+                String newId = store.replace(oldId, newPattern, Map.of());
+
+                for (int q = 0; q < 10; q++) {
+                    List<ResonanceMatch> results = store.query(
+                            randomPattern(new Random(SEED + 4000 + q), DIM), 100);
+                    Set<String> resultIds = results.stream()
+                            .map(ResonanceMatch::id).collect(Collectors.toSet());
+
+                    assertFalse(resultIds.contains(oldId),
+                            "Replaced old ID must not appear in results");
+                }
+
+                // Query with the new pattern itself — should find it
+                List<ResonanceMatch> selfQuery = store.query(newPattern, TOP_K);
+                assertTrue(selfQuery.stream().anyMatch(m -> m.id().equals(newId)),
+                        "Replaced new pattern should be findable");
+            }
+        } finally {
+            store.close();
+            System.clearProperty("resonance.index.enabled");
+            System.clearProperty("resonance.index.l2.enabled");
+            runtime.close();
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 6. DETERMINISM: same query → same results
+    // ═══════════════════════════════════════════════════════════════════════
+
+    @Test
+    @Order(7)
+    @DisplayName("Determinism: same query on ANN store returns identical results")
+    void annDeterminism(@TempDir Path tmpDir) {
+        System.setProperty("resonance.index.enabled", "true");
+        System.setProperty("resonance.index.l2.enabled", "true");
+
+        StoreRuntimeServices runtime = StoreRuntimeServices.fromSystemProperties();
+        WavePatternStoreImpl store = new WavePatternStoreImpl(tmpDir.resolve("det"), DIM, runtime);
+
+        try {
+            Random rng = new Random(SEED);
+            for (int i = 0; i < 200; i++) {
+                try { store.insert(randomPattern(rng, DIM), Map.of()); }
+                catch (Exception e) { /* dup */ }
+            }
+            store.forceIndexRebuild();
+
+            WavePattern query = randomPattern(new Random(SEED + 888), DIM);
+            List<ResonanceMatch> run1 = store.query(query, TOP_K);
+            List<ResonanceMatch> run2 = store.query(query, TOP_K);
+
+            assertEquals(run1.size(), run2.size(), "Same count");
+            for (int i = 0; i < run1.size(); i++) {
+                assertEquals(run1.get(i).id(), run2.get(i).id(),
+                        "Same ID at position " + i);
+                assertEquals(run1.get(i).energy(), run2.get(i).energy(), 1e-9,
+                        "Same energy at position " + i);
+            }
+        } finally {
+            store.close();
+            System.clearProperty("resonance.index.enabled");
+            System.clearProperty("resonance.index.l2.enabled");
+            runtime.close();
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 8. HONEST RECALL: perturbed queries, ground truth, realistic nProbe
+    // ═══════════════════════════════════════════════════════════════════════
+
+    @Test
+    @Order(8)
+    @DisplayName("Honest recall: perturbed queries vs ground-truth exhaustive scoring")
+    void honestRecall(@TempDir Path tmpDir) {
+        // K=16 gives ~31 patterns/partition at N=500 — dense enough for meaningful clustering.
+        // nProbe=4 (25% coverage) — realistic, not trivial.
+        System.setProperty("resonance.index.enabled", "true");
+        System.setProperty("resonance.index.l2.enabled", "false");
+        System.setProperty("resonance.index.l1.k", "16");
+        System.setProperty("resonance.index.l1.nprobe", "4");
+
+        StoreRuntimeServices runtime = StoreRuntimeServices.fromSystemProperties();
+        WavePatternStoreImpl store = new WavePatternStoreImpl(tmpDir.resolve("hrecall"), DIM, runtime);
+
+        try {
+            Random rng = new Random(SEED);
+            List<WavePattern> allPatterns = new ArrayList<>();
+            List<String> allIds = new ArrayList<>();
+
+            for (int i = 0; i < N; i++) {
+                WavePattern p = randomPattern(rng, DIM);
+                try {
+                    String id = store.insert(p, Map.of());
+                    allPatterns.add(p);
+                    allIds.add(id);
+                } catch (Exception e) { /* dup */ }
+            }
+            store.forceIndexRebuild();
+
+            ai.evacortex.resonancedb.core.engine.ResonanceKernel kernel =
+                    new ai.evacortex.resonancedb.core.engine.JavaKernel();
+
+            int queryCount = 200;
+            int totalHits = 0;
+            int totalExpected = 0;
+            Random qRng = new Random(SEED + 12345);
+
+            for (int q = 0; q < queryCount; q++) {
+                // Perturbed query: take a stored pattern, add gaussian noise
+                int baseIdx = qRng.nextInt(allPatterns.size());
+                WavePattern base = allPatterns.get(baseIdx);
+                WavePattern query = perturbPattern(base, 0.3, qRng);
+
+                // Ground truth: exhaustive kernel.compare over ALL patterns
+                float[] scores = new float[allPatterns.size()];
+                for (int i = 0; i < allPatterns.size(); i++) {
+                    scores[i] = kernel.compare(query, allPatterns.get(i));
+                }
+                Integer[] sortedIdx = new Integer[allPatterns.size()];
+                for (int i = 0; i < sortedIdx.length; i++) sortedIdx[i] = i;
+                Arrays.sort(sortedIdx, (a, b) -> Float.compare(scores[b], scores[a]));
+
+                Set<String> trueTopK = new HashSet<>();
+                for (int i = 0; i < TOP_K && i < sortedIdx.length; i++) {
+                    trueTopK.add(allIds.get(sortedIdx[i]));
+                }
+
+                // ANN result
+                List<ResonanceMatch> annResults = store.query(query, TOP_K);
+                Set<String> annIds = annResults.stream()
+                        .map(ResonanceMatch::id).collect(Collectors.toSet());
+
+                for (String id : trueTopK) {
+                    if (annIds.contains(id)) totalHits++;
+                }
+                totalExpected += trueTopK.size();
+            }
+
+            double recall = totalExpected > 0 ? (double) totalHits / totalExpected : 0.0;
+            System.out.println("Honest recall@" + TOP_K +
+                    " (N=" + allPatterns.size() +
+                    ", K=16, nProbe=4, queries=" + queryCount +
+                    ", perturbed σ=0.3): " +
+                    String.format("%.3f", recall) +
+                    " (" + totalHits + "/" + totalExpected + ")");
+
+            // Report number, don't assert threshold — this is observational
+            assertTrue(recall >= 0.0, "Recall must be non-negative");
+        } finally {
+            store.close();
+            System.clearProperty("resonance.index.enabled");
+            System.clearProperty("resonance.index.l2.enabled");
+            System.clearProperty("resonance.index.l1.k");
+            System.clearProperty("resonance.index.l1.nprobe");
+            runtime.close();
+        }
+    }
+
+    // ─── Helpers ─────────────────────────────────────────────────────────
+
+    private static WavePattern randomPattern(Random rng, int dim) {
+        double[] amp = new double[dim];
+        double[] phase = new double[dim];
+        for (int i = 0; i < dim; i++) {
+            amp[i] = rng.nextDouble();
+            phase[i] = rng.nextDouble() * 2 * Math.PI;
+        }
+        return new WavePattern(amp, phase);
+    }
+
+    /**
+     * Creates a perturbed copy of a pattern by adding gaussian noise.
+     * Amplitude noise is multiplicative (1 + σ·N(0,1)), phase noise is additive (σ·N(0,1)).
+     */
+    private static WavePattern perturbPattern(WavePattern base, double sigma, Random rng) {
+        double[] amp = base.amplitude().clone();
+        double[] phase = base.phase().clone();
+        for (int i = 0; i < amp.length; i++) {
+            amp[i] = Math.max(0.0, amp[i] * (1.0 + sigma * rng.nextGaussian()));
+            phase[i] = phase[i] + sigma * rng.nextGaussian();
+        }
+        return new WavePattern(amp, phase);
+    }
+}

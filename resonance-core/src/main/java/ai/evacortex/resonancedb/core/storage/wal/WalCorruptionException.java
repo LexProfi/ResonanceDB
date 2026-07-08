@@ -6,21 +6,15 @@
  * Patent notice: The authors intend to seek patent protection for this software.
  * Commercial use >30 days → license@evacortex.ai
  */
-package ai.evacortex.resonancedb.core.math;
+package ai.evacortex.resonancedb.core.storage.wal;
 
-public enum ResonanceZone {
+public final class WalCorruptionException extends Exception {
 
-    CORE(2.0),
-    FRINGE(1.0),
-    SHADOW(0.0);
-
-    private final double score;
-
-    ResonanceZone(double score) {
-        this.score = score;
+    public WalCorruptionException(String message) {
+        super(message);
     }
 
-    public double score() {
-        return score;
+    public WalCorruptionException(String message, Throwable cause) {
+        super(message, cause);
     }
 }

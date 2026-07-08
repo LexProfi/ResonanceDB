@@ -62,6 +62,15 @@ public class PatternMetaStore {
         }
     }
 
+    public void putNoFlush(String hashId, Map<String, String> metadata) {
+        rwLock.writeLock().lock();
+        try {
+            store.put(hashId, new PatternMeta(new HashMap<>(metadata)));
+        } finally {
+            rwLock.writeLock().unlock();
+        }
+    }
+
     public void remove(String hashId) {
         rwLock.writeLock().lock();
         try {

@@ -210,8 +210,33 @@ public class CachedReader implements AutoCloseable {
         }
     }
 
+    public boolean readPatternFlat(String id,
+                                   double[] ampDest, int ampOffset,
+                                   double[] phaseDest, int phaseOffset,
+                                   int expectedLen) {
+        if (closed && refCount.get() == 0) return false;
+        Long recordOffset = offsetMap.get(id);
+        if (recordOffset == null) return false;
+
+        int base = recordOffset.intValue();
+        int storedLen = mmap.getInt(base + 17);
+        if (storedLen != expectedLen) return false;
+
+        int ampStart = base + HEADER_SIZE + 4;
+        for (int i = 0; i < expectedLen; i++) {
+            ampDest[ampOffset + i] = mmap.getDouble(ampStart + i * 8);
+        }
+
+        int phaseStart = ampStart + expectedLen * 8;
+        for (int i = 0; i < expectedLen; i++) {
+            phaseDest[phaseOffset + i] = mmap.getDouble(phaseStart + i * 8);
+        }
+
+        return true;
+    }
+
     public OptionalInt samplePatternLength() {
-        if (closed) return OptionalInt.empty();
+        if (closed && refCount.get() == 0) return OptionalInt.empty();
         if (offsetMap.isEmpty()) return OptionalInt.empty();
         long off = offsetMap.values().iterator().next();
         int pos = (int) (off + 1 + 16);

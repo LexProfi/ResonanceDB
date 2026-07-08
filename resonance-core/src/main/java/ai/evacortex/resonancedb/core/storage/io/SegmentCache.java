@@ -36,13 +36,17 @@ public class SegmentCache implements Closeable {
     }
 
     public void updateVersion(String seg, long lastOffset) {
-
         if (isClosed.get()) return;
         Long prev = versions.put(seg, lastOffset);
         if (prev != null && prev != lastOffset) {
             cache.invalidate(new Key(seg, prev));
         }
-        cache.refresh(new Key(seg, lastOffset));
+        Key key = new Key(seg, lastOffset);
+        cache.invalidate(key);
+        try {
+            cache.get(key);
+        } catch (Exception ignored) {
+        }
     }
 
 
@@ -52,6 +56,18 @@ public class SegmentCache implements Closeable {
         if (v < 0) return null;
         Key key = new Key(seg, v);
         return cache.getIfPresent(key);
+    }
+
+    public CachedReader getOrLoad(String seg) {
+        if (isClosed.get()) return null;
+        long v = versions.getOrDefault(seg, -1L);
+        if (v < 0) return null;
+        Key key = new Key(seg, v);
+        try {
+            return cache.get(key);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     @Override

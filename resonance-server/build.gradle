@@ -18,6 +18,7 @@ application {
     applicationDefaultJvmArgs = [
             '--enable-preview',
             '--enable-native-access=ALL-UNNAMED',
+            '--add-modules', 'jdk.incubator.vector',
             '-Dfile.encoding=UTF-8'
     ]
 }

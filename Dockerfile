@@ -45,9 +45,20 @@ ENV RESONANCE_DB_ROOT=/data
 
 EXPOSE 31415
 
-ENV JAVA_TOOL_OPTIONS="-XX:+UseG1GC -XX:G1HeapRegionSize=8m -XX:MaxGCPauseMillis=100 -Xms512m -Xmx512m -Dresonance.kernel.native=false -Dresonance.pattern.len=1536"
+ENV JAVA_TOOL_OPTIONS="\
+-XX:+UseG1GC \
+-XX:G1HeapRegionSize=16m \
+-XX:MaxGCPauseMillis=200 \
+-XX:+AlwaysPreTouch \
+-Xms1g -Xmx1g \
+-Dresonance.pattern.len=1536 \
+-Dresonance.kernel.native=false \
+-Dresonance.wal.enabled=true \
+-Dresonance.wal.durability=group \
+-Dresonance.index.enabled=true \
+-Dresonance.index.l1.nprobe=8"
 
-HEALTHCHECK --interval=10s --timeout=2s --start-period=10s --retries=6 \
+HEALTHCHECK --interval=15s --timeout=3s --start-period=30s --retries=4 \
   CMD /app/cli/bin/resonance-cli health --url "http://127.0.0.1:${PORT}/health" || exit 1
 
 ENTRYPOINT ["/app/server/bin/resonance-server"]

@@ -52,3 +52,8 @@ Thumbs.db
 !gradlew.bat
 !gradle/wrapper/gradle-wrapper.jar
 !gradle/wrapper/gradle-wrapper.properties
+
+# ─── Development Artifacts (Claude Code) ──────────────────────────────────────
+CLAUDE.md
+/dev/
+.claude/

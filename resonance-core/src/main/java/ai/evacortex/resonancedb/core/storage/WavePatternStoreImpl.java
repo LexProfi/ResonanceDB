@@ -14,6 +14,11 @@ import ai.evacortex.resonancedb.core.exceptions.DuplicatePatternException;
 import ai.evacortex.resonancedb.core.exceptions.InvalidWavePatternException;
 import ai.evacortex.resonancedb.core.exceptions.PatternNotFoundException;
 import ai.evacortex.resonancedb.core.exceptions.SegmentOverflowException;
+import ai.evacortex.resonancedb.core.index.CandidateSource;
+import ai.evacortex.resonancedb.core.index.DeltaIndex;
+import ai.evacortex.resonancedb.core.index.FullScanCandidateSource;
+import ai.evacortex.resonancedb.core.index.IvfCandidateSource;
+import ai.evacortex.resonancedb.core.index.PostingSidecar;
 import ai.evacortex.resonancedb.core.math.ResonanceZone;
 import ai.evacortex.resonancedb.core.math.ResonanceZoneClassifier;
 import ai.evacortex.resonancedb.core.math.WavePatternUtils;
@@ -33,7 +38,12 @@ import ai.evacortex.resonancedb.core.storage.util.AutoLock;
 import ai.evacortex.resonancedb.core.storage.util.HashingUtil;
 import ai.evacortex.resonancedb.core.storage.util.NoOpTracer;
 
+import ai.evacortex.resonancedb.core.storage.wal.WalCorruptionException;
+import ai.evacortex.resonancedb.core.storage.wal.WalRecord;
+import ai.evacortex.resonancedb.core.storage.wal.WriteAheadLog;
+
 import java.io.Closeable;
+import java.io.IOException;
 import java.lang.reflect.Method;
 import java.nio.file.Path;
 import java.util.*;
@@ -87,6 +97,35 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
     private final ScheduledFuture<?> compactionTask;
     private final AtomicBoolean closed = new AtomicBoolean(false);
+
+    private final boolean indexEnabled;
+    private final IvfCandidateSource ivfSource;
+    private final DeltaIndex deltaIndex;
+    private final Path centroidsPath;
+    private final int ivfNProbe;
+    private final int ivfDeltaMaxSize;
+    private final AtomicBoolean indexRebuildScheduled = new AtomicBoolean(false);
+    private final Object rebuildMutex = new Object();
+    private final AtomicReference<ScheduledFuture<?>> rebuildFuture = new AtomicReference<>();
+
+    private final int batchCommitSize = Integer.getInteger("resonance.insert.batchSize", 1);
+    private int pendingFlushCount = 0;
+    private final Set<SegmentWriter> pendingWriters = new LinkedHashSet<>();
+
+    private final boolean walEnabled;
+    private final WriteAheadLog wal;
+    private final DeltaBuffer deltaBuffer;
+    private final int sealThreshold;
+    private final int deltaMaxEntries;
+    private final long backpressureTimeoutMs;
+    private final AtomicBoolean sealScheduled = new AtomicBoolean(false);
+    private final AtomicReference<ScheduledFuture<?>> sealFuture = new AtomicReference<>();
+    private final Object sealMutex = new Object();
+    private final WriteAheadLog.DurabilityMode walDurability;
+
+    private static final int WAL_SYNC_THRESHOLD = 256;
+    private final List<CompletableFuture<Long>> pendingWalFutures =
+            Collections.synchronizedList(new ArrayList<>());
 
     private record HeapItem(ResonanceMatch match, float priority) {}
     private record HeapItemDetailed(ResonanceMatchDetailed match, double priority) {}
@@ -236,6 +275,85 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 this::safeCompactSweep,
                 10, 5, TimeUnit.MINUTES
         );
+
+        this.walEnabled = Boolean.parseBoolean(
+                System.getProperty("resonance.wal.enabled", "false"));
+        this.sealThreshold = Integer.getInteger("resonance.delta.sealThreshold", 5000);
+        this.deltaMaxEntries = Integer.getInteger("resonance.delta.maxEntries", 20_000);
+        this.backpressureTimeoutMs = Long.getLong("resonance.delta.backpressureTimeoutMs", 10_000);
+
+        String durStr = System.getProperty("resonance.wal.durability", "group");
+        this.walDurability = switch (durStr.toLowerCase()) {
+            case "strict" -> WriteAheadLog.DurabilityMode.STRICT;
+            case "async" -> WriteAheadLog.DurabilityMode.ASYNC;
+            default -> WriteAheadLog.DurabilityMode.GROUP;
+        };
+
+        if (this.walEnabled) {
+            int groupSize = Integer.getInteger("resonance.wal.groupSize", 256);
+            long groupIntervalMs = Long.getLong("resonance.wal.groupIntervalMs", 2);
+            long segmentBytes = Long.getLong("resonance.wal.segmentBytes", 128L << 20);
+            Path walDir = this.rootDir.resolve(
+                    System.getProperty("resonance.wal.dir", "wal"));
+
+            try {
+                this.wal = new WriteAheadLog(walDir, walDurability,
+                        groupSize, groupIntervalMs, segmentBytes);
+            } catch (IOException e) {
+                throw new RuntimeException("Failed to initialize WAL: " + e.getMessage(), e);
+            }
+            this.deltaBuffer = new DeltaBuffer(patternLen);
+
+            try {
+                List<WalRecord> walRecords = WriteAheadLog.replay(walDir);
+                for (WalRecord rec : walRecords) {
+                    replayWalRecord(rec);
+                }
+                if (!walRecords.isEmpty()) {
+                    System.err.println("WAL replay: applied " + walRecords.size() +
+                            " records, deltaBuffer size=" + deltaBuffer.size());
+                }
+            } catch (WalCorruptionException e) {
+                throw new RuntimeException("WAL replay failed — non-tail corruption: " +
+                        e.getMessage(), e);
+            } catch (IOException e) {
+                throw new RuntimeException("WAL replay I/O error: " + e.getMessage(), e);
+            }
+        } else {
+            this.wal = null;
+            this.deltaBuffer = null;
+        }
+
+        this.indexEnabled = Boolean.parseBoolean(
+                System.getProperty("resonance.index.enabled", "false"));
+        this.ivfNProbe = Integer.getInteger("resonance.index.l1.nprobe", 8);
+        this.ivfDeltaMaxSize = Integer.getInteger("resonance.index.delta.maxSize", 10_000);
+
+        if (this.indexEnabled) {
+            this.deltaIndex = new DeltaIndex();
+            this.centroidsPath = this.rootDir.resolve("index/centroids.bin");
+
+            FullScanCandidateSource fallback = new FullScanCandidateSource(
+                    manifest::getAllSegmentNames,
+                    segName -> readerCache.getOrLoad(segName)
+            );
+            this.ivfSource = new IvfCandidateSource(
+                    null, deltaIndex, manifest, ivfNProbe, fallback);
+            this.ivfSource.setSidecarPath(this.rootDir.resolve("index/postings.ivf"));
+
+            if (!ivfSource.loadIndex(centroidsPath)) {
+                scheduleIndexRebuild();
+            } else {
+                repopulatePostings();
+                if (!ivfSource.loadSidecar()) {
+                    rebuildSidecar();
+                }
+            }
+        } else {
+            this.deltaIndex = null;
+            this.ivfSource = null;
+            this.centroidsPath = null;
+        }
     }
 
     @Override
@@ -247,18 +365,68 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         Map<String, String> safeMetadata = metadata == null ? Map.of() : metadata;
 
         String idKey = HashingUtil.computeContentHash(psi);
-        HashingUtil.parseAndValidateMd5(idKey);
+        byte[] idBytes = HashingUtil.parseAndValidateMd5(idKey);
 
+        if (deltaBuffer != null) {
+            return insertViaDelta(idKey, idBytes, psi, safeMetadata);
+        }
+
+        return insertLegacy(idKey, idBytes, psi, safeMetadata);
+    }
+
+    private String insertViaDelta(String idKey, byte[] idBytes,
+                                   WavePattern psi, Map<String, String> metadata) {
+        double phaseCenter = meanPhase(psi.phase());
+
+        if (deltaBuffer.size() >= deltaMaxEntries) {
+            awaitSealCompletion();
+            if (deltaBuffer.size() >= deltaMaxEntries) {
+                throw new RuntimeException("DeltaBuffer full after backpressure timeout (" +
+                        deltaMaxEntries + " entries). Increase delta.maxEntries or reduce insert rate.");
+            }
+        }
+
+        long lsn = wal.nextLsn();
+        WalRecord walRecord = WalRecord.insert(lsn, idKey, metadata, psi);
+        CompletableFuture<Long> durabilityFuture = wal.append(walRecord);
+
+        try (AutoLock ignored = AutoLock.write(globalLock)) {
+            if (manifest.contains(idKey) || deltaBuffer.contains(idKey)) {
+                throw new DuplicatePatternException(idKey);
+            }
+            deltaBuffer.add(idKey, psi, metadata, phaseCenter, idBytes, lsn);
+        }
+
+        switch (walDurability) {
+            case STRICT -> durabilityFuture.join();
+            case GROUP -> {
+                pendingWalFutures.add(durabilityFuture);
+                if (pendingWalFutures.size() >= WAL_SYNC_THRESHOLD) {
+                    flushWalFutures();
+                }
+            }
+            case ASYNC -> {}
+        }
+
+        if (deltaBuffer.activeSize() >= sealThreshold) {
+            scheduleSeal();
+        }
+
+        return idKey;
+    }
+
+    private String insertLegacy(String idKey, byte[] idBytes,
+                                WavePattern psi, Map<String, String> metadata) {
         try (AutoLock ignored = AutoLock.write(globalLock)) {
             if (manifest.contains(idKey)) {
                 throw new DuplicatePatternException(idKey);
             }
 
-            int bucket = computePhaseBucket(psi);
+            double phaseCenter = meanPhase(psi.phase());
+            int bucket = computePhaseBucket(phaseCenter);
             String base = "phase-" + bucket;
 
             PhaseSegmentGroup group = getOrCreateGroup(base);
-            double phaseCenter = Arrays.stream(psi.phase()).average().orElse(0.0);
             double existingCenter = group.getAvgPhase();
 
             boolean phaseOverflow = Math.abs(phaseCenter - existingCenter) > 0.15;
@@ -268,18 +436,35 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             }
             group.registerIfAbsent(writer);
 
-            SegmentWriteResult result = writeToSegment(idKey, psi, group);
+            SegmentWriteResult result = writeToSegment(idBytes, psi, group, writer);
 
             manifest.add(idKey, result.writer().getSegmentName(), result.offset(), phaseCenter);
-            manifest.flush();
 
-            if (!safeMetadata.isEmpty()) {
-                metaStore.put(idKey, safeMetadata);
-                metaStore.flush();
+            if (!metadata.isEmpty()) {
+                if (batchCommitSize <= 1) {
+                    metaStore.put(idKey, metadata);
+                } else {
+                    metaStore.putNoFlush(idKey, metadata);
+                }
+            }
+
+            if (batchCommitSize <= 1) {
+                manifest.flush();
+                if (!metadata.isEmpty()) metaStore.flush();
             }
 
             group.updatePhaseStats(phaseCenter);
-            rebuildShardSelector();
+            if (batchCommitSize <= 1) {
+                rebuildShardSelector();
+            }
+
+            if (deltaIndex != null) {
+                deltaIndex.add(idKey, result.writer().getSegmentName());
+                if (deltaIndex.exceedsThreshold(ivfDeltaMaxSize)) {
+                    scheduleIndexRebuild();
+                }
+            }
+
             return idKey;
 
         } catch (SegmentOverflowException |
@@ -291,13 +476,13 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 if (manifest.contains(idKey)) {
                     manifest.remove(idKey);
                 }
-            } catch (Throwable ignored) {
+            } catch (Throwable ignored2) {
             }
             try {
                 if (metaStore.contains(idKey)) {
                     metaStore.remove(idKey);
                 }
-            } catch (Throwable ignored) {
+            } catch (Throwable ignored2) {
             }
             throw new RuntimeException("Insert failed: " + idKey, e);
         }
@@ -308,6 +493,53 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         ensureOpen();
         Objects.requireNonNull(idKey, "idKey must not be null");
         HashingUtil.parseAndValidateMd5(idKey);
+
+        if (deltaBuffer != null) {
+            long lsn = wal.nextLsn();
+            WalRecord walRecord = WalRecord.delete(lsn, idKey);
+            CompletableFuture<Long> durFuture = wal.append(walRecord);
+
+            try (AutoLock ignored = AutoLock.write(globalLock)) {
+                DeltaBuffer.Entry deltaEntry = deltaBuffer.remove(idKey, lsn);
+                if (deltaEntry == null && !manifest.contains(idKey)) {
+                    throw new PatternNotFoundException(idKey);
+                }
+
+                if (deltaEntry == null) {
+                    ManifestIndex.PatternLocation loc = manifest.get(idKey);
+                    SegmentWriter writer = getOrCreateWriter(loc.segmentName());
+                    writer.markDeleted(loc.offset());
+                    long newVersion = writer.flush();
+                    writer.sync();
+                    readerCache.updateVersion(writer.getSegmentName(), newVersion);
+
+                    manifest.remove(idKey);
+                    metaStore.remove(idKey);
+                    manifest.flush();
+                    metaStore.flush();
+
+                    if (deltaIndex != null) {
+                        deltaIndex.markDeleted(idKey);
+                        if (ivfSource.currentIndex() != null) {
+                            ivfSource.currentIndex().removePattern(idKey);
+                        }
+                    }
+                    rebuildShardSelector();
+                }
+            }
+
+            switch (walDurability) {
+                case STRICT -> durFuture.join();
+                case GROUP -> {
+                    pendingWalFutures.add(durFuture);
+                    if (pendingWalFutures.size() >= WAL_SYNC_THRESHOLD) {
+                        flushWalFutures();
+                    }
+                }
+                case ASYNC -> {}
+            }
+            return;
+        }
 
         try (AutoLock ignored = AutoLock.write(globalLock)) {
             ManifestIndex.PatternLocation loc = manifest.get(idKey);
@@ -326,6 +558,13 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             manifest.flush();
             metaStore.flush();
 
+            if (deltaIndex != null) {
+                deltaIndex.markDeleted(idKey);
+                if (ivfSource.currentIndex() != null) {
+                    ivfSource.currentIndex().removePattern(idKey);
+                }
+            }
+
             rebuildShardSelector();
         }
     }
@@ -340,8 +579,84 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
         HashingUtil.parseAndValidateMd5(oldId);
         String newId = HashingUtil.computeContentHash(newPattern);
-        HashingUtil.parseAndValidateMd5(newId);
+        byte[] newIdBytes = HashingUtil.parseAndValidateMd5(newId);
 
+        if (deltaBuffer != null) {
+            return replaceViaDelta(oldId, newId, newIdBytes, newPattern, safeMetadata);
+        }
+
+        return replaceLegacy(oldId, newId, newIdBytes, newPattern, safeMetadata);
+    }
+
+    private String replaceViaDelta(String oldId, String newId, byte[] newIdBytes,
+                                    WavePattern newPattern, Map<String, String> metadata) {
+        double phaseCenter = meanPhase(newPattern.phase());
+
+        long lsn = wal.nextLsn();
+        WalRecord walRecord = WalRecord.replace(lsn, oldId, newId, metadata, newPattern);
+        CompletableFuture<Long> durFuture = wal.append(walRecord);
+
+        try (AutoLock ignored = AutoLock.write(globalLock)) {
+            boolean oldInDelta = deltaBuffer.contains(oldId);
+            boolean oldInManifest = manifest.contains(oldId);
+            if (!oldInDelta && !oldInManifest) {
+                throw new PatternNotFoundException(oldId);
+            }
+
+            if (!oldId.equals(newId)) {
+                if (manifest.contains(newId) || deltaBuffer.contains(newId)) {
+                    throw new DuplicatePatternException("Replacement would collide: " + newId);
+                }
+            }
+
+            deltaBuffer.remove(oldId, lsn);
+
+            if (oldInManifest) {
+                ManifestIndex.PatternLocation oldLoc = manifest.get(oldId);
+                if (oldLoc != null) {
+                    SegmentWriter oldWriter = getOrCreateWriter(oldLoc.segmentName());
+                    oldWriter.markDeleted(oldLoc.offset());
+                    long oldVersion = oldWriter.flush();
+                    oldWriter.sync();
+                    readerCache.updateVersion(oldWriter.getSegmentName(), oldVersion);
+                    manifest.remove(oldId);
+                    manifest.flush();
+                }
+                if (metaStore.contains(oldId)) {
+                    metaStore.remove(oldId);
+                }
+                if (deltaIndex != null) {
+                    deltaIndex.markDeleted(oldId);
+                    if (ivfSource != null && ivfSource.currentIndex() != null) {
+                        ivfSource.currentIndex().removePattern(oldId);
+                    }
+                }
+                rebuildShardSelector();
+            }
+
+            deltaBuffer.add(newId, newPattern, metadata, phaseCenter, newIdBytes, lsn);
+        }
+
+        switch (walDurability) {
+            case STRICT -> durFuture.join();
+            case GROUP -> {
+                pendingWalFutures.add(durFuture);
+                if (pendingWalFutures.size() >= WAL_SYNC_THRESHOLD) {
+                    flushWalFutures();
+                }
+            }
+            case ASYNC -> {}
+        }
+
+        if (deltaBuffer.activeSize() >= sealThreshold) {
+            scheduleSeal();
+        }
+
+        return newId;
+    }
+
+    private String replaceLegacy(String oldId, String newId, byte[] newIdBytes,
+                                  WavePattern newPattern, Map<String, String> safeMetadata) {
         try (AutoLock ignored = AutoLock.write(globalLock)) {
             ManifestIndex.PatternLocation oldLoc = manifest.get(oldId);
             if (oldLoc == null) {
@@ -352,12 +667,18 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 throw new DuplicatePatternException("Replacement would collide: " + newId);
             }
 
-            int bucket = computePhaseBucket(newPattern);
+            double phaseCenter = meanPhase(newPattern.phase());
+            int bucket = computePhaseBucket(phaseCenter);
             String base = "phase-" + bucket;
             PhaseSegmentGroup group = getOrCreateGroup(base);
-            double phaseCenter = Arrays.stream(newPattern.phase()).average().orElse(0.0);
 
-            SegmentWriteResult result = writeToSegment(newId, newPattern, group);
+            SegmentWriter replaceWriter = group.getWritable();
+            if (replaceWriter == null || replaceWriter.willOverflow(newPattern)) {
+                replaceWriter = group.createAndRegisterNewSegment();
+            }
+            group.registerIfAbsent(replaceWriter);
+
+            SegmentWriteResult result = writeToSegment(newIdBytes, newPattern, group, replaceWriter);
 
             try {
                 SegmentWriter oldWriter = null;
@@ -409,6 +730,18 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 }
 
                 rebuildShardSelector();
+
+                if (deltaIndex != null) {
+                    deltaIndex.markDeleted(oldId);
+                    if (ivfSource.currentIndex() != null) {
+                        ivfSource.currentIndex().removePattern(oldId);
+                    }
+                    deltaIndex.add(newId, result.writer().getSegmentName());
+                    if (deltaIndex.exceedsThreshold(ivfDeltaMaxSize)) {
+                        scheduleIndexRebuild();
+                    }
+                }
+
                 return newId;
 
             } catch (Exception rollbackEx) {
@@ -434,6 +767,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             return List.of();
         }
 
+        if (!pendingWalFutures.isEmpty()) flushWalFutures();
+
         try (AutoLock ignored = AutoLock.read(globalLock)) {
             String queryId = HashingUtil.computeContentHash(query);
 
@@ -442,28 +777,46 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                     .thenComparing((HeapItem h) -> h.match().energy(), Comparator.reverseOrder())
                     .thenComparing(h -> h.match().id());
 
-            List<SegmentWriter> writers = selectWritersForQuery(query);
-            int threshold = Math.max(4, writers.size() / Math.max(1, tune.poolParallelism));
+            List<HeapItem> collected;
 
-            List<HeapItem> collected = queryPool.invoke(
-                    new MatchQueryTask(writers, query, queryId, topK, 0, writers.size(), threshold)
-            );
-
-            if (collected.size() < topK) {
-                Set<String> seen = new HashSet<>();
-                for (SegmentWriter writer : writers) {
-                    seen.add(writer.getSegmentName());
+            if (ivfSource != null && ivfSource.currentIndex() != null) {
+                CandidateSource.ScoredCandidates scored = ivfSource.scoredCandidates(query, topK);
+                if (!scored.exhaustive() && !scored.candidates().isEmpty()) {
+                    collected = exactScoreFinalists(scored, query, queryId, topK);
+                } else {
+                    collected = collectMatchesFromCandidates(
+                            ivfSource.candidates(query, topK), query, queryId, topK);
                 }
+            } else {
+                List<SegmentWriter> writers = selectWritersForQuery(query);
+                int threshold = Math.max(4, writers.size() / Math.max(1, tune.poolParallelism));
 
-                List<SegmentWriter> rest = getAllWritersStream()
-                        .filter(w -> !seen.contains(w.getSegmentName()))
-                        .toList();
+                collected = queryPool.invoke(
+                        new MatchQueryTask(writers, query, queryId, topK, 0, writers.size(), threshold)
+                );
 
-                if (!rest.isEmpty()) {
-                    List<HeapItem> extra = queryPool.invoke(
-                            new MatchQueryTask(rest, query, queryId, topK, 0, rest.size(), threshold)
-                    );
-                    collected.addAll(extra);
+                if (collected.size() < topK) {
+                    Set<String> seen = new HashSet<>();
+                    for (SegmentWriter writer : writers) {
+                        seen.add(writer.getSegmentName());
+                    }
+
+                    List<SegmentWriter> rest = getAllWritersStream()
+                            .filter(w -> !seen.contains(w.getSegmentName()))
+                            .toList();
+
+                    if (!rest.isEmpty()) {
+                        List<HeapItem> extra = queryPool.invoke(
+                                new MatchQueryTask(rest, query, queryId, topK, 0, rest.size(), threshold)
+                        );
+                        collected.addAll(extra);
+                    }
+                }
+            }
+
+            if (deltaBuffer != null && !deltaBuffer.isEmpty()) {
+                for (DeltaBuffer.ScoredMatch sm : deltaBuffer.scoreDelta(query, queryId, resonanceKernel, topK)) {
+                    collected.add(new HeapItem(sm.match(), sm.priority()));
                 }
             }
 
@@ -484,6 +837,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             return List.of();
         }
 
+        if (!pendingWalFutures.isEmpty()) flushWalFutures();
+
         try (AutoLock ignored = AutoLock.read(globalLock)) {
             String queryId = HashingUtil.computeContentHash(query);
 
@@ -492,28 +847,49 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                     .thenComparing((HeapItemDetailed h) -> h.match().energy(), Comparator.reverseOrder())
                     .thenComparing(h -> h.match().id());
 
-            List<SegmentWriter> writers = selectWritersForQuery(query);
-            int threshold = Math.max(4, writers.size() / Math.max(1, tune.poolParallelism));
+            List<HeapItemDetailed> collected;
 
-            List<HeapItemDetailed> collected = queryPool.invoke(
-                    new DetailedMatchQueryTask(writers, query, queryId, topK, 0, writers.size(), threshold)
-            );
-
-            if (collected.size() < topK) {
-                Set<String> seen = new HashSet<>();
-                for (SegmentWriter writer : writers) {
-                    seen.add(writer.getSegmentName());
+            if (ivfSource != null && ivfSource.currentIndex() != null) {
+                CandidateSource.ScoredCandidates scored = ivfSource.scoredCandidates(query, topK);
+                if (!scored.exhaustive() && !scored.candidates().isEmpty()) {
+                    collected = exactScoreFinalistsDetailed(scored, query, queryId, topK);
+                } else {
+                    System.err.println("WARN queryDetailed: sidecar unavailable, falling back to " +
+                            "collectDetailedFromCandidates (slow path)");
+                    collected = collectDetailedFromCandidates(
+                            ivfSource.candidates(query, topK), query, queryId, topK);
                 }
+            } else {
+                List<SegmentWriter> writers = selectWritersForQuery(query);
+                int threshold = Math.max(4, writers.size() / Math.max(1, tune.poolParallelism));
 
-                List<SegmentWriter> rest = getAllWritersStream()
-                        .filter(w -> !seen.contains(w.getSegmentName()))
-                        .toList();
+                collected = queryPool.invoke(
+                        new DetailedMatchQueryTask(writers, query, queryId, topK, 0, writers.size(), threshold)
+                );
 
-                if (!rest.isEmpty()) {
-                    List<HeapItemDetailed> extra = queryPool.invoke(
-                            new DetailedMatchQueryTask(rest, query, queryId, topK, 0, rest.size(), threshold)
-                    );
-                    collected.addAll(extra);
+                if (collected.size() < topK) {
+                    Set<String> seen = new HashSet<>();
+                    for (SegmentWriter writer : writers) {
+                        seen.add(writer.getSegmentName());
+                    }
+
+                    List<SegmentWriter> rest = getAllWritersStream()
+                            .filter(w -> !seen.contains(w.getSegmentName()))
+                            .toList();
+
+                    if (!rest.isEmpty()) {
+                        List<HeapItemDetailed> extra = queryPool.invoke(
+                                new DetailedMatchQueryTask(rest, query, queryId, topK, 0, rest.size(), threshold)
+                        );
+                        collected.addAll(extra);
+                    }
+                }
+            }
+
+            if (deltaBuffer != null && !deltaBuffer.isEmpty()) {
+                for (DeltaBuffer.ScoredMatchDetailed smd :
+                        deltaBuffer.scoreDeltaDetailed(query, queryId, resonanceKernel, topK)) {
+                    collected.add(new HeapItemDetailed(smd.match(), smd.priority()));
                 }
             }
 
@@ -578,6 +954,19 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         return resonanceKernel.compare(a, b);
     }
 
+    public void forceIndexRebuild() {
+        if (deltaBuffer != null && !deltaBuffer.isEmpty()) {
+            sealDelta();
+        }
+        try (AutoLock ignored = AutoLock.write(globalLock)) {
+            if (!pendingWriters.isEmpty()) {
+                flushPendingWriters();
+            }
+        }
+        if (ivfSource == null) return;
+        rebuildIvfIndex();
+    }
+
     public PhaseShardSelector getShardSelector() {
         return shardSelectorRef.get();
     }
@@ -592,7 +981,9 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     public boolean containsExactPattern(WavePattern pattern) {
         ensureOpen();
         validateWavePatternLen(pattern);
-        return manifest.contains(HashingUtil.computeContentHash(pattern));
+        String hash = HashingUtil.computeContentHash(pattern);
+        if (manifest.contains(hash)) return true;
+        return deltaBuffer != null && deltaBuffer.contains(hash);
     }
 
     @Override
@@ -601,8 +992,58 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             return;
         }
 
+        ScheduledFuture<?> pendingSeal = sealFuture.getAndSet(null);
+        if (pendingSeal != null) {
+            pendingSeal.cancel(false);
+        }
+
+        if (!pendingWalFutures.isEmpty()) flushWalFutures();
+
+        if (deltaBuffer != null && !deltaBuffer.isEmpty()) {
+            try {
+                sealDelta();
+            } catch (Exception e) {
+                System.err.println("Failed to drain delta buffer on close: " + e.getMessage());
+            }
+        }
+
+        if (wal != null) {
+            try {
+                wal.close();
+            } catch (Exception e) {
+                System.err.println("Failed to close WAL: " + e.getMessage());
+            }
+        }
+
+        if (ivfSource != null) {
+            ivfSource.requestShutdown();
+        }
+
+        ScheduledFuture<?> pendingRebuild = rebuildFuture.getAndSet(null);
+        if (pendingRebuild != null) {
+            pendingRebuild.cancel(false);
+        }
+
+        synchronized (rebuildMutex) {
+        }
+
         try (AutoLock ignored = AutoLock.write(globalLock)) {
             compactionTask.cancel(false);
+
+            if (!pendingWriters.isEmpty()) {
+                flushPendingWriters();
+                manifest.flush();
+                metaStore.flush();
+            }
+
+            if (ivfSource != null && centroidsPath != null) {
+                try {
+                    ivfSource.persistIndex(centroidsPath);
+                } catch (Exception e) {
+                    System.err.println("Failed to persist IVF index: " + e.getMessage());
+                }
+            }
+
             readerCache.close();
             segmentGroups.values().forEach(group -> group.getAll().forEach(this::safeClose));
             manifest.flush();
@@ -743,11 +1184,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 float energy = result.energy();
                 double phaseShift = result.phaseDelta();
                 ResonanceZone zone = ResonanceZoneClassifier.classify(energy, phaseShift);
-                double zoneScore = switch (zone) {
-                    case CORE -> 2.0;
-                    case FRINGE -> 1.0;
-                    case SHADOW -> 0.0;
-                };
+                double zoneScore = zone.score();
 
                 boolean idEq = id.equals(queryId);
                 boolean exactEq = energy > 1.0f - EXACT_MATCH_EPS;
@@ -775,13 +1212,11 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         int ready = 0;
         for (int i = 0; i < count; i++) {
             String id = fb.ids[i];
-            WavePattern cand = readNoSemaphore(reader, id);
-            if (cand == null || cand.amplitude().length != len) {
-                continue;
-            }
-
-            System.arraycopy(cand.amplitude(), 0, fb.ampFlat, ready * len, len);
-            System.arraycopy(cand.phase(), 0, fb.phaseFlat, ready * len, len);
+            boolean ok = reader.readPatternFlat(id,
+                    fb.ampFlat, ready * len,
+                    fb.phaseFlat, ready * len,
+                    len);
+            if (!ok) continue;
             fb.ids[ready] = id;
             ready++;
         }
@@ -885,6 +1320,545 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         }
     }
 
+    private List<HeapItem> exactScoreFinalists(CandidateSource.ScoredCandidates scored,
+                                                WavePattern query, String queryId, int topK) {
+        int overfetch = tune.overfetchForTopK(topK);
+        int finalistCount = Math.min(topK * overfetch, scored.candidates().size());
+
+        List<PostingSidecar.ScoredCandidate> sorted = new ArrayList<>(scored.candidates());
+        sorted.sort((a, b) -> Float.compare(b.approxScore(), a.approxScore()));
+
+        Comparator<HeapItem> cmp = Comparator.comparingDouble(HeapItem::priority);
+        PriorityQueue<HeapItem> heap = new PriorityQueue<>(Math.max(topK, 8), cmp);
+
+        int len = query.amplitude().length;
+        FlatBuffers fb = TL_FLAT.get();
+        fb.ensure(len, 1);
+
+        for (int i = 0; i < finalistCount; i++) {
+            PostingSidecar.ScoredCandidate sc = sorted.get(i);
+            String id = sc.id();
+
+            ManifestIndex.PatternLocation loc = manifest.get(id);
+            if (loc == null) continue;
+
+            CachedReader reader = readerCache.getOrLoad(loc.segmentName());
+            if (reader == null) continue;
+
+            if (!reader.readPatternFlat(id, fb.ampFlat, 0, fb.phaseFlat, 0, len)) continue;
+
+            WavePattern cand = new WavePattern(
+                    java.util.Arrays.copyOf(fb.ampFlat, len),
+                    java.util.Arrays.copyOf(fb.phaseFlat, len));
+
+            float energy = resonanceKernel.compare(query, cand);
+
+            boolean idEq = id.equals(queryId);
+            boolean exactEq = energy > 1.0f - EXACT_MATCH_EPS;
+            float priority = energy + (idEq ? 1.0f : 0.0f) + (exactEq ? 0.5f : 0.0f);
+
+            HeapItem item = new HeapItem(new ResonanceMatch(id, energy, cand), priority);
+
+            if (heap.size() < topK) {
+                heap.add(item);
+            } else if (cmp.compare(item, heap.peek()) > 0) {
+                heap.poll();
+                heap.add(item);
+            }
+        }
+
+        return new ArrayList<>(heap);
+    }
+
+    private List<HeapItemDetailed> exactScoreFinalistsDetailed(
+            CandidateSource.ScoredCandidates scored,
+            WavePattern query, String queryId, int topK) {
+
+        int overfetch = tune.overfetchForTopK(topK);
+        int finalistCount = Math.min(topK * overfetch, scored.candidates().size());
+
+        List<PostingSidecar.ScoredCandidate> sorted = new ArrayList<>(scored.candidates());
+        sorted.sort((a, b) -> Float.compare(b.approxScore(), a.approxScore()));
+
+        Comparator<HeapItemDetailed> cmp = Comparator.comparingDouble(HeapItemDetailed::priority);
+        int localCap = Math.max(Math.max(topK, 8), topK * overfetch);
+        PriorityQueue<HeapItemDetailed> heap = new PriorityQueue<>(localCap, cmp);
+
+        int len = query.amplitude().length;
+        FlatBuffers fb = TL_FLAT.get();
+        fb.ensure(len, 1);
+
+        for (int i = 0; i < finalistCount; i++) {
+            PostingSidecar.ScoredCandidate sc = sorted.get(i);
+            String id = sc.id();
+
+            ManifestIndex.PatternLocation loc = manifest.get(id);
+            if (loc == null) continue;
+
+            CachedReader reader = readerCache.getOrLoad(loc.segmentName());
+            if (reader == null) continue;
+
+            if (!reader.readPatternFlat(id, fb.ampFlat, 0, fb.phaseFlat, 0, len)) continue;
+
+            WavePattern cand = new WavePattern(
+                    java.util.Arrays.copyOf(fb.ampFlat, len),
+                    java.util.Arrays.copyOf(fb.phaseFlat, len));
+
+            ComparisonResult result = resonanceKernel.compareWithPhaseDelta(query, cand);
+            float energy = result.energy();
+            double phaseShift = result.phaseDelta();
+            ResonanceZone zone = ResonanceZoneClassifier.classify(energy, phaseShift);
+            double zoneScore = zone.score();
+
+            boolean idEq = id.equals(queryId);
+            boolean exactEq = energy > 1.0f - EXACT_MATCH_EPS;
+            double priority = zoneScore + energy + (idEq ? 1.0 : 0.0) + (exactEq ? 0.5 : 0.0);
+
+            HeapItemDetailed item = new HeapItemDetailed(
+                    new ResonanceMatchDetailed(id, energy, cand, phaseShift, zone, zoneScore),
+                    priority);
+
+            if (heap.size() < localCap) {
+                heap.add(item);
+            } else if (cmp.compare(item, heap.peek()) > 0) {
+                heap.poll();
+                heap.add(item);
+            }
+        }
+
+        return new ArrayList<>(heap);
+    }
+
+    private List<HeapItem> collectMatchesFromCandidates(
+            Map<String, Collection<String>> candidatesBySegment,
+            WavePattern query, String queryId, int topK) {
+
+        if (candidatesBySegment.size() <= 1) {
+            return collectMatchesFromCandidatesSequential(candidatesBySegment, query, queryId, topK);
+        }
+
+        List<ForkJoinTask<List<HeapItem>>> tasks = new ArrayList<>(candidatesBySegment.size());
+        for (var entry : candidatesBySegment.entrySet()) {
+            String segName = entry.getKey();
+            Collection<String> ids = entry.getValue();
+            tasks.add(queryPool.submit(() ->
+                    collectMatchesFromCandidatesSequential(
+                            Map.of(segName, ids), query, queryId, topK)));
+        }
+
+        List<HeapItem> collected = new ArrayList<>();
+        for (var task : tasks) {
+            try {
+                collected.addAll(task.join());
+            } catch (Exception e) {
+            }
+        }
+        return collected;
+    }
+
+    private List<HeapItem> collectMatchesFromCandidatesSequential(
+            Map<String, Collection<String>> candidatesBySegment,
+            WavePattern query, String queryId, int topK) {
+
+        final Comparator<HeapItem> cmp = Comparator.comparingDouble(HeapItem::priority);
+        final int len = query.amplitude().length;
+        final int batchSize = tune.batchSizeForLen(len, activeTasksEstimate());
+        final boolean useFlat = compareManyFlatMethod != null;
+        final int localCap = Math.max(topK, 8);
+
+        final PriorityQueue<HeapItem> heap = new PriorityQueue<>(localCap, cmp);
+        final FlatBuffers fb = TL_FLAT.get();
+        fb.ensure(len, batchSize);
+
+        for (var entry : candidatesBySegment.entrySet()) {
+            CachedReader reader = readerCache.getOrLoad(entry.getKey());
+            if (reader == null) continue;
+
+            int inBatch = 0;
+            for (String id : entry.getValue()) {
+                fb.ids[inBatch++] = id;
+                if (inBatch == batchSize) {
+                    processMatchBatch(reader, query, queryId, topK, len,
+                            inBatch, useFlat, fb, heap, cmp);
+                    inBatch = 0;
+                }
+            }
+            if (inBatch > 0) {
+                processMatchBatch(reader, query, queryId, topK, len,
+                        inBatch, useFlat, fb, heap, cmp);
+            }
+        }
+
+        return new ArrayList<>(heap);
+    }
+
+    private List<HeapItemDetailed> collectDetailedFromCandidates(
+            Map<String, Collection<String>> candidatesBySegment,
+            WavePattern query, String queryId, int topK) {
+
+        if (candidatesBySegment.size() <= 1) {
+            return collectDetailedFromCandidatesSequential(candidatesBySegment, query, queryId, topK);
+        }
+
+        List<ForkJoinTask<List<HeapItemDetailed>>> tasks = new ArrayList<>(candidatesBySegment.size());
+        for (var entry : candidatesBySegment.entrySet()) {
+            String segName = entry.getKey();
+            Collection<String> ids = entry.getValue();
+            tasks.add(queryPool.submit(() ->
+                    collectDetailedFromCandidatesSequential(
+                            Map.of(segName, ids), query, queryId, topK)));
+        }
+
+        List<HeapItemDetailed> collected = new ArrayList<>();
+        for (var task : tasks) {
+            try {
+                collected.addAll(task.join());
+            } catch (Exception e) {
+            }
+        }
+        return collected;
+    }
+
+    private List<HeapItemDetailed> collectDetailedFromCandidatesSequential(
+            Map<String, Collection<String>> candidatesBySegment,
+            WavePattern query, String queryId, int topK) {
+
+        final Comparator<HeapItemDetailed> cmp = Comparator.comparingDouble(HeapItemDetailed::priority);
+        final int len = query.amplitude().length;
+        final int overfetch = tune.overfetchForTopK(topK);
+        final int localCap = Math.max(Math.max(topK, 8), topK * overfetch);
+
+        final PriorityQueue<HeapItemDetailed> heap = new PriorityQueue<>(localCap, cmp);
+
+        for (var entry : candidatesBySegment.entrySet()) {
+            CachedReader reader = readerCache.getOrLoad(entry.getKey());
+            if (reader == null) continue;
+
+            for (String id : entry.getValue()) {
+                WavePattern cand = readNoSemaphore(reader, id);
+                if (cand == null || cand.amplitude().length != len) continue;
+
+                ComparisonResult result = resonanceKernel.compareWithPhaseDelta(query, cand);
+                float energy = result.energy();
+                double phaseShift = result.phaseDelta();
+                ResonanceZone zone = ResonanceZoneClassifier.classify(energy, phaseShift);
+                double zoneScore = zone.score();
+
+                boolean idEq = id.equals(queryId);
+                boolean exactEq = energy > 1.0f - EXACT_MATCH_EPS;
+                double priority = zoneScore + energy + (idEq ? 1.0 : 0.0) + (exactEq ? 0.5 : 0.0);
+
+                HeapItemDetailed item = new HeapItemDetailed(
+                        new ResonanceMatchDetailed(id, energy, cand, phaseShift, zone, zoneScore),
+                        priority);
+
+                if (heap.size() < localCap) {
+                    heap.add(item);
+                } else if (cmp.compare(item, heap.peek()) > 0) {
+                    heap.poll();
+                    heap.add(item);
+                }
+            }
+        }
+
+        return new ArrayList<>(heap);
+    }
+
+    private void scheduleSeal() {
+        if (closed.get()) return;
+        if (!sealScheduled.compareAndSet(false, true)) return;
+
+        ScheduledFuture<?> future = runtime.scheduler().schedule(() -> {
+            try {
+                if (!closed.get()) {
+                    sealDelta();
+                }
+            } catch (Throwable t) {
+                System.err.println("Delta seal failed: " + t.getMessage());
+                t.printStackTrace(System.err);
+            } finally {
+                sealScheduled.set(false);
+                sealFuture.set(null);
+            }
+        }, 100, TimeUnit.MILLISECONDS);
+        sealFuture.set(future);
+    }
+
+    public void sealDelta() {
+        if (deltaBuffer == null) return;
+
+        if (!pendingWalFutures.isEmpty()) flushWalFutures();
+
+        synchronized (sealMutex) {
+            if (deltaBuffer.isEmpty()) return;
+
+            Map<String, DeltaBuffer.Entry> frozenEntries;
+            long frozenMaxLsn = 0;
+            try (AutoLock ignored = AutoLock.write(globalLock)) {
+                frozenEntries = deltaBuffer.freeze();
+            }
+            if (frozenEntries.isEmpty()) {
+                deltaBuffer.clearFrozen();
+                return;
+            }
+
+            Map<String, Long> tombstones = deltaBuffer.tombstones();
+            frozenEntries.entrySet().removeIf(e -> {
+                Long deleteLsn = tombstones.get(e.getKey());
+                return deleteLsn != null && deleteLsn > e.getValue().lsn();
+            });
+
+            record PendingManifestEntry(String id, String segmentName, long offset,
+                                        double phaseCenter, Map<String, String> metadata) {}
+            List<PendingManifestEntry> pendingManifest = new ArrayList<>(frozenEntries.size());
+            Set<SegmentWriter> touchedWriters = new LinkedHashSet<>();
+
+            for (DeltaBuffer.Entry entry : frozenEntries.values()) {
+                frozenMaxLsn = Math.max(frozenMaxLsn, entry.lsn());
+
+                double phaseCenter = entry.phaseCenter();
+                int bucket = computePhaseBucket(phaseCenter);
+                String base = "phase-" + bucket;
+                PhaseSegmentGroup group = getOrCreateGroup(base);
+
+                SegmentWriter writer = group.getWritable();
+                if (writer == null || writer.willOverflow(entry.pattern())) {
+                    writer = group.createAndRegisterNewSegment();
+                }
+                group.registerIfAbsent(writer);
+
+                try {
+                    long offset = writer.write(entry.idBytes(), entry.pattern());
+                    touchedWriters.add(writer);
+                    pendingManifest.add(new PendingManifestEntry(
+                            entry.id(), writer.getSegmentName(), offset,
+                            phaseCenter, entry.metadata()));
+                } catch (Exception e) {
+                    System.err.println("Seal write failed for " + entry.id() + ": " + e.getMessage());
+                }
+            }
+
+            for (SegmentWriter w : touchedWriters) {
+                try {
+                    long ver = w.flush();
+                    w.sync();
+                    registerSegment(w);
+                } catch (Exception e) {
+                    System.err.println("Seal flush failed for " + w.getSegmentName() + ": " + e.getMessage());
+                }
+            }
+
+            try (AutoLock ignored = AutoLock.write(globalLock)) {
+                for (PendingManifestEntry pme : pendingManifest) {
+                    if (!manifest.contains(pme.id)) {
+                        manifest.add(pme.id, pme.segmentName, pme.offset, pme.phaseCenter);
+                    }
+                    if (pme.metadata != null && !pme.metadata.isEmpty()) {
+                        metaStore.putNoFlush(pme.id, pme.metadata);
+                    }
+                    if (deltaIndex != null) {
+                        deltaIndex.add(pme.id, pme.segmentName);
+                    }
+                }
+                manifest.flush();
+                metaStore.flush();
+                deltaBuffer.clearFrozen();
+                rebuildShardSelector();
+            }
+
+            if (wal != null && frozenMaxLsn > 0) {
+                try {
+                    wal.checkpoint(frozenMaxLsn);
+                } catch (Exception e) {
+                    System.err.println("WAL checkpoint failed: " + e.getMessage());
+                }
+            }
+
+            if (deltaIndex != null && deltaIndex.exceedsThreshold(ivfDeltaMaxSize)) {
+                scheduleIndexRebuild();
+            }
+        }
+    }
+
+    private void flushWalFutures() {
+        if (pendingWalFutures.isEmpty()) return;
+        List<CompletableFuture<Long>> snapshot;
+        synchronized (pendingWalFutures) {
+            snapshot = new ArrayList<>(pendingWalFutures);
+            pendingWalFutures.clear();
+        }
+        CompletableFuture.allOf(snapshot.toArray(CompletableFuture[]::new)).join();
+    }
+
+    private void awaitSealCompletion() {
+        scheduleSeal();
+
+        long deadline = System.currentTimeMillis() + backpressureTimeoutMs;
+        synchronized (sealMutex) {
+        }
+        if (deltaBuffer.size() >= deltaMaxEntries &&
+                System.currentTimeMillis() < deadline) {
+            sealDelta();
+        }
+    }
+
+    private void replayWalRecord(WalRecord record) {
+        switch (record.type()) {
+            case WalRecord.TYPE_INSERT -> {
+                WalRecord.InsertPayload p = record.decodeInsert();
+                if (manifest.contains(p.contentHash())) return;
+                if (deltaBuffer.contains(p.contentHash())) return;
+
+                double phaseCenter = meanPhase(p.pattern().phase());
+                byte[] idBytes = HashingUtil.parseAndValidateMd5(p.contentHash());
+                deltaBuffer.add(p.contentHash(), p.pattern(), p.metadata(),
+                        phaseCenter, idBytes, record.lsn());
+            }
+            case WalRecord.TYPE_DELETE -> {
+                String deleteId = record.decodeDeleteId();
+                deltaBuffer.markDeleted(deleteId, record.lsn());
+            }
+            case WalRecord.TYPE_REPLACE -> {
+                WalRecord.ReplacePayload rp = record.decodeReplace();
+                deltaBuffer.markDeleted(rp.oldId(), record.lsn());
+
+                WalRecord.InsertPayload ip = rp.insert();
+                if (!manifest.contains(ip.contentHash()) && !deltaBuffer.contains(ip.contentHash())) {
+                    double phaseCenter = meanPhase(ip.pattern().phase());
+                    byte[] idBytes = HashingUtil.parseAndValidateMd5(ip.contentHash());
+                    deltaBuffer.add(ip.contentHash(), ip.pattern(), ip.metadata(),
+                            phaseCenter, idBytes, record.lsn());
+                }
+            }
+            case WalRecord.TYPE_CHECKPOINT -> {
+            }
+            default -> System.err.println("WARN WAL replay: unknown record type " + record.type());
+        }
+    }
+
+    private void scheduleIndexRebuild() {
+        if (closed.get()) return;
+        if (!indexRebuildScheduled.compareAndSet(false, true)) return;
+
+        ScheduledFuture<?> future = runtime.scheduler().schedule(() -> {
+            try {
+                if (!closed.get()) {
+                    rebuildIvfIndex();
+                }
+            } catch (Throwable t) {
+                System.err.println("IVF index rebuild failed: " + t.getMessage());
+            } finally {
+                indexRebuildScheduled.set(false);
+                rebuildFuture.set(null);
+            }
+        }, 500, TimeUnit.MILLISECONDS);
+        rebuildFuture.set(future);
+    }
+
+    private void rebuildIvfIndex() {
+        if (ivfSource == null || closed.get()) return;
+
+        synchronized (rebuildMutex) {
+            if (closed.get()) return;
+
+            Set<String> segNames;
+            try (AutoLock ignored = AutoLock.read(globalLock)) {
+                if (closed.get()) return;
+                segNames = manifest.getAllSegmentNames();
+            }
+
+            Map<String, CachedReader> pinned = new ConcurrentHashMap<>();
+            try {
+                ivfSource.buildIndexWithVamana(
+                        segName -> {
+                            if (closed.get()) return null;
+                            CachedReader r = pinned.get(segName);
+                            if (r != null) return r;
+                            r = readerCache.getOrLoad(segName);
+                            if (r != null) {
+                                try {
+                                    r.acquire();
+                                    pinned.put(segName, r);
+                                } catch (IllegalStateException e) {
+                                    return null;
+                                }
+                            }
+                            return r;
+                        },
+                        segNames,
+                        patternLen,
+                        System.nanoTime()
+                );
+
+                if (centroidsPath != null) {
+                    ivfSource.persistIndex(centroidsPath);
+                }
+            } catch (Exception e) {
+                System.err.println("IVF index build/persist error: " + e.getMessage());
+                e.printStackTrace(System.err);
+            } finally {
+                pinned.values().forEach(CachedReader::release);
+                pinned.clear();
+            }
+        }
+    }
+
+    private void repopulatePostings() {
+        if (ivfSource == null || ivfSource.currentIndex() == null) return;
+
+        List<CachedReader> pinnedReaders = new ArrayList<>();
+        try {
+            for (String segName : manifest.getAllSegmentNames()) {
+                CachedReader reader = readerCache.getOrLoad(segName);
+                if (reader == null) continue;
+                try {
+                    reader.acquire();
+                    pinnedReaders.add(reader);
+                } catch (IllegalStateException e) {
+                    continue;
+                }
+                for (String id : reader.allIds()) {
+                    if (!manifest.contains(id)) continue;
+                    WavePattern p = readNoSemaphore(reader, id);
+                    if (p != null && p.amplitude().length == patternLen) {
+                        ivfSource.currentIndex().assignPattern(id, p);
+                    }
+                }
+            }
+        } finally {
+            pinnedReaders.forEach(CachedReader::release);
+        }
+    }
+
+    private void rebuildSidecar() {
+        if (ivfSource == null || ivfSource.currentIndex() == null) return;
+
+        Set<String> segNames = manifest.getAllSegmentNames();
+        Map<String, CachedReader> pinned = new HashMap<>();
+        try {
+            ivfSource.rebuildSidecar(
+                    segName -> {
+                        CachedReader r = pinned.get(segName);
+                        if (r != null) return r;
+                        r = readerCache.getOrLoad(segName);
+                        if (r != null) {
+                            try {
+                                r.acquire();
+                                pinned.put(segName, r);
+                            } catch (IllegalStateException e) {
+                                return null;
+                            }
+                        }
+                        return r;
+                    },
+                    segNames,
+                    patternLen
+            );
+        } finally {
+            pinned.values().forEach(CachedReader::release);
+        }
+    }
+
     private List<SegmentWriter> selectWritersForQuery(WavePattern query) {
         PhaseShardSelector selector = shardSelectorRef.get();
 
@@ -982,8 +1956,15 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 .distinct();
     }
 
-    private int computePhaseBucket(WavePattern psi) {
-        double phaseCenter = Arrays.stream(psi.phase()).average().orElse(0.0);
+    private static double meanPhase(double[] phase) {
+        double sum = 0.0;
+        for (double v : phase) {
+            sum += v;
+        }
+        return sum / phase.length;
+    }
+
+    private int computePhaseBucket(double phaseCenter) {
         return normBucketIndex((int) Math.floor((phaseCenter + Math.PI) / BUCKET_WIDTH_RAD));
     }
 
@@ -1002,25 +1983,55 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         return (int) Math.ceil((2 * Math.PI) / BUCKET_WIDTH_RAD) - 1;
     }
 
-    private SegmentWriteResult writeToSegment(String id, WavePattern psi, PhaseSegmentGroup group) {
-        SegmentWriter writer = group.getWritable();
-        if (writer == null || writer.willOverflow(psi)) {
-            writer = group.createAndRegisterNewSegment();
-        }
-        group.registerIfAbsent(writer);
-
+    private SegmentWriteResult writeToSegment(byte[] idBytes, WavePattern psi,
+                                              PhaseSegmentGroup group,
+                                              SegmentWriter writer) {
         while (true) {
             try {
-                long offset = writer.write(id, psi);
-                long version = writer.flush();
-                writer.sync();
-                registerSegment(writer);
-                return new SegmentWriteResult(writer, offset, version);
+                long offset = writer.write(idBytes, psi);
+
+                if (batchCommitSize <= 1) {
+                    long version = writer.flush();
+                    writer.sync();
+                    registerSegment(writer);
+                    return new SegmentWriteResult(writer, offset, version);
+                } else {
+                    pendingWriters.add(writer);
+                    pendingFlushCount++;
+
+                    if (pendingFlushCount >= batchCommitSize) {
+                        long version = flushPendingWriters();
+                        return new SegmentWriteResult(writer, offset, version);
+                    }
+
+                    manifest.registerSegmentIfAbsent(writer.getSegmentName());
+                    return new SegmentWriteResult(writer, offset, writer.getWriteOffset());
+                }
             } catch (SegmentOverflowException ignored) {
                 writer = group.createAndRegisterNewSegment();
                 group.registerIfAbsent(writer);
             }
         }
+    }
+
+    private long flushPendingWriters() {
+        long latestVersion = 0;
+        for (SegmentWriter w : pendingWriters) {
+            try {
+                long ver = w.flush();
+                w.sync();
+                registerSegment(w);
+                latestVersion = Math.max(latestVersion, ver);
+            } catch (Exception e) {
+                System.err.println("Batch flush failed for " + w.getSegmentName() + ": " + e.getMessage());
+            }
+        }
+        pendingWriters.clear();
+        pendingFlushCount = 0;
+        manifest.flush();
+        metaStore.flush();
+        rebuildShardSelector();
+        return latestVersion;
     }
 
     private <T> List<T> deduplicateTopK(List<T> items,

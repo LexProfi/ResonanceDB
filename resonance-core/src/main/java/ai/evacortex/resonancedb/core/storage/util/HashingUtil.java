@@ -39,6 +39,8 @@ public class HashingUtil {
         return HexFormat.of().formatHex(md5(input));
     }
 
+    private static final ThreadLocal<ByteBuffer> TL_HASH_BUF = new ThreadLocal<>();
+
     public static String computeContentHash(WavePattern pattern) {
         if (pattern.amplitude().length != pattern.phase().length) {
             throw new IllegalArgumentException("Amplitude and phase arrays must be of equal length.");
@@ -48,14 +50,22 @@ public class HashingUtil {
 
         double[] amp = pattern.amplitude();
         double[] phase = pattern.phase();
+        int need = amp.length * 16;
 
-        ByteBuffer buffer = ByteBuffer.allocate(amp.length * 16);
+        ByteBuffer buffer = TL_HASH_BUF.get();
+        if (buffer == null || buffer.capacity() < need) {
+            buffer = ByteBuffer.allocate(need);
+            TL_HASH_BUF.set(buffer);
+        }
+        buffer.clear();
+
         for (int i = 0; i < amp.length; i++) {
             buffer.putDouble(amp[i]);
             buffer.putDouble(phase[i]);
         }
 
-        byte[] hash = digest.digest(buffer.array());
+        digest.update(buffer.array(), 0, need);
+        byte[] hash = digest.digest();
         return HexFormat.of().formatHex(hash);
     }
 
