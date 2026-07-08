@@ -25,9 +25,6 @@ public final class DeltaBuffer {
                         double phaseCenter, byte[] idBytes, long lsn,
                         float[] unfoldFloat32, float energy) {}
 
-    private final int patternLen;
-    private final int unfoldedDim;
-
     private volatile ConcurrentHashMap<String, Entry> active = new ConcurrentHashMap<>();
 
     private volatile Map<String, Entry> frozen;
@@ -37,8 +34,6 @@ public final class DeltaBuffer {
     private static final float EXACT_MATCH_EPS = 1e-6f;
 
     public DeltaBuffer(int patternLen) {
-        this.patternLen = patternLen;
-        this.unfoldedDim = 2 * patternLen;
     }
 
     public void add(String id, WavePattern pattern, Map<String, String> metadata,
@@ -128,88 +123,14 @@ public final class DeltaBuffer {
                                         ResonanceKernel kernel, int topK) {
         List<Entry> entries = collectAllEntries();
         if (entries.isEmpty()) return List.of();
-
-        int finalistCount = computeFinalistCount(topK, entries.size());
-        if (entries.size() <= finalistCount) {
-            return exactScoreAll(entries, query, queryId, kernel, topK);
-        }
-
-        int[] topIndices = selectTopFinalists(entries, query, finalistCount);
-        List<ScoredMatch> results = new ArrayList<>(finalistCount);
-        for (int idx : topIndices) {
-            Entry e = entries.get(idx);
-            float energy = kernel.compare(query, e.pattern());
-            float priority = computePriority(energy, e.id(), queryId);
-            results.add(new ScoredMatch(
-                    new ResonanceMatch(e.id(), energy, e.pattern()), priority));
-        }
-        return results;
+        return exactScoreAll(entries, query, queryId, kernel, topK);
     }
 
     public List<ScoredMatchDetailed> scoreDeltaDetailed(WavePattern query, String queryId,
                                                          ResonanceKernel kernel, int topK) {
         List<Entry> entries = collectAllEntries();
         if (entries.isEmpty()) return List.of();
-
-        int finalistCount = computeFinalistCount(topK, entries.size());
-        if (entries.size() <= finalistCount) {
-            return exactScoreAllDetailed(entries, query, queryId, kernel, topK);
-        }
-
-        int[] topIndices = selectTopFinalists(entries, query, finalistCount);
-        List<ScoredMatchDetailed> results = new ArrayList<>(finalistCount);
-        for (int idx : topIndices) {
-            Entry e = entries.get(idx);
-            ComparisonResult cr = kernel.compareWithPhaseDelta(query, e.pattern());
-            float energy = cr.energy();
-            double phaseShift = cr.phaseDelta();
-            ResonanceZone zone = ResonanceZoneClassifier.classify(energy, phaseShift);
-            double zoneScore = zone.score();
-            double priority = zoneScore + energy
-                    + (e.id().equals(queryId) ? 1.0 : 0.0)
-                    + (energy > 1.0f - EXACT_MATCH_EPS ? 0.5 : 0.0);
-            results.add(new ScoredMatchDetailed(
-                    new ResonanceMatchDetailed(e.id(), energy, e.pattern(), phaseShift, zone, zoneScore),
-                    priority));
-        }
-        return results;
-    }
-
-    private int computeFinalistCount(int topK, int totalEntries) {
-        int overfetch = topK <= 5 ? 4 : topK <= 10 ? 3 : 2;
-        return Math.min(topK * Math.max(4, overfetch), totalEntries);
-    }
-
-    private int[] selectTopFinalists(List<Entry> entries, WavePattern query, int finalistCount) {
-        float[] queryU = UnfoldedMath.unfoldFloat32(query);
-        float queryEnergy = UnfoldedMath.energyFloat32(query);
-
-        int n = entries.size();
-        float[] approxScores = new float[n];
-        for (int i = 0; i < n; i++) {
-            Entry e = entries.get(i);
-            float dot = UnfoldedMath.dotFloat32(queryU, e.unfoldFloat32(), 0, unfoldedDim);
-            approxScores[i] = UnfoldedMath.scoreFromDotFloat32(dot, queryEnergy, e.energy());
-        }
-
-        int[] indices = new int[n];
-        for (int i = 0; i < n; i++) indices[i] = i;
-        partialSort(indices, approxScores, finalistCount);
-        return Arrays.copyOf(indices, finalistCount);
-    }
-
-    private static void partialSort(int[] indices, float[] scores, int k) {
-        for (int i = 0; i < k; i++) {
-            int maxIdx = i;
-            for (int j = i + 1; j < indices.length; j++) {
-                if (scores[indices[j]] > scores[indices[maxIdx]]) {
-                    maxIdx = j;
-                }
-            }
-            int tmp = indices[i];
-            indices[i] = indices[maxIdx];
-            indices[maxIdx] = tmp;
-        }
+        return exactScoreAllDetailed(entries, query, queryId, kernel, topK);
     }
 
     private static float computePriority(float energy, String id, String queryId) {
