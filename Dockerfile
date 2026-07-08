@@ -7,11 +7,13 @@ COPY gradle/ ./gradle/
 RUN set -eux; \
     test -f ./gradlew; \
     test -f ./gradle/wrapper/gradle-wrapper.properties; \
-    test -f ./gradle/wrapper/gradle-wrapper.jar
+    test -f ./gradle/wrapper/gradle-wrapper.jar; \
+    sed -i 's/\r$//' ./gradlew; \
+    chmod +x ./gradlew
 
 COPY . .
 
-RUN ./gradlew --no-daemon clean check :resonance-server:assembleServer
+RUN sed -i 's/\r$//' ./gradlew && ./gradlew --no-daemon clean check :resonance-server:assembleServer
 
 RUN set -eux; \
     test -f resonance-server/build/server/server/bin/resonance-server; \
