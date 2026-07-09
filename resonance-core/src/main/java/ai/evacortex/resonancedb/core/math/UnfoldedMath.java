@@ -144,11 +144,11 @@ public final class UnfoldedMath {
 
     public static float energyFloat32(WavePattern p) {
         double[] amp = p.amplitude();
-        float e = 0.0f;
+        double e = 0.0;
         for (double a : amp) {
-            e += (float) (a * a);
+            e += a * a;
         }
-        return e;
+        return (float) e;
     }
 
     public static float dotFloat32(float[] a, float[] b, int bOff, int len) {

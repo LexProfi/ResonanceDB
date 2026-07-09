@@ -127,7 +127,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     private final List<CompletableFuture<Long>> pendingWalFutures =
             Collections.synchronizedList(new ArrayList<>());
 
-    private record HeapItem(ResonanceMatch match, float priority) {}
+    private record HeapItem(ResonanceMatch match, double priority) {}
     private record HeapItemDetailed(ResonanceMatchDetailed match, double priority) {}
     private record SegmentWriteResult(SegmentWriter writer, long offset, long version) {}
 
@@ -1167,10 +1167,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         }
 
         final int len = query.amplitude().length;
-        final int overfetch = tune.overfetchForTopK(topK);
-        final int localCap = Math.max(Math.max(topK, 8), topK * overfetch);
 
-        final PriorityQueue<HeapItemDetailed> heap = new PriorityQueue<>(localCap, cmp);
+        final PriorityQueue<HeapItemDetailed> heap = new PriorityQueue<>(Math.max(topK, 8), cmp);
 
         acquireIoPermitBatch();
         try {
@@ -1188,14 +1186,14 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
                 boolean idEq = id.equals(queryId);
                 boolean exactEq = energy > 1.0f - EXACT_MATCH_EPS;
-                double priority = zoneScore + energy + (idEq ? 1.0 : 0.0) + (exactEq ? 0.5 : 0.0);
+                double priority = energy + (idEq ? 1.0 : 0.0) + (exactEq ? 0.5 : 0.0);
 
                 HeapItemDetailed item = new HeapItemDetailed(
                         new ResonanceMatchDetailed(id, energy, cand, phaseShift, zone, zoneScore),
                         priority
                 );
 
-                if (heap.size() < localCap) {
+                if (heap.size() < topK) {
                     heap.add(item);
                 } else if (cmp.compare(item, heap.peek()) > 0) {
                     heap.poll();
@@ -1259,7 +1257,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
             boolean idEq = id.equals(queryId);
             boolean exactEq = energy > 1.0f - EXACT_MATCH_EPS;
-            float priority = energy + (idEq ? 1.0f : 0.0f) + (exactEq ? 0.5f : 0.0f);
+            double priority = energy + (idEq ? 1.0 : 0.0) + (exactEq ? 0.5 : 0.0);
 
             tracer.trace(id, query, cand, energy);
             HeapItem item = new HeapItem(new ResonanceMatch(id, energy, cand), priority);
@@ -1307,7 +1305,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
             boolean idEq = id.equals(queryId);
             boolean exactEq = energy > 1.0f - EXACT_MATCH_EPS;
-            float priority = energy + (idEq ? 1.0f : 0.0f) + (exactEq ? 0.5f : 0.0f);
+            double priority = energy + (idEq ? 1.0 : 0.0) + (exactEq ? 0.5 : 0.0);
 
             HeapItem item = new HeapItem(new ResonanceMatch(id, energy, null), priority);
 
@@ -1323,10 +1321,20 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     private List<HeapItem> exactScoreFinalists(CandidateSource.ScoredCandidates scored,
                                                 WavePattern query, String queryId, int topK) {
         int overfetch = tune.overfetchForTopK(topK);
-        int finalistCount = Math.min(topK * overfetch, scored.candidates().size());
 
-        List<PostingSidecar.ScoredCandidate> sorted = new ArrayList<>(scored.candidates());
-        sorted.sort((a, b) -> Float.compare(b.approxScore(), a.approxScore()));
+        List<PostingSidecar.ScoredCandidate> ivfCandidates = new ArrayList<>();
+        List<PostingSidecar.ScoredCandidate> deltaCandidates = new ArrayList<>();
+        for (PostingSidecar.ScoredCandidate sc : scored.candidates()) {
+            if (sc.exactOnly()) {
+                deltaCandidates.add(sc);
+            } else {
+                ivfCandidates.add(sc);
+            }
+        }
+
+        int finalistCount = Math.min(topK * overfetch, ivfCandidates.size());
+        ivfCandidates.sort(Comparator.comparingDouble((PostingSidecar.ScoredCandidate sc) -> -sc.approxScore())
+                .thenComparing(PostingSidecar.ScoredCandidate::id));
 
         Comparator<HeapItem> cmp = Comparator.comparingDouble(HeapItem::priority);
         PriorityQueue<HeapItem> heap = new PriorityQueue<>(Math.max(topK, 8), cmp);
@@ -1336,38 +1344,46 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         fb.ensure(len, 1);
 
         for (int i = 0; i < finalistCount; i++) {
-            PostingSidecar.ScoredCandidate sc = sorted.get(i);
-            String id = sc.id();
+            exactScoreCandidate(ivfCandidates.get(i).id(), query, queryId, len, fb, heap, cmp, topK);
+        }
 
-            ManifestIndex.PatternLocation loc = manifest.get(id);
-            if (loc == null) continue;
-
-            CachedReader reader = readerCache.getOrLoad(loc.segmentName());
-            if (reader == null) continue;
-
-            if (!reader.readPatternFlat(id, fb.ampFlat, 0, fb.phaseFlat, 0, len)) continue;
-
-            WavePattern cand = new WavePattern(
-                    java.util.Arrays.copyOf(fb.ampFlat, len),
-                    java.util.Arrays.copyOf(fb.phaseFlat, len));
-
-            float energy = resonanceKernel.compare(query, cand);
-
-            boolean idEq = id.equals(queryId);
-            boolean exactEq = energy > 1.0f - EXACT_MATCH_EPS;
-            float priority = energy + (idEq ? 1.0f : 0.0f) + (exactEq ? 0.5f : 0.0f);
-
-            HeapItem item = new HeapItem(new ResonanceMatch(id, energy, cand), priority);
-
-            if (heap.size() < topK) {
-                heap.add(item);
-            } else if (cmp.compare(item, heap.peek()) > 0) {
-                heap.poll();
-                heap.add(item);
-            }
+        for (PostingSidecar.ScoredCandidate dc : deltaCandidates) {
+            exactScoreCandidate(dc.id(), query, queryId, len, fb, heap, cmp, topK);
         }
 
         return new ArrayList<>(heap);
+    }
+
+    private void exactScoreCandidate(String id, WavePattern query, String queryId,
+                                      int len, FlatBuffers fb,
+                                      PriorityQueue<HeapItem> heap, Comparator<HeapItem> cmp,
+                                      int topK) {
+        ManifestIndex.PatternLocation loc = manifest.get(id);
+        if (loc == null) return;
+
+        CachedReader reader = readerCache.getOrLoad(loc.segmentName());
+        if (reader == null) return;
+
+        if (!reader.readPatternFlat(id, fb.ampFlat, 0, fb.phaseFlat, 0, len)) return;
+
+        WavePattern cand = new WavePattern(
+                java.util.Arrays.copyOf(fb.ampFlat, len),
+                java.util.Arrays.copyOf(fb.phaseFlat, len));
+
+        float energy = resonanceKernel.compare(query, cand);
+
+        boolean idEq = id.equals(queryId);
+        boolean exactEq = energy > 1.0f - EXACT_MATCH_EPS;
+        double priority = energy + (idEq ? 1.0 : 0.0) + (exactEq ? 0.5 : 0.0);
+
+        HeapItem item = new HeapItem(new ResonanceMatch(id, energy, cand), priority);
+
+        if (heap.size() < topK) {
+            heap.add(item);
+        } else if (cmp.compare(item, heap.peek()) > 0) {
+            heap.poll();
+            heap.add(item);
+        }
     }
 
     private List<HeapItemDetailed> exactScoreFinalistsDetailed(
@@ -1375,13 +1391,23 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             WavePattern query, String queryId, int topK) {
 
         int overfetch = tune.overfetchForTopK(topK);
-        int finalistCount = Math.min(topK * overfetch, scored.candidates().size());
 
-        List<PostingSidecar.ScoredCandidate> sorted = new ArrayList<>(scored.candidates());
-        sorted.sort((a, b) -> Float.compare(b.approxScore(), a.approxScore()));
+        List<PostingSidecar.ScoredCandidate> ivfCandidates = new ArrayList<>();
+        List<PostingSidecar.ScoredCandidate> deltaCandidates = new ArrayList<>();
+        for (PostingSidecar.ScoredCandidate sc : scored.candidates()) {
+            if (sc.exactOnly()) {
+                deltaCandidates.add(sc);
+            } else {
+                ivfCandidates.add(sc);
+            }
+        }
+
+        int finalistCount = Math.min(topK * overfetch, ivfCandidates.size());
+        ivfCandidates.sort(Comparator.comparingDouble((PostingSidecar.ScoredCandidate sc) -> -sc.approxScore())
+                .thenComparing(PostingSidecar.ScoredCandidate::id));
 
         Comparator<HeapItemDetailed> cmp = Comparator.comparingDouble(HeapItemDetailed::priority);
-        int localCap = Math.max(Math.max(topK, 8), topK * overfetch);
+        int localCap = Math.max(topK, 8);
         PriorityQueue<HeapItemDetailed> heap = new PriorityQueue<>(localCap, cmp);
 
         int len = query.amplitude().length;
@@ -1389,44 +1415,52 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         fb.ensure(len, 1);
 
         for (int i = 0; i < finalistCount; i++) {
-            PostingSidecar.ScoredCandidate sc = sorted.get(i);
-            String id = sc.id();
+            exactScoreCandidateDetailed(ivfCandidates.get(i).id(), query, queryId, len, fb, heap, cmp, topK);
+        }
 
-            ManifestIndex.PatternLocation loc = manifest.get(id);
-            if (loc == null) continue;
-
-            CachedReader reader = readerCache.getOrLoad(loc.segmentName());
-            if (reader == null) continue;
-
-            if (!reader.readPatternFlat(id, fb.ampFlat, 0, fb.phaseFlat, 0, len)) continue;
-
-            WavePattern cand = new WavePattern(
-                    java.util.Arrays.copyOf(fb.ampFlat, len),
-                    java.util.Arrays.copyOf(fb.phaseFlat, len));
-
-            ComparisonResult result = resonanceKernel.compareWithPhaseDelta(query, cand);
-            float energy = result.energy();
-            double phaseShift = result.phaseDelta();
-            ResonanceZone zone = ResonanceZoneClassifier.classify(energy, phaseShift);
-            double zoneScore = zone.score();
-
-            boolean idEq = id.equals(queryId);
-            boolean exactEq = energy > 1.0f - EXACT_MATCH_EPS;
-            double priority = zoneScore + energy + (idEq ? 1.0 : 0.0) + (exactEq ? 0.5 : 0.0);
-
-            HeapItemDetailed item = new HeapItemDetailed(
-                    new ResonanceMatchDetailed(id, energy, cand, phaseShift, zone, zoneScore),
-                    priority);
-
-            if (heap.size() < localCap) {
-                heap.add(item);
-            } else if (cmp.compare(item, heap.peek()) > 0) {
-                heap.poll();
-                heap.add(item);
-            }
+        for (PostingSidecar.ScoredCandidate dc : deltaCandidates) {
+            exactScoreCandidateDetailed(dc.id(), query, queryId, len, fb, heap, cmp, topK);
         }
 
         return new ArrayList<>(heap);
+    }
+
+    private void exactScoreCandidateDetailed(String id, WavePattern query, String queryId,
+                                              int len, FlatBuffers fb,
+                                              PriorityQueue<HeapItemDetailed> heap,
+                                              Comparator<HeapItemDetailed> cmp, int topK) {
+        ManifestIndex.PatternLocation loc = manifest.get(id);
+        if (loc == null) return;
+
+        CachedReader reader = readerCache.getOrLoad(loc.segmentName());
+        if (reader == null) return;
+
+        if (!reader.readPatternFlat(id, fb.ampFlat, 0, fb.phaseFlat, 0, len)) return;
+
+        WavePattern cand = new WavePattern(
+                java.util.Arrays.copyOf(fb.ampFlat, len),
+                java.util.Arrays.copyOf(fb.phaseFlat, len));
+
+        ComparisonResult result = resonanceKernel.compareWithPhaseDelta(query, cand);
+        float energy = result.energy();
+        double phaseShift = result.phaseDelta();
+        ResonanceZone zone = ResonanceZoneClassifier.classify(energy, phaseShift);
+        double zoneScore = zone.score();
+
+        boolean idEq = id.equals(queryId);
+        boolean exactEq = energy > 1.0f - EXACT_MATCH_EPS;
+        double priority = energy + (idEq ? 1.0 : 0.0) + (exactEq ? 0.5 : 0.0);
+
+        HeapItemDetailed item = new HeapItemDetailed(
+                new ResonanceMatchDetailed(id, energy, cand, phaseShift, zone, zoneScore),
+                priority);
+
+        if (heap.size() < topK) {
+            heap.add(item);
+        } else if (cmp.compare(item, heap.peek()) > 0) {
+            heap.poll();
+            heap.add(item);
+        }
     }
 
     private List<HeapItem> collectMatchesFromCandidates(
@@ -1451,6 +1485,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             try {
                 collected.addAll(task.join());
             } catch (Exception e) {
+                System.err.println("WARN: candidate scoring failed for segment: " + e.getMessage());
             }
         }
         return collected;
@@ -1514,6 +1549,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             try {
                 collected.addAll(task.join());
             } catch (Exception e) {
+                System.err.println("WARN: detailed candidate scoring failed for segment: " + e.getMessage());
             }
         }
         return collected;
@@ -1525,10 +1561,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
         final Comparator<HeapItemDetailed> cmp = Comparator.comparingDouble(HeapItemDetailed::priority);
         final int len = query.amplitude().length;
-        final int overfetch = tune.overfetchForTopK(topK);
-        final int localCap = Math.max(Math.max(topK, 8), topK * overfetch);
 
-        final PriorityQueue<HeapItemDetailed> heap = new PriorityQueue<>(localCap, cmp);
+        final PriorityQueue<HeapItemDetailed> heap = new PriorityQueue<>(Math.max(topK, 8), cmp);
 
         for (var entry : candidatesBySegment.entrySet()) {
             CachedReader reader = readerCache.getOrLoad(entry.getKey());
@@ -1546,13 +1580,13 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
                 boolean idEq = id.equals(queryId);
                 boolean exactEq = energy > 1.0f - EXACT_MATCH_EPS;
-                double priority = zoneScore + energy + (idEq ? 1.0 : 0.0) + (exactEq ? 0.5 : 0.0);
+                double priority = energy + (idEq ? 1.0 : 0.0) + (exactEq ? 0.5 : 0.0);
 
                 HeapItemDetailed item = new HeapItemDetailed(
                         new ResonanceMatchDetailed(id, energy, cand, phaseShift, zone, zoneScore),
                         priority);
 
-                if (heap.size() < localCap) {
+                if (heap.size() < topK) {
                     heap.add(item);
                 } else if (cmp.compare(item, heap.peek()) > 0) {
                     heap.poll();

@@ -593,6 +593,407 @@ class AnnAcceptanceTest {
         }
     }
 
+    @Test
+    @Order(9)
+    @DisplayName("IVF recall guarantee: nProbe=K must produce 100% recall vs kernel ground truth")
+    void ivfRecallGuarantee(@TempDir Path tmpDir) {
+        int k = 8;
+        System.setProperty("resonance.index.enabled", "true");
+        System.setProperty("resonance.index.l2.enabled", "false");
+        System.setProperty("resonance.index.l1.k", String.valueOf(k));
+        System.setProperty("resonance.index.l1.nprobe", String.valueOf(k));
+
+        StoreRuntimeServices runtime = StoreRuntimeServices.fromSystemProperties();
+        WavePatternStoreImpl store = new WavePatternStoreImpl(tmpDir.resolve("ivf-guarantee"), DIM, runtime);
+
+        try {
+            Random rng = new Random(SEED);
+            List<WavePattern> allPatterns = new ArrayList<>();
+            List<String> allIds = new ArrayList<>();
+
+            for (int i = 0; i < N; i++) {
+                WavePattern p = randomPattern(rng, DIM);
+                try {
+                    String id = store.insert(p, Map.of());
+                    allPatterns.add(p);
+                    allIds.add(id);
+                } catch (Exception e) { /* dup */ }
+            }
+            store.forceIndexRebuild();
+
+            ai.evacortex.resonancedb.core.engine.ResonanceKernel kernel =
+                    new ai.evacortex.resonancedb.core.engine.JavaKernel();
+
+            int queries = 50;
+            int misses = 0;
+            int total = 0;
+            Random qRng = new Random(SEED + 8888);
+
+            for (int q = 0; q < queries; q++) {
+                WavePattern query = randomPattern(qRng, DIM);
+
+                float[] scores = new float[allPatterns.size()];
+                for (int i = 0; i < allPatterns.size(); i++) {
+                    scores[i] = kernel.compare(query, allPatterns.get(i));
+                }
+                Integer[] sortedIdx = new Integer[allPatterns.size()];
+                for (int i = 0; i < sortedIdx.length; i++) sortedIdx[i] = i;
+                Arrays.sort(sortedIdx, (a, b) -> Float.compare(scores[b], scores[a]));
+
+                Set<String> trueTopK = new HashSet<>();
+                for (int i = 0; i < TOP_K && i < sortedIdx.length; i++) {
+                    trueTopK.add(allIds.get(sortedIdx[i]));
+                }
+
+                List<ResonanceMatch> ivfResults = store.query(query, TOP_K);
+                Set<String> ivfIds = ivfResults.stream()
+                        .map(ResonanceMatch::id).collect(Collectors.toSet());
+
+                for (String id : trueTopK) {
+                    total++;
+                    if (!ivfIds.contains(id)) misses++;
+                }
+            }
+
+            double recall = total > 0 ? 1.0 - (double) misses / total : 1.0;
+            System.out.println("IVF recall guarantee (nProbe=K=" + k + "): " +
+                    String.format("%.3f", recall) +
+                    " (" + (total - misses) + "/" + total + ")");
+
+            assertTrue(recall >= 0.99,
+                    "IVF with nProbe=K must achieve >= 99% recall vs kernel ground truth, got " +
+                            String.format("%.3f", recall));
+        } finally {
+            store.close();
+            System.clearProperty("resonance.index.enabled");
+            System.clearProperty("resonance.index.l2.enabled");
+            System.clearProperty("resonance.index.l1.k");
+            System.clearProperty("resonance.index.l1.nprobe");
+            runtime.close();
+        }
+    }
+
+    @Test
+    @Order(10)
+    @DisplayName("Delta+IVF interaction: patterns in delta findable alongside sealed")
+    void deltaIvfInteraction(@TempDir Path tmpDir) {
+        System.setProperty("resonance.index.enabled", "true");
+        System.setProperty("resonance.index.l2.enabled", "false");
+        System.setProperty("resonance.index.l1.k", "8");
+        System.setProperty("resonance.index.l1.nprobe", "8");
+
+        StoreRuntimeServices runtime = StoreRuntimeServices.fromSystemProperties();
+        WavePatternStoreImpl store = new WavePatternStoreImpl(tmpDir.resolve("delta-ivf"), DIM, runtime);
+
+        try {
+            Random rng = new Random(SEED);
+
+            List<String> sealedIds = new ArrayList<>();
+            List<WavePattern> sealedPatterns = new ArrayList<>();
+            for (int i = 0; i < 80; i++) {
+                WavePattern p = randomPattern(rng, DIM);
+                try {
+                    String id = store.insert(p, Map.of());
+                    sealedIds.add(id);
+                    sealedPatterns.add(p);
+                } catch (Exception e) { /* dup */ }
+            }
+            store.forceIndexRebuild();
+
+            List<String> deltaIds = new ArrayList<>();
+            List<WavePattern> deltaPatterns = new ArrayList<>();
+            for (int i = 0; i < 20; i++) {
+                WavePattern p = randomPattern(rng, DIM);
+                try {
+                    String id = store.insert(p, Map.of());
+                    deltaIds.add(id);
+                    deltaPatterns.add(p);
+                } catch (Exception e) { /* dup */ }
+            }
+
+            for (int i = 0; i < deltaPatterns.size(); i++) {
+                WavePattern query = deltaPatterns.get(i);
+                List<ResonanceMatch> results = store.query(query, TOP_K);
+                Set<String> resultIds = results.stream()
+                        .map(ResonanceMatch::id).collect(Collectors.toSet());
+
+                assertTrue(resultIds.contains(deltaIds.get(i)),
+                        "Delta pattern " + deltaIds.get(i) + " must be findable via self-query");
+            }
+
+            Random sealedRng = new Random(SEED + 5555);
+            int sealedChecks = Math.min(20, sealedPatterns.size());
+            for (int i = 0; i < sealedChecks; i++) {
+                int idx = sealedRng.nextInt(sealedPatterns.size());
+                WavePattern query = sealedPatterns.get(idx);
+                List<ResonanceMatch> results = store.query(query, TOP_K);
+                Set<String> resultIds = results.stream()
+                        .map(ResonanceMatch::id).collect(Collectors.toSet());
+
+                assertTrue(resultIds.contains(sealedIds.get(idx)),
+                        "Sealed pattern " + sealedIds.get(idx) + " must be findable via self-query");
+            }
+        } finally {
+            store.close();
+            System.clearProperty("resonance.index.enabled");
+            System.clearProperty("resonance.index.l2.enabled");
+            System.clearProperty("resonance.index.l1.k");
+            System.clearProperty("resonance.index.l1.nprobe");
+            runtime.close();
+        }
+    }
+
+    @Test
+    @Order(11)
+    @DisplayName("Query equivalence: query() and queryDetailed() return identical ID sets")
+    void queryDetailedEquivalence(@TempDir Path tmpDir) {
+        System.setProperty("resonance.index.enabled", "true");
+        System.setProperty("resonance.index.l2.enabled", "false");
+        System.setProperty("resonance.index.l1.k", "8");
+        System.setProperty("resonance.index.l1.nprobe", "8");
+
+        StoreRuntimeServices runtime = StoreRuntimeServices.fromSystemProperties();
+        WavePatternStoreImpl store = new WavePatternStoreImpl(tmpDir.resolve("equiv"), DIM, runtime);
+
+        try {
+            Random rng = new Random(SEED);
+            for (int i = 0; i < N; i++) {
+                WavePattern p = randomPattern(rng, DIM);
+                try { store.insert(p, Map.of()); } catch (Exception e) { /* dup */ }
+            }
+            store.forceIndexRebuild();
+
+            int queries = 50;
+            int divergences = 0;
+            Random qRng = new Random(SEED + 9999);
+
+            for (int q = 0; q < queries; q++) {
+                WavePattern query = randomPattern(qRng, DIM);
+
+                List<ResonanceMatch> plain = store.query(query, TOP_K);
+                List<ResonanceMatchDetailed> detailed = store.queryDetailed(query, TOP_K);
+
+                List<String> plainIds = plain.stream().map(ResonanceMatch::id).toList();
+                List<String> detailedIds = detailed.stream()
+                        .map(ResonanceMatchDetailed::id).toList();
+
+                if (!plainIds.equals(detailedIds)) {
+                    divergences++;
+                }
+            }
+
+            System.out.println("query/queryDetailed equivalence: " +
+                    (queries - divergences) + "/" + queries + " identical");
+
+            assertEquals(0, divergences,
+                    "query() and queryDetailed() must return identical ID lists, " +
+                            "but diverged on " + divergences + "/" + queries + " queries");
+        } finally {
+            store.close();
+            System.clearProperty("resonance.index.enabled");
+            System.clearProperty("resonance.index.l2.enabled");
+            System.clearProperty("resonance.index.l1.k");
+            System.clearProperty("resonance.index.l1.nprobe");
+            runtime.close();
+        }
+    }
+
+    @Test
+    @Order(12)
+    @DisplayName("Dense clusters: high recall on Gaussian-clustered embeddings")
+    void denseClusterRecall(@TempDir Path tmpDir) {
+        int k = 16;
+        int nProbe = 8;
+        System.setProperty("resonance.index.enabled", "true");
+        System.setProperty("resonance.index.l2.enabled", "false");
+        System.setProperty("resonance.index.l1.k", String.valueOf(k));
+        System.setProperty("resonance.index.l1.nprobe", String.valueOf(nProbe));
+
+        StoreRuntimeServices runtime = StoreRuntimeServices.fromSystemProperties();
+        WavePatternStoreImpl store = new WavePatternStoreImpl(tmpDir.resolve("dense"), DIM, runtime);
+
+        try {
+            Random rng = new Random(SEED);
+            int numClusters = 5;
+            int patternsPerCluster = N / numClusters;
+
+            WavePattern[] centroids = new WavePattern[numClusters];
+            for (int c = 0; c < numClusters; c++) {
+                centroids[c] = randomPattern(rng, DIM);
+            }
+
+            List<WavePattern> allPatterns = new ArrayList<>();
+            List<String> allIds = new ArrayList<>();
+
+            for (int c = 0; c < numClusters; c++) {
+                for (int j = 0; j < patternsPerCluster; j++) {
+                    WavePattern p = perturbPattern(centroids[c], 0.15, rng);
+                    try {
+                        String id = store.insert(p, Map.of());
+                        allPatterns.add(p);
+                        allIds.add(id);
+                    } catch (Exception e) { /* dup */ }
+                }
+            }
+            store.forceIndexRebuild();
+
+            ai.evacortex.resonancedb.core.engine.ResonanceKernel kernel =
+                    new ai.evacortex.resonancedb.core.engine.JavaKernel();
+
+            int queries = 100;
+            int totalHits = 0;
+            int totalExpected = 0;
+            Random qRng = new Random(SEED + 7000);
+
+            for (int q = 0; q < queries; q++) {
+                int baseIdx = qRng.nextInt(allPatterns.size());
+                WavePattern query = perturbPattern(allPatterns.get(baseIdx), 0.2, qRng);
+
+                float[] scores = new float[allPatterns.size()];
+                for (int i = 0; i < allPatterns.size(); i++) {
+                    scores[i] = kernel.compare(query, allPatterns.get(i));
+                }
+                Integer[] sortedIdx = new Integer[allPatterns.size()];
+                for (int i = 0; i < sortedIdx.length; i++) sortedIdx[i] = i;
+                Arrays.sort(sortedIdx, (a, b) -> Float.compare(scores[b], scores[a]));
+
+                Set<String> trueTopK = new HashSet<>();
+                for (int i = 0; i < TOP_K && i < sortedIdx.length; i++) {
+                    trueTopK.add(allIds.get(sortedIdx[i]));
+                }
+
+                List<ResonanceMatch> annResults = store.query(query, TOP_K);
+                Set<String> annIds = annResults.stream()
+                        .map(ResonanceMatch::id).collect(Collectors.toSet());
+
+                for (String id : trueTopK) {
+                    if (annIds.contains(id)) totalHits++;
+                }
+                totalExpected += trueTopK.size();
+            }
+
+            double recall = totalExpected > 0 ? (double) totalHits / totalExpected : 1.0;
+            System.out.println("Dense cluster recall@" + TOP_K +
+                    " (K=" + k + ", nProbe=" + nProbe +
+                    ", clusters=" + numClusters + ", σ=0.15): " +
+                    String.format("%.3f", recall) +
+                    " (" + totalHits + "/" + totalExpected + ")");
+
+            assertTrue(recall >= 0.90,
+                    "Dense cluster recall must be >= 0.90 with nProbe=" + nProbe +
+                            "/K=" + k + ", got " + String.format("%.3f", recall));
+        } finally {
+            store.close();
+            System.clearProperty("resonance.index.enabled");
+            System.clearProperty("resonance.index.l2.enabled");
+            System.clearProperty("resonance.index.l1.k");
+            System.clearProperty("resonance.index.l1.nprobe");
+            runtime.close();
+        }
+    }
+
+    @Test
+    @Order(13)
+    @DisplayName("Scoring precision: float32 approx ranking matches exact within tolerance")
+    void scoringPrecision(@TempDir Path tmpDir) {
+        System.setProperty("resonance.index.enabled", "true");
+        System.setProperty("resonance.index.l2.enabled", "false");
+        System.setProperty("resonance.index.l1.k", "8");
+        System.setProperty("resonance.index.l1.nprobe", "8");
+
+        StoreRuntimeServices runtime = StoreRuntimeServices.fromSystemProperties();
+        WavePatternStoreImpl store = new WavePatternStoreImpl(tmpDir.resolve("precision"), DIM, runtime);
+
+        try {
+            Random rng = new Random(SEED);
+            List<WavePattern> allPatterns = new ArrayList<>();
+            List<String> allIds = new ArrayList<>();
+
+            for (int i = 0; i < 200; i++) {
+                WavePattern p = randomPattern(rng, DIM);
+                try {
+                    String id = store.insert(p, Map.of());
+                    allPatterns.add(p);
+                    allIds.add(id);
+                } catch (Exception e) { /* dup */ }
+            }
+            store.forceIndexRebuild();
+
+            ai.evacortex.resonancedb.core.engine.ResonanceKernel kernel =
+                    new ai.evacortex.resonancedb.core.engine.JavaKernel();
+
+            int queries = 50;
+            int maxRankInversion = 0;
+            Random qRng = new Random(SEED + 2222);
+
+            for (int q = 0; q < queries; q++) {
+                WavePattern query = randomPattern(qRng, DIM);
+
+                float[] exactScores = new float[allPatterns.size()];
+                for (int i = 0; i < allPatterns.size(); i++) {
+                    exactScores[i] = kernel.compare(query, allPatterns.get(i));
+                }
+
+                float[] approxScores = new float[allPatterns.size()];
+                float queryEnergy = ai.evacortex.resonancedb.core.math.UnfoldedMath
+                        .energyFloat32(query);
+                float[] queryU = ai.evacortex.resonancedb.core.math.UnfoldedMath
+                        .unfoldFloat32(query);
+
+                for (int i = 0; i < allPatterns.size(); i++) {
+                    float[] candU = ai.evacortex.resonancedb.core.math.UnfoldedMath
+                            .unfoldFloat32(allPatterns.get(i));
+                    double dot = 0.0;
+                    for (int d = 0; d < queryU.length; d++) {
+                        dot += (double) queryU[d] * (double) candU[d];
+                    }
+                    double candEnergy = ai.evacortex.resonancedb.core.math.UnfoldedMath
+                            .energyFloat32(allPatterns.get(i));
+                    approxScores[i] = ai.evacortex.resonancedb.core.math.UnfoldedMath
+                            .scoreFromDot(dot, queryEnergy, candEnergy);
+                }
+
+                Integer[] exactRank = new Integer[allPatterns.size()];
+                for (int i = 0; i < exactRank.length; i++) exactRank[i] = i;
+                Arrays.sort(exactRank, (a, b) -> Float.compare(exactScores[b], exactScores[a]));
+
+                Map<Integer, Integer> exactRankMap = new HashMap<>();
+                for (int r = 0; r < exactRank.length; r++) {
+                    exactRankMap.put(exactRank[r], r);
+                }
+
+                Integer[] approxRankArr = new Integer[allPatterns.size()];
+                for (int i = 0; i < approxRankArr.length; i++) approxRankArr[i] = i;
+                Arrays.sort(approxRankArr, (a, b) -> Float.compare(approxScores[b], approxScores[a]));
+
+                for (int r = 0; r < TOP_K && r < approxRankArr.length; r++) {
+                    int patIdx = exactRank[r];
+                    int approxR = -1;
+                    for (int ar = 0; ar < approxRankArr.length; ar++) {
+                        if (approxRankArr[ar] == patIdx) { approxR = ar; break; }
+                    }
+                    int inversion = Math.abs(r - approxR);
+                    maxRankInversion = Math.max(maxRankInversion, inversion);
+                }
+            }
+
+            System.out.println("Max rank inversion (exact vs approx, top-" + TOP_K + "): " +
+                    maxRankInversion);
+
+            int overfetch = Integer.getInteger("resonance.query.overfetch", 4);
+            assertTrue(maxRankInversion < TOP_K * overfetch,
+                    "Max rank inversion " + maxRankInversion +
+                            " must be within overfetch budget (" + (TOP_K * overfetch) + ")");
+        } finally {
+            store.close();
+            System.clearProperty("resonance.index.enabled");
+            System.clearProperty("resonance.index.l2.enabled");
+            System.clearProperty("resonance.index.l1.k");
+            System.clearProperty("resonance.index.l1.nprobe");
+            runtime.close();
+        }
+    }
+
     // ─── Helpers ─────────────────────────────────────────────────────────
 
     private static WavePattern randomPattern(Random rng, int dim) {

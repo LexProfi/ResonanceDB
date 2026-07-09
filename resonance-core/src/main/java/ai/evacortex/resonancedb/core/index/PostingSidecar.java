@@ -72,9 +72,12 @@ public final class PostingSidecar {
                     candVec[d] = mmap.getFloat(vecOffset + d * 4);
                 }
 
-                float dot = UnfoldedMath.dotFloat32(queryU, candVec, 0, dim);
-                float candEnergy = mmap.getFloat(energiesStart + i * 4);
-                float approxScore = UnfoldedMath.scoreFromDotFloat32(dot, queryEnergy, candEnergy);
+                double dot = 0.0;
+                for (int d = 0; d < dim; d++) {
+                    dot += (double) queryU[d] * (double) candVec[d];
+                }
+                double candEnergy = mmap.getFloat(energiesStart + i * 4);
+                float approxScore = UnfoldedMath.scoreFromDot(dot, queryEnergy, candEnergy);
 
                 int idOffset = idsStart + i * ID_BYTES;
                 for (int b = 0; b < ID_BYTES; b++) {
@@ -97,7 +100,15 @@ public final class PostingSidecar {
         }
     }
 
-    public record ScoredCandidate(String id, float approxScore) {}
+    public record ScoredCandidate(String id, float approxScore, boolean exactOnly) {
+        public ScoredCandidate(String id, float approxScore) {
+            this(id, approxScore, false);
+        }
+
+        public static ScoredCandidate forExactRescore(String id) {
+            return new ScoredCandidate(id, 0.0f, true);
+        }
+    }
 
     private PostingSidecar() {}
 

@@ -153,12 +153,47 @@ public final class IvfCandidateSource implements CandidateSource {
             sidecar.scanPartition(partIdx, queryU, queryEnergy, results);
         }
 
-        Set<String> deltaIds = delta.allIds();
-        for (String id : deltaIds) {
-            results.add(new PostingSidecar.ScoredCandidate(id, Float.MAX_VALUE));
+        results.removeIf(sc -> delta.isDeleted(sc.id()));
+
+        Set<String> scoredIds = new HashSet<>(results.size());
+        for (PostingSidecar.ScoredCandidate sc : results) {
+            scoredIds.add(sc.id());
         }
 
-        results.removeIf(sc -> delta.isDeleted(sc.id()));
+        Map<Integer, VamanaGraph> graphs = vamanaGraphs.get();
+        if (!graphs.isEmpty() && readerProvider != null) {
+            for (int partIdx : topPartitions) {
+                VamanaGraph graph = graphs.get(partIdx);
+                if (graph == null || graph.nodeCount() == 0) continue;
+
+                java.util.function.IntFunction<WavePattern> loader = nodeIdx -> {
+                    if (nodeIdx < 0 || nodeIdx >= graph.nodeCount()) return null;
+                    String patId = graph.patternIds()[nodeIdx];
+                    ManifestIndex.PatternLocation loc = manifest.get(patId);
+                    if (loc == null) return null;
+                    try {
+                        CachedReader reader = readerProvider.apply(loc.segmentName());
+                        return (reader != null) ? reader.readById(patId) : null;
+                    } catch (RuntimeException e) {
+                        return null;
+                    }
+                };
+
+                for (String id : graph.search(query, loader, efSearch, graph.nodeCount())) {
+                    if (!scoredIds.contains(id) && !delta.isDeleted(id)) {
+                        results.add(PostingSidecar.ScoredCandidate.forExactRescore(id));
+                        scoredIds.add(id);
+                    }
+                }
+            }
+        }
+
+        Set<String> deltaIds = delta.allIds();
+        for (String id : deltaIds) {
+            if (!scoredIds.contains(id)) {
+                results.add(PostingSidecar.ScoredCandidate.forExactRescore(id));
+            }
+        }
 
         return new ScoredCandidates(results, false);
     }
