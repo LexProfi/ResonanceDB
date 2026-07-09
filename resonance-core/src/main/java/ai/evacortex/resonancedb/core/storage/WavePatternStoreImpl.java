@@ -99,6 +99,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
     private final boolean indexEnabled;
+    private final boolean exactEquivalence;
     private final IvfCandidateSource ivfSource;
     private final DeltaIndex deltaIndex;
     private final Path centroidsPath;
@@ -127,9 +128,35 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     private final List<CompletableFuture<Long>> pendingWalFutures =
             Collections.synchronizedList(new ArrayList<>());
 
-    private record HeapItem(ResonanceMatch match, double priority) {}
-    private record HeapItemDetailed(ResonanceMatchDetailed match, double priority) {}
+    private record HeapItem(ResonanceMatch match, boolean idMatch, boolean exactMatch) {}
+    private record HeapItemDetailed(ResonanceMatchDetailed match, boolean idMatch, boolean exactMatch) {}
     private record SegmentWriteResult(SegmentWriter writer, long offset, long version) {}
+
+    private static final Comparator<HeapItem> HEAP_ORDER = Comparator
+            .comparing(HeapItem::idMatch)
+            .thenComparing(HeapItem::exactMatch)
+            .thenComparingDouble(h -> h.match().energy())
+            .thenComparing(h -> h.match().id(), Comparator.reverseOrder());
+
+    private static final Comparator<HeapItem> RESULT_ORDER = HEAP_ORDER.reversed();
+
+    private static final Comparator<HeapItemDetailed> HEAP_ORDER_DETAILED = Comparator
+            .comparing(HeapItemDetailed::idMatch)
+            .thenComparing(HeapItemDetailed::exactMatch)
+            .thenComparingDouble(h -> h.match().energy())
+            .thenComparing(h -> h.match().id(), Comparator.reverseOrder());
+
+    private static final Comparator<HeapItemDetailed> RESULT_ORDER_DETAILED = HEAP_ORDER_DETAILED.reversed();
+
+    private static <T> void heapAddOrEvict(PriorityQueue<T> heap, T item,
+                                            Comparator<T> heapOrder, int topK) {
+        if (heap.size() < topK) {
+            heap.add(item);
+        } else if (heapOrder.compare(item, heap.peek()) > 0) {
+            heap.poll();
+            heap.add(item);
+        }
+    }
 
     private final Adaptive tune = new Adaptive();
 
@@ -326,6 +353,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
         this.indexEnabled = Boolean.parseBoolean(
                 System.getProperty("resonance.index.enabled", "false"));
+        this.exactEquivalence = Boolean.parseBoolean(
+                System.getProperty("resonance.index.exactEquivalence", "true"));
         this.ivfNProbe = Integer.getInteger("resonance.index.l1.nprobe", 8);
         this.ivfDeltaMaxSize = Integer.getInteger("resonance.index.delta.maxSize", 10_000);
 
@@ -772,15 +801,12 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         try (AutoLock ignored = AutoLock.read(globalLock)) {
             String queryId = HashingUtil.computeContentHash(query);
 
-            Comparator<HeapItem> order = Comparator
-                    .comparingDouble(HeapItem::priority).reversed()
-                    .thenComparing((HeapItem h) -> h.match().energy(), Comparator.reverseOrder())
-                    .thenComparing(h -> h.match().id());
-
             List<HeapItem> collected;
 
             if (ivfSource != null && ivfSource.currentIndex() != null) {
-                CandidateSource.ScoredCandidates scored = ivfSource.scoredCandidates(query, topK);
+                int effectiveProbe = exactEquivalence ? Integer.MAX_VALUE : ivfNProbe;
+                CandidateSource.ScoredCandidates scored =
+                        ivfSource.scoredCandidates(query, topK, effectiveProbe);
                 if (!scored.exhaustive() && !scored.candidates().isEmpty()) {
                     collected = exactScoreFinalists(scored, query, queryId, topK);
                 } else {
@@ -816,11 +842,11 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
             if (deltaBuffer != null && !deltaBuffer.isEmpty()) {
                 for (DeltaBuffer.ScoredMatch sm : deltaBuffer.scoreDelta(query, queryId, resonanceKernel, topK)) {
-                    collected.add(new HeapItem(sm.match(), sm.priority()));
+                    collected.add(new HeapItem(sm.match(), sm.idMatch(), sm.exactMatch()));
                 }
             }
 
-            List<ResonanceMatch> prelim = deduplicateTopK(collected, h -> h.match().id(), order, topK)
+            List<ResonanceMatch> prelim = deduplicateTopK(collected, h -> h.match().id(), RESULT_ORDER, topK)
                     .stream()
                     .map(HeapItem::match)
                     .toList();
@@ -842,15 +868,12 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         try (AutoLock ignored = AutoLock.read(globalLock)) {
             String queryId = HashingUtil.computeContentHash(query);
 
-            Comparator<HeapItemDetailed> order = Comparator
-                    .comparingDouble(HeapItemDetailed::priority).reversed()
-                    .thenComparing((HeapItemDetailed h) -> h.match().energy(), Comparator.reverseOrder())
-                    .thenComparing(h -> h.match().id());
-
             List<HeapItemDetailed> collected;
 
             if (ivfSource != null && ivfSource.currentIndex() != null) {
-                CandidateSource.ScoredCandidates scored = ivfSource.scoredCandidates(query, topK);
+                int effectiveProbe = exactEquivalence ? Integer.MAX_VALUE : ivfNProbe;
+                CandidateSource.ScoredCandidates scored =
+                        ivfSource.scoredCandidates(query, topK, effectiveProbe);
                 if (!scored.exhaustive() && !scored.candidates().isEmpty()) {
                     collected = exactScoreFinalistsDetailed(scored, query, queryId, topK);
                 } else {
@@ -889,11 +912,11 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             if (deltaBuffer != null && !deltaBuffer.isEmpty()) {
                 for (DeltaBuffer.ScoredMatchDetailed smd :
                         deltaBuffer.scoreDeltaDetailed(query, queryId, resonanceKernel, topK)) {
-                    collected.add(new HeapItemDetailed(smd.match(), smd.priority()));
+                    collected.add(new HeapItemDetailed(smd.match(), smd.idMatch(), smd.exactMatch()));
                 }
             }
 
-            return deduplicateTopK(collected, h -> h.match().id(), order, topK)
+            return deduplicateTopK(collected, h -> h.match().id(), RESULT_ORDER_DETAILED, topK)
                     .stream()
                     .map(HeapItemDetailed::match)
                     .toList();
@@ -1091,7 +1114,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             return List.of();
         }
 
-        final Comparator<HeapItem> cmp = Comparator.comparingDouble(HeapItem::priority);
+        final Comparator<HeapItem> cmp = HEAP_ORDER;
         final CachedReader reader = readerCache.get(writer.getSegmentName());
         if (reader == null) {
             return List.of();
@@ -1160,7 +1183,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             return List.of();
         }
 
-        final Comparator<HeapItemDetailed> cmp = Comparator.comparingDouble(HeapItemDetailed::priority);
+        final Comparator<HeapItemDetailed> cmp = HEAP_ORDER_DETAILED;
         final CachedReader reader = readerCache.get(writer.getSegmentName());
         if (reader == null) {
             return List.of();
@@ -1186,19 +1209,10 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
                 boolean idEq = id.equals(queryId);
                 boolean exactEq = energy > 1.0f - EXACT_MATCH_EPS;
-                double priority = energy + (idEq ? 1.0 : 0.0) + (exactEq ? 0.5 : 0.0);
-
                 HeapItemDetailed item = new HeapItemDetailed(
                         new ResonanceMatchDetailed(id, energy, cand, phaseShift, zone, zoneScore),
-                        priority
-                );
-
-                if (heap.size() < topK) {
-                    heap.add(item);
-                } else if (cmp.compare(item, heap.peek()) > 0) {
-                    heap.poll();
-                    heap.add(item);
-                }
+                        idEq, exactEq);
+                heapAddOrEvict(heap, item, cmp, topK);
             }
             return new ArrayList<>(heap);
         } finally {
@@ -1257,17 +1271,9 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
             boolean idEq = id.equals(queryId);
             boolean exactEq = energy > 1.0f - EXACT_MATCH_EPS;
-            double priority = energy + (idEq ? 1.0 : 0.0) + (exactEq ? 0.5 : 0.0);
-
             tracer.trace(id, query, cand, energy);
-            HeapItem item = new HeapItem(new ResonanceMatch(id, energy, cand), priority);
-
-            if (heap.size() < topK) {
-                heap.add(item);
-            } else if (cmp.compare(item, heap.peek()) > 0) {
-                heap.poll();
-                heap.add(item);
-            }
+            HeapItem item = new HeapItem(new ResonanceMatch(id, energy, cand), idEq, exactEq);
+            heapAddOrEvict(heap, item, cmp, topK);
         }
     }
 
@@ -1305,16 +1311,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
             boolean idEq = id.equals(queryId);
             boolean exactEq = energy > 1.0f - EXACT_MATCH_EPS;
-            double priority = energy + (idEq ? 1.0 : 0.0) + (exactEq ? 0.5 : 0.0);
-
-            HeapItem item = new HeapItem(new ResonanceMatch(id, energy, null), priority);
-
-            if (heap.size() < topK) {
-                heap.add(item);
-            } else if (cmp.compare(item, heap.peek()) > 0) {
-                heap.poll();
-                heap.add(item);
-            }
+            HeapItem item = new HeapItem(new ResonanceMatch(id, energy, null), idEq, exactEq);
+            heapAddOrEvict(heap, item, cmp, topK);
         }
     }
 
@@ -1336,7 +1334,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         ivfCandidates.sort(Comparator.comparingDouble((PostingSidecar.ScoredCandidate sc) -> -sc.approxScore())
                 .thenComparing(PostingSidecar.ScoredCandidate::id));
 
-        Comparator<HeapItem> cmp = Comparator.comparingDouble(HeapItem::priority);
+        Comparator<HeapItem> cmp = HEAP_ORDER;
         PriorityQueue<HeapItem> heap = new PriorityQueue<>(Math.max(topK, 8), cmp);
 
         int len = query.amplitude().length;
@@ -1374,16 +1372,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
         boolean idEq = id.equals(queryId);
         boolean exactEq = energy > 1.0f - EXACT_MATCH_EPS;
-        double priority = energy + (idEq ? 1.0 : 0.0) + (exactEq ? 0.5 : 0.0);
-
-        HeapItem item = new HeapItem(new ResonanceMatch(id, energy, cand), priority);
-
-        if (heap.size() < topK) {
-            heap.add(item);
-        } else if (cmp.compare(item, heap.peek()) > 0) {
-            heap.poll();
-            heap.add(item);
-        }
+        HeapItem item = new HeapItem(new ResonanceMatch(id, energy, cand), idEq, exactEq);
+        heapAddOrEvict(heap, item, cmp, topK);
     }
 
     private List<HeapItemDetailed> exactScoreFinalistsDetailed(
@@ -1406,7 +1396,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         ivfCandidates.sort(Comparator.comparingDouble((PostingSidecar.ScoredCandidate sc) -> -sc.approxScore())
                 .thenComparing(PostingSidecar.ScoredCandidate::id));
 
-        Comparator<HeapItemDetailed> cmp = Comparator.comparingDouble(HeapItemDetailed::priority);
+        Comparator<HeapItemDetailed> cmp = HEAP_ORDER_DETAILED;
         int localCap = Math.max(topK, 8);
         PriorityQueue<HeapItemDetailed> heap = new PriorityQueue<>(localCap, cmp);
 
@@ -1449,18 +1439,11 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
         boolean idEq = id.equals(queryId);
         boolean exactEq = energy > 1.0f - EXACT_MATCH_EPS;
-        double priority = energy + (idEq ? 1.0 : 0.0) + (exactEq ? 0.5 : 0.0);
 
         HeapItemDetailed item = new HeapItemDetailed(
                 new ResonanceMatchDetailed(id, energy, cand, phaseShift, zone, zoneScore),
-                priority);
-
-        if (heap.size() < topK) {
-            heap.add(item);
-        } else if (cmp.compare(item, heap.peek()) > 0) {
-            heap.poll();
-            heap.add(item);
-        }
+                idEq, exactEq);
+        heapAddOrEvict(heap, item, cmp, topK);
     }
 
     private List<HeapItem> collectMatchesFromCandidates(
@@ -1495,7 +1478,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             Map<String, Collection<String>> candidatesBySegment,
             WavePattern query, String queryId, int topK) {
 
-        final Comparator<HeapItem> cmp = Comparator.comparingDouble(HeapItem::priority);
+        final Comparator<HeapItem> cmp = HEAP_ORDER;
         final int len = query.amplitude().length;
         final int batchSize = tune.batchSizeForLen(len, activeTasksEstimate());
         final boolean useFlat = compareManyFlatMethod != null;
@@ -1559,7 +1542,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             Map<String, Collection<String>> candidatesBySegment,
             WavePattern query, String queryId, int topK) {
 
-        final Comparator<HeapItemDetailed> cmp = Comparator.comparingDouble(HeapItemDetailed::priority);
+        final Comparator<HeapItemDetailed> cmp = HEAP_ORDER_DETAILED;
         final int len = query.amplitude().length;
 
         final PriorityQueue<HeapItemDetailed> heap = new PriorityQueue<>(Math.max(topK, 8), cmp);
@@ -1580,18 +1563,11 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
                 boolean idEq = id.equals(queryId);
                 boolean exactEq = energy > 1.0f - EXACT_MATCH_EPS;
-                double priority = energy + (idEq ? 1.0 : 0.0) + (exactEq ? 0.5 : 0.0);
 
                 HeapItemDetailed item = new HeapItemDetailed(
                         new ResonanceMatchDetailed(id, energy, cand, phaseShift, zone, zoneScore),
-                        priority);
-
-                if (heap.size() < topK) {
-                    heap.add(item);
-                } else if (cmp.compare(item, heap.peek()) > 0) {
-                    heap.poll();
-                    heap.add(item);
-                }
+                        idEq, exactEq);
+                heapAddOrEvict(heap, item, cmp, topK);
             }
         }
 

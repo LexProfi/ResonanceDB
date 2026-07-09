@@ -132,6 +132,10 @@ public final class IvfCandidateSource implements CandidateSource {
 
     @Override
     public ScoredCandidates scoredCandidates(WavePattern query, int topK) {
+        return scoredCandidates(query, topK, nProbe);
+    }
+
+    public ScoredCandidates scoredCandidates(WavePattern query, int topK, int effectiveNProbe) {
         CentroidIndex index = indexRef.get();
         PostingSidecar.Loaded sidecar = this.postingSidecar;
 
@@ -139,13 +143,15 @@ public final class IvfCandidateSource implements CandidateSource {
             return CandidateSource.super.scoredCandidates(query, topK);
         }
 
+        int probeCount = Math.min(effectiveNProbe, index.size());
+
         float[] queryU = UnfoldedMath.unfoldFloat32(query);
         float queryEnergy = UnfoldedMath.energyFloat32(query);
 
         double[] queryUDouble = UnfoldedMath.unfold(query);
         UnfoldedMath.l2Normalize(queryUDouble);
         int[] topPartitions = SphericalKMeans.topNearestCentroids(
-                queryUDouble, index.centroids(), index.dim(), nProbe);
+                queryUDouble, index.centroids(), index.dim(), probeCount);
 
         List<PostingSidecar.ScoredCandidate> results = new ArrayList<>();
 

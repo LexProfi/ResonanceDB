@@ -178,7 +178,7 @@ class DeltaBufferTest {
 
         // Self-match should have high energy
         ScoredMatch best = results.stream()
-                .max(Comparator.comparingDouble(ScoredMatch::priority))
+                .max(Comparator.comparingDouble(sm -> sm.match().energy()))
                 .orElseThrow();
         assertEquals(id, best.match().id());
         assertTrue(best.match().energy() > 0.99f,
@@ -197,7 +197,7 @@ class DeltaBufferTest {
         assertFalse(results.isEmpty());
 
         ScoredMatchDetailed best = results.stream()
-                .max(Comparator.comparingDouble(ScoredMatchDetailed::priority))
+                .max(Comparator.comparingDouble(sm -> sm.match().energy()))
                 .orElseThrow();
         assertEquals(id, best.match().id());
         assertTrue(best.match().energy() > 0.99f);
