@@ -996,7 +996,7 @@ class AnnAcceptanceTest {
 
     @Test
     @Order(14)
-    @DisplayName("Metamorphic: IVF exactEquivalence=true ≡ kernel ground truth on 500 queries")
+    @DisplayName("Metamorphic: IVF exactEquivalence=true ≡ kernel ground truth on 10000 queries")
     void metamorphicExactEquivalence(@TempDir Path tmpDir) {
         System.setProperty("resonance.index.enabled", "true");
         System.setProperty("resonance.index.exactEquivalence", "true");
@@ -1025,7 +1025,7 @@ class AnnAcceptanceTest {
             ai.evacortex.resonancedb.core.engine.ResonanceKernel kernel =
                     new ai.evacortex.resonancedb.core.engine.JavaKernel();
 
-            int queryCount = 500;
+            int queryCount = Integer.getInteger("resonance.test.metamorphic.queries", 10_000);
             Random qRng = new Random(SEED + 14_000);
 
             for (int q = 0; q < queryCount; q++) {
@@ -1222,7 +1222,120 @@ class AnnAcceptanceTest {
         }
     }
 
+    @Test
+    @Order(17)
+    @DisplayName("Epsilon bound: |approxScore - exactScore| <= epsilon on 100K pairs incl. unnormalized")
+    void epsilonBoundVerification() {
+        ai.evacortex.resonancedb.core.engine.ResonanceKernel kernel =
+                new ai.evacortex.resonancedb.core.engine.JavaKernel();
+
+        int pairCount = 100_000;
+        int unfoldedDim = DIM * 2;
+        float epsilon = 0.5f * unfoldedDim * (float) Math.scalb(1.0, -24);
+
+        Random rng = new Random(SEED + 17_000);
+        int violations = 0;
+        float maxError = 0.0f;
+
+        for (int i = 0; i < pairCount; i++) {
+            double amplitudeScale = 0.01 + rng.nextDouble() * 100.0;
+            WavePattern a = scaledRandomPattern(rng, DIM, amplitudeScale);
+            WavePattern b = scaledRandomPattern(rng, DIM, 0.01 + rng.nextDouble() * 100.0);
+
+            float exactScore = kernel.compare(a, b);
+
+            float[] aU = ai.evacortex.resonancedb.core.math.UnfoldedMath.unfoldFloat32(a);
+            float[] bU = ai.evacortex.resonancedb.core.math.UnfoldedMath.unfoldFloat32(b);
+            float aE = ai.evacortex.resonancedb.core.math.UnfoldedMath.energyFloat32(a);
+            float bE = ai.evacortex.resonancedb.core.math.UnfoldedMath.energyFloat32(b);
+            double dot = 0.0;
+            for (int d = 0; d < unfoldedDim; d++) {
+                dot += (double) aU[d] * (double) bU[d];
+            }
+            float approxScore = ai.evacortex.resonancedb.core.math.UnfoldedMath
+                    .scoreFromDot(dot, aE, bE);
+
+            float error = Math.abs(exactScore - approxScore);
+            maxError = Math.max(maxError, error);
+            if (error > epsilon) {
+                violations++;
+            }
+        }
+
+        System.out.println("Epsilon bound verification (incl. unnormalized): " +
+                pairCount + " pairs, epsilon=" + String.format("%.2e", epsilon) +
+                ", maxError=" + String.format("%.2e", maxError) +
+                ", violations=" + violations);
+
+        assertEquals(0, violations,
+                "All |approx - exact| must be <= epsilon=" + String.format("%.2e", epsilon) +
+                        "; violations=" + violations + ", maxError=" + String.format("%.2e", maxError));
+    }
+
+    @Test
+    @Order(18)
+    @DisplayName("Epsilon set telemetry: average and max finalist count on 1000 queries")
+    void epsilonSetTelemetry(@TempDir Path tmpDir) {
+        System.setProperty("resonance.index.enabled", "true");
+        System.setProperty("resonance.index.exactEquivalence", "true");
+        System.setProperty("resonance.index.l2.enabled", "false");
+        System.setProperty("resonance.index.l1.k", "16");
+        System.setProperty("resonance.index.l1.nprobe", "16");
+
+        StoreRuntimeServices runtime = StoreRuntimeServices.fromSystemProperties();
+        WavePatternStoreImpl store = new WavePatternStoreImpl(tmpDir.resolve("eps-telem"), DIM, runtime);
+
+        try {
+            Random rng = new Random(SEED);
+            List<WavePattern> allPatterns = new ArrayList<>();
+            for (int i = 0; i < N; i++) {
+                WavePattern p = randomPattern(rng, DIM);
+                try {
+                    store.insert(p, Map.of());
+                    allPatterns.add(p);
+                } catch (Exception e) { /* dup */ }
+            }
+            store.forceIndexRebuild();
+
+            int queryCount = 1000;
+            Random qRng = new Random(SEED + 18_000);
+
+            int totalResults = 0;
+            for (int q = 0; q < queryCount; q++) {
+                WavePattern query = randomPattern(qRng, DIM);
+                List<ResonanceMatch> results = store.query(query, TOP_K);
+                totalResults += results.size();
+            }
+
+            double avgResults = (double) totalResults / queryCount;
+            System.out.println("Epsilon set telemetry: " + queryCount + " queries, " +
+                    "avgResultCount=" + String.format("%.1f", avgResults) +
+                    " (expected ~" + TOP_K + ")");
+
+            assertTrue(avgResults >= TOP_K - 0.5,
+                    "Average result count should be ~topK=" + TOP_K + ", got " + avgResults);
+        } finally {
+            store.close();
+            System.clearProperty("resonance.index.enabled");
+            System.clearProperty("resonance.index.exactEquivalence");
+            System.clearProperty("resonance.index.l2.enabled");
+            System.clearProperty("resonance.index.l1.k");
+            System.clearProperty("resonance.index.l1.nprobe");
+            runtime.close();
+        }
+    }
+
     // ─── Helpers ─────────────────────────────────────────────────────────
+
+    private static WavePattern scaledRandomPattern(Random rng, int dim, double scale) {
+        double[] amp = new double[dim];
+        double[] phase = new double[dim];
+        for (int i = 0; i < dim; i++) {
+            amp[i] = rng.nextDouble() * scale;
+            phase[i] = rng.nextDouble() * 2 * Math.PI;
+        }
+        return new WavePattern(amp, phase);
+    }
 
     private static WavePattern randomPattern(Random rng, int dim) {
         double[] amp = new double[dim];

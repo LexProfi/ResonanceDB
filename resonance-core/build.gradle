@@ -36,9 +36,7 @@ tasks.withType(JavaCompile).configureEach {
 }
 
 tasks.withType(Test).configureEach {
-    useJUnitPlatform {
-        excludeTags 'benchmark'
-    }
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(22) }
     maxParallelForks = 1
     forkEvery = 0
     testLogging {
@@ -58,14 +56,14 @@ tasks.withType(Test).configureEach {
     // Source 1: System properties (-D flags, may not reach Gradle daemon)
     System.getProperties().each { key, value ->
         def k = key.toString()
-        if (k.startsWith('bench.') || k.startsWith('resonance.index.') || k.startsWith('resonance.insert.')) {
+        if (k.startsWith('bench.') || k.startsWith('resonance.')) {
             systemProperty k, value.toString()
         }
     }
     // Source 2: Project properties (-P flags, always available)
     project.properties.each { key, value ->
         def k = key.toString()
-        if (k.startsWith('bench.') || k.startsWith('resonance.index.') || k.startsWith('resonance.insert.')) {
+        if (k.startsWith('bench.') || k.startsWith('resonance.')) {
             systemProperty k, value.toString()
         }
     }
@@ -113,9 +111,16 @@ tasks.withType(Test).configureEach {
     }
 }
 
+tasks.named('test') {
+    useJUnitPlatform {
+        excludeTags 'benchmark'
+    }
+}
+
 tasks.register('testJavaPerf', Test) {
     description = "Run performance tests with JavaKernel (preset=ide)"
     group = "verification"
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(22) }
 
     useJUnitPlatform {
         includeTags 'benchmark'
@@ -143,6 +148,7 @@ tasks.register('testJavaPerf', Test) {
 tasks.register('testNativePerf', Test) {
     description = "Run performance tests with NativeKernel (preset=ide)"
     group = "verification"
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(22) }
 
     useJUnitPlatform {
         includeTags 'benchmark'
@@ -170,6 +176,7 @@ tasks.register('testNativePerf', Test) {
 tasks.register('testJavaPerfHeavy', Test) {
     description = "Run performance tests with JavaKernel (preset=heavy)"
     group = "verification"
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(22) }
 
     useJUnitPlatform {
         includeTags 'benchmark'
@@ -185,9 +192,10 @@ tasks.register('testJavaPerfHeavy', Test) {
             '--enable-preview',
             '--enable-native-access=ALL-UNNAMED',
             '--add-modules', 'jdk.incubator.vector',
-            '-Xms2g', '-Xmx4g',
-            '-XX:+UseZGC',
-            '-XX:+ZGenerational',
+            '-Xms2g', '-Xmx2g',
+            '-XX:+UseG1GC',
+            '-XX:G1HeapRegionSize=16m',
+            '-XX:MaxGCPauseMillis=200',
             '-XX:+AlwaysPreTouch'
     ]
 

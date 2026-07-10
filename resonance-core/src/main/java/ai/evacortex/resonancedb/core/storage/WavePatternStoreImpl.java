@@ -1316,9 +1316,26 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         }
     }
 
+    private static float phase1Epsilon(int unfoldedDim) {
+        float u32 = (float) Math.scalb(1.0, -24);
+        return 0.5f * unfoldedDim * u32;
+    }
+
+    private static int epsilonCutoffCount(List<PostingSidecar.ScoredCandidate> sorted,
+                                           int topK, float epsilon, int overfetchFloor) {
+        if (sorted.size() <= topK) return sorted.size();
+        float kthScore = sorted.get(topK - 1).approxScore();
+        float threshold = kthScore - epsilon;
+        int count = topK;
+        while (count < sorted.size() && sorted.get(count).approxScore() >= threshold) {
+            count++;
+        }
+        return Math.max(count, Math.min(overfetchFloor, sorted.size()));
+    }
+
     private List<HeapItem> exactScoreFinalists(CandidateSource.ScoredCandidates scored,
                                                 WavePattern query, String queryId, int topK) {
-        int overfetch = tune.overfetchForTopK(topK);
+        int overfetchFloor = topK * tune.overfetchForTopK(topK);
 
         List<PostingSidecar.ScoredCandidate> ivfCandidates = new ArrayList<>();
         List<PostingSidecar.ScoredCandidate> deltaCandidates = new ArrayList<>();
@@ -1330,9 +1347,11 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             }
         }
 
-        int finalistCount = Math.min(topK * overfetch, ivfCandidates.size());
         ivfCandidates.sort(Comparator.comparingDouble((PostingSidecar.ScoredCandidate sc) -> -sc.approxScore())
                 .thenComparing(PostingSidecar.ScoredCandidate::id));
+
+        int finalistCount = epsilonCutoffCount(ivfCandidates, topK,
+                phase1Epsilon(query.amplitude().length * 2), overfetchFloor);
 
         Comparator<HeapItem> cmp = HEAP_ORDER;
         PriorityQueue<HeapItem> heap = new PriorityQueue<>(Math.max(topK, 8), cmp);
@@ -1380,7 +1399,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             CandidateSource.ScoredCandidates scored,
             WavePattern query, String queryId, int topK) {
 
-        int overfetch = tune.overfetchForTopK(topK);
+        int overfetchFloor = topK * tune.overfetchForTopK(topK);
 
         List<PostingSidecar.ScoredCandidate> ivfCandidates = new ArrayList<>();
         List<PostingSidecar.ScoredCandidate> deltaCandidates = new ArrayList<>();
@@ -1392,13 +1411,14 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             }
         }
 
-        int finalistCount = Math.min(topK * overfetch, ivfCandidates.size());
         ivfCandidates.sort(Comparator.comparingDouble((PostingSidecar.ScoredCandidate sc) -> -sc.approxScore())
                 .thenComparing(PostingSidecar.ScoredCandidate::id));
 
+        int finalistCount = epsilonCutoffCount(ivfCandidates, topK,
+                phase1Epsilon(query.amplitude().length * 2), overfetchFloor);
+
         Comparator<HeapItemDetailed> cmp = HEAP_ORDER_DETAILED;
-        int localCap = Math.max(topK, 8);
-        PriorityQueue<HeapItemDetailed> heap = new PriorityQueue<>(localCap, cmp);
+        PriorityQueue<HeapItemDetailed> heap = new PriorityQueue<>(Math.max(topK, 8), cmp);
 
         int len = query.amplitude().length;
         FlatBuffers fb = TL_FLAT.get();
