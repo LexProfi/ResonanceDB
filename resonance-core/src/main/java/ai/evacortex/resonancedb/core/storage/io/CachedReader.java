@@ -202,7 +202,9 @@ public class CachedReader implements AutoCloseable {
             closed = true;
             try {
                 channel.close();
-            } catch (IOException ignored) {}
+            } catch (IOException e) {
+                System.err.println("CachedReader close: " + e.getMessage());
+            }
 
             if (refCount.get() == 0) {
                 Buffers.unmap(mmap);

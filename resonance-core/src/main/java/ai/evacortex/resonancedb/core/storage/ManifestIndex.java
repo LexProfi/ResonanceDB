@@ -174,7 +174,9 @@ public class ManifestIndex implements Closeable {
             try {
                 Path tmp = indexFile.resolveSibling(indexFile.getFileName().toString() + ".tmp");
                 Files.deleteIfExists(tmp);
-            } catch (IOException ignored) {}
+            } catch (IOException ce) {
+                System.err.println("Manifest tmp cleanup: " + ce.getMessage());
+            }
             throw new RuntimeException("Failed to write manifest index", e);
         } finally {
             lock.readLock().unlock();

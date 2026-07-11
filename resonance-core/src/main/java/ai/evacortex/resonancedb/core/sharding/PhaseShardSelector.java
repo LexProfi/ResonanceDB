@@ -116,9 +116,6 @@ public class PhaseShardSelector {
         return new PhaseShardSelector(Map.of(0.0, "phase-0.segment"), Math.PI);
     }
 
-    public String fallbackRouteIfLowCoherence(WavePattern query) {
-        return null;
-    }
 
     public List<String> orderedShardList() {
         if (!useExplicitRanges) {

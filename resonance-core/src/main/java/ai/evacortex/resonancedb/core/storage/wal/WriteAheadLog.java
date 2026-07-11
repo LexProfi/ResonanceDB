@@ -236,7 +236,8 @@ public final class WriteAheadLog implements Closeable {
                 PendingWrite first = writeQueue.poll(50, TimeUnit.MILLISECONDS);
                 if (first == null) {
                     if (durability == DurabilityMode.ASYNC && currentChannel != null) {
-                        try { currentChannel.force(true); } catch (IOException ignored) {}
+                        try { currentChannel.force(true); }
+                        catch (IOException e) { System.err.println("WAL async flush: " + e.getMessage()); }
                     }
                     continue;
                 }
@@ -263,7 +264,8 @@ public final class WriteAheadLog implements Closeable {
                 if (closed.get()) {
                     writeQueue.drainTo(batch);
                     if (!batch.isEmpty()) {
-                        try { writeBatch(batch); } catch (Exception ignored) {}
+                        try { writeBatch(batch); }
+                        catch (Exception we) { System.err.println("WAL shutdown flush: " + we.getMessage()); }
                     }
                     return;
                 }
@@ -365,7 +367,9 @@ public final class WriteAheadLog implements Closeable {
                     long ep = Long.parseLong(base.substring(0, dash));
                     int seq = Integer.parseInt(base.substring(dash + 1));
                     result.add(new WalFileInfo(p, ep, seq));
-                } catch (NumberFormatException ignored) {}
+                } catch (NumberFormatException e) {
+                    System.err.println("WAL: skipping malformed file " + name);
+                }
             }
         }
         result.sort(Comparator.comparingLong((WalFileInfo f) -> f.epoch)

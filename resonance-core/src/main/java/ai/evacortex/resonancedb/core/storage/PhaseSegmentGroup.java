@@ -138,7 +138,9 @@ public class PhaseSegmentGroup {
             try {
                 int cut1 = baseName.length() + 1;
                 idx = Integer.parseInt(name.substring(cut1, name.length() - 8));
-            } catch (Exception ignore) {}
+            } catch (Exception e) {
+                System.err.println("WARN segment index parse: " + name + ": " + e.getMessage());
+            }
             seq.set(idx + 1);
         } finally {
             lock.unlock();

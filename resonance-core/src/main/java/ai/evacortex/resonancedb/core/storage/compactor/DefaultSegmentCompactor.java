@@ -90,7 +90,9 @@ public class DefaultSegmentCompactor implements SegmentCompactor {
                 try {
                     w.close();
                     Files.deleteIfExists(w.getPath());
-                } catch (Exception ignore) {}
+                } catch (Exception e) {
+                    System.err.println("WARN compaction cleanup: " + w.getSegmentName() + ": " + e.getMessage());
+                }
             }
 
         } catch (IOException e) {
@@ -127,8 +129,14 @@ public class DefaultSegmentCompactor implements SegmentCompactor {
     private void cleanupOldTmpSegments(String baseName) {
         try (Stream<Path> files = Files.list(segmentDir)) {
             files.filter(p -> p.getFileName().toString().startsWith(baseName + "-tmp-merged-"))
-                    .forEach(p -> {try {Files.deleteIfExists(p);} catch (IOException _) {}});
-        } catch (IOException _) {
+                    .forEach(p -> {
+                        try { Files.deleteIfExists(p); }
+                        catch (IOException e) {
+                            System.err.println("WARN tmp cleanup: " + p + ": " + e.getMessage());
+                        }
+                    });
+        } catch (IOException e) {
+            System.err.println("WARN listDir for tmp cleanup: " + segmentDir + ": " + e.getMessage());
         }
     }
 }

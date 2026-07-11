@@ -98,8 +98,11 @@ public final class HttpIO {
      * Equivalent to original safeCloseExchange().
      */
     public void safeClose(HttpExchange ex) {
-        try { ex.getRequestBody().close(); } catch (Exception ignored) {}
-        try { ex.getResponseBody().close(); } catch (Exception ignored) {}
-        try { ex.close(); } catch (Exception ignored) {}
+        try { ex.getRequestBody().close(); }
+        catch (Exception e) { System.err.println("HTTP close request: " + e.getMessage()); }
+        try { ex.getResponseBody().close(); }
+        catch (Exception e) { System.err.println("HTTP close response: " + e.getMessage()); }
+        try { ex.close(); }
+        catch (Exception e) { System.err.println("HTTP close exchange: " + e.getMessage()); }
     }
 }

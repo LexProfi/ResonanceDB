@@ -96,7 +96,8 @@ public final class PostingSidecar {
         }
 
         public void close() {
-            try { channel.close(); } catch (IOException ignored) {}
+            try { channel.close(); }
+            catch (IOException e) { System.err.println("PostingSidecar close: " + e.getMessage()); }
         }
     }
 
