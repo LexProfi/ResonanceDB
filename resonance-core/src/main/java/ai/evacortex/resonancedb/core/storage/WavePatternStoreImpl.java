@@ -128,13 +128,16 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     private final List<CompletableFuture<Long>> pendingWalFutures =
             Collections.synchronizedList(new ArrayList<>());
 
-    private record HeapItem(ResonanceMatch match, boolean idMatch, boolean exactMatch) {}
-    private record HeapItemDetailed(ResonanceMatchDetailed match, boolean idMatch, boolean exactMatch) {}
+    private record HeapItem(ResonanceMatch match, ResonanceZone zone,
+                            boolean idMatch, boolean exactMatch) {}
+    private record HeapItemDetailed(ResonanceMatchDetailed match,
+                                    boolean idMatch, boolean exactMatch) {}
     private record SegmentWriteResult(SegmentWriter writer, long offset, long version) {}
 
     private static final Comparator<HeapItem> HEAP_ORDER = Comparator
             .comparing(HeapItem::idMatch)
             .thenComparing(HeapItem::exactMatch)
+            .thenComparing(HeapItem::zone)
             .thenComparingDouble(h -> h.match().energy())
             .thenComparing(h -> h.match().id(), Comparator.reverseOrder());
 
@@ -143,6 +146,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     private static final Comparator<HeapItemDetailed> HEAP_ORDER_DETAILED = Comparator
             .comparing(HeapItemDetailed::idMatch)
             .thenComparing(HeapItemDetailed::exactMatch)
+            .thenComparing(h -> h.match().zone())
             .thenComparingDouble(h -> h.match().energy())
             .thenComparing(h -> h.match().id(), Comparator.reverseOrder());
 
@@ -842,7 +846,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
             if (deltaBuffer != null && !deltaBuffer.isEmpty()) {
                 for (DeltaBuffer.ScoredMatch sm : deltaBuffer.scoreDelta(query, queryId, resonanceKernel, topK)) {
-                    collected.add(new HeapItem(sm.match(), sm.idMatch(), sm.exactMatch()));
+                    collected.add(new HeapItem(sm.match(), sm.zone(), sm.idMatch(), sm.exactMatch()));
                 }
             }
 
@@ -1262,17 +1266,17 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                                      PriorityQueue<HeapItem> heap,
                                      Comparator<HeapItem> cmp,
                                      int topK) {
-        float[] scores = resonanceKernel.compareMany(query, cands);
-
-        for (int i = 0; i < scores.length; i++) {
+        for (int i = 0; i < cands.size(); i++) {
             String id = ids.get(i);
             WavePattern cand = cands.get(i);
-            float energy = scores[i];
+            ComparisonResult result = resonanceKernel.compareWithPhaseDelta(query, cand);
+            float energy = result.energy();
+            ResonanceZone zone = ResonanceZoneClassifier.classify(energy, result.phaseDelta());
 
             boolean idEq = id.equals(queryId);
             boolean exactEq = energy > 1.0f - EXACT_MATCH_EPS;
             tracer.trace(id, query, cand, energy);
-            HeapItem item = new HeapItem(new ResonanceMatch(id, energy, cand), idEq, exactEq);
+            HeapItem item = new HeapItem(new ResonanceMatch(id, energy, cand), zone, idEq, exactEq);
             heapAddOrEvict(heap, item, cmp, topK);
         }
     }
@@ -1285,33 +1289,19 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                                    PriorityQueue<HeapItem> heap,
                                    Comparator<HeapItem> cmp,
                                    int topK) {
-
-        float[] scores;
-        try {
-            Object res = compareManyFlatMethod.invoke(
-                    resonanceKernel,
-                    query.amplitude(), query.phase(),
-                    fb.ampFlat, fb.phaseFlat,
-                    len, count
-            );
-            scores = (float[]) res;
-        } catch (ReflectiveOperationException e) {
-            List<WavePattern> cands = new ArrayList<>(count);
-            for (int i = 0; i < count; i++) {
-                double[] a = Arrays.copyOfRange(fb.ampFlat, i * len, (i + 1) * len);
-                double[] p = Arrays.copyOfRange(fb.phaseFlat, i * len, (i + 1) * len);
-                cands.add(new WavePattern(a, p));
-            }
-            scores = resonanceKernel.compareMany(query, cands);
-        }
-
         for (int i = 0; i < count; i++) {
             String id = fb.ids[i];
-            float energy = scores[i];
+            double[] a = Arrays.copyOfRange(fb.ampFlat, i * len, (i + 1) * len);
+            double[] p = Arrays.copyOfRange(fb.phaseFlat, i * len, (i + 1) * len);
+            WavePattern cand = new WavePattern(a, p);
+
+            ComparisonResult result = resonanceKernel.compareWithPhaseDelta(query, cand);
+            float energy = result.energy();
+            ResonanceZone zone = ResonanceZoneClassifier.classify(energy, result.phaseDelta());
 
             boolean idEq = id.equals(queryId);
             boolean exactEq = energy > 1.0f - EXACT_MATCH_EPS;
-            HeapItem item = new HeapItem(new ResonanceMatch(id, energy, null), idEq, exactEq);
+            HeapItem item = new HeapItem(new ResonanceMatch(id, energy, null), zone, idEq, exactEq);
             heapAddOrEvict(heap, item, cmp, topK);
         }
     }
@@ -1387,11 +1377,13 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 java.util.Arrays.copyOf(fb.ampFlat, len),
                 java.util.Arrays.copyOf(fb.phaseFlat, len));
 
-        float energy = resonanceKernel.compare(query, cand);
+        ComparisonResult result = resonanceKernel.compareWithPhaseDelta(query, cand);
+        float energy = result.energy();
+        ResonanceZone zone = ResonanceZoneClassifier.classify(energy, result.phaseDelta());
 
         boolean idEq = id.equals(queryId);
         boolean exactEq = energy > 1.0f - EXACT_MATCH_EPS;
-        HeapItem item = new HeapItem(new ResonanceMatch(id, energy, cand), idEq, exactEq);
+        HeapItem item = new HeapItem(new ResonanceMatch(id, energy, cand), zone, idEq, exactEq);
         heapAddOrEvict(heap, item, cmp, topK);
     }
 

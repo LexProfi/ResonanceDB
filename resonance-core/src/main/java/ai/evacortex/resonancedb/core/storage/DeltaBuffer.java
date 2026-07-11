@@ -133,18 +133,22 @@ public final class DeltaBuffer {
         return exactScoreAllDetailed(entries, query, queryId, kernel, topK);
     }
 
-    public record ScoredMatch(ResonanceMatch match, boolean idMatch, boolean exactMatch) {}
-    public record ScoredMatchDetailed(ResonanceMatchDetailed match, boolean idMatch, boolean exactMatch) {}
+    public record ScoredMatch(ResonanceMatch match, ResonanceZone zone,
+                              boolean idMatch, boolean exactMatch) {}
+    public record ScoredMatchDetailed(ResonanceMatchDetailed match,
+                                      boolean idMatch, boolean exactMatch) {}
 
     private static final Comparator<ScoredMatch> SCORED_ORDER = Comparator
             .comparing(ScoredMatch::idMatch)
             .thenComparing(ScoredMatch::exactMatch)
+            .thenComparing(ScoredMatch::zone)
             .thenComparingDouble(sm -> sm.match().energy())
             .thenComparing(sm -> sm.match().id(), Comparator.reverseOrder());
 
     private static final Comparator<ScoredMatchDetailed> SCORED_DETAILED_ORDER = Comparator
             .comparing(ScoredMatchDetailed::idMatch)
             .thenComparing(ScoredMatchDetailed::exactMatch)
+            .thenComparing(sm -> sm.match().zone())
             .thenComparingDouble(sm -> sm.match().energy())
             .thenComparing(sm -> sm.match().id(), Comparator.reverseOrder());
 
@@ -168,19 +172,16 @@ public final class DeltaBuffer {
 
     private List<ScoredMatch> exactScoreAll(List<Entry> entries, WavePattern query,
                                              String queryId, ResonanceKernel kernel, int topK) {
-        List<WavePattern> patterns = new ArrayList<>(entries.size());
-        for (Entry e : entries) patterns.add(e.pattern());
-        float[] scores = kernel.compareMany(query, patterns);
-
         PriorityQueue<ScoredMatch> heap = new PriorityQueue<>(Math.max(topK, 8), SCORED_ORDER);
 
-        for (int i = 0; i < entries.size(); i++) {
-            Entry e = entries.get(i);
-            float energy = scores[i];
+        for (Entry e : entries) {
+            ComparisonResult result = kernel.compareWithPhaseDelta(query, e.pattern());
+            float energy = result.energy();
+            ResonanceZone zone = ResonanceZoneClassifier.classify(energy, result.phaseDelta());
             boolean idMatch = e.id().equals(queryId);
             boolean exactMatch = energy > 1.0f - EXACT_MATCH_EPS;
             ScoredMatch sm = new ScoredMatch(
-                    new ResonanceMatch(e.id(), energy, e.pattern()), idMatch, exactMatch);
+                    new ResonanceMatch(e.id(), energy, e.pattern()), zone, idMatch, exactMatch);
             if (heap.size() < topK) {
                 heap.add(sm);
             } else if (SCORED_ORDER.compare(sm, heap.peek()) > 0) {
