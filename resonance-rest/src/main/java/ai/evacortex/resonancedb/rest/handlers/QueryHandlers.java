@@ -79,6 +79,7 @@ public final class QueryHandlers {
             throws InvalidWavePatternException {
         ResonanceStore store = resolveStore(ex);
         List<WavePattern> patterns = toPatterns(req.patterns());
+        validateWeights(req.weights(), patterns.size());
         int k = topK.clamp(req.topK());
         return store.queryComposite(patterns, req.weights(), k);
     }
@@ -87,8 +88,25 @@ public final class QueryHandlers {
             throws InvalidWavePatternException {
         ResonanceStore store = resolveStore(ex);
         List<WavePattern> patterns = toPatterns(req.patterns());
+        validateWeights(req.weights(), patterns.size());
         int k = topK.clamp(req.topK());
         return store.queryCompositeDetailed(patterns, req.weights(), k);
+    }
+
+    private static void validateWeights(List<Double> weights, int patternCount) {
+        if (weights == null || weights.isEmpty()) {
+            throw new ai.evacortex.resonancedb.rest.error.BadRequestException("'weights' is required");
+        }
+        if (weights.size() != patternCount) {
+            throw new ai.evacortex.resonancedb.rest.error.BadRequestException(
+                    "weights length (" + weights.size() + ") must match patterns length (" + patternCount + ")");
+        }
+        for (int i = 0; i < weights.size(); i++) {
+            if (weights.get(i) == null || !Double.isFinite(weights.get(i))) {
+                throw new ai.evacortex.resonancedb.rest.error.BadRequestException(
+                        "weight at index " + i + " must be a finite number");
+            }
+        }
     }
 
     private ResonanceStore resolveStore(HttpExchange ex) {

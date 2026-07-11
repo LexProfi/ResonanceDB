@@ -74,7 +74,7 @@ public record ResonanceRestConfig(
 
         if (defTopK > maxTopK) defTopK = maxTopK;
 
-        boolean validateFinite = getBool("resonance.rest.validateFiniteWaveValues", false);
+        boolean validateFinite = getBool("resonance.rest.validateFiniteWaveValues", true);
 
         int patternLen = getInt("resonance.pattern.len", 1536);
         if (patternLen <= 0) patternLen = 1536;

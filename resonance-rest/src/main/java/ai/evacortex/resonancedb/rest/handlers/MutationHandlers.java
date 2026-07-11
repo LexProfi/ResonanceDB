@@ -45,6 +45,7 @@ public final class MutationHandlers {
     public IdResponse replace(HttpExchange ex, ReplaceRequest req)
             throws PatternNotFoundException, DuplicatePatternException, InvalidWavePatternException {
 
+        requireNonBlankId(req.id());
         ResonanceStore store = resolveStore(ex);
         WavePattern psi = validator.toWavePattern(req.pattern());
         Map<String, String> md = (req.metadata() == null) ? Map.of() : req.metadata();
@@ -55,9 +56,16 @@ public final class MutationHandlers {
     public OkResponse delete(HttpExchange ex, DeleteRequest req)
             throws PatternNotFoundException {
 
+        requireNonBlankId(req.id());
         ResonanceStore store = resolveStore(ex);
         store.delete(req.id());
         return new OkResponse(true);
+    }
+
+    private static void requireNonBlankId(String id) {
+        if (id == null || id.isBlank()) {
+            throw new ai.evacortex.resonancedb.rest.error.BadRequestException("'id' is required");
+        }
     }
 
     private ResonanceStore resolveStore(HttpExchange ex) {

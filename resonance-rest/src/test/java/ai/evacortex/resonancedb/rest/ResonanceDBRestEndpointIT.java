@@ -16,6 +16,7 @@ import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.net.ServerSocket;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -258,6 +259,75 @@ public final class ResonanceDBRestEndpointIT {
             s.setReuseAddress(true);
             return s.getLocalPort();
         }
+    }
+
+    @Test
+    void insert_nan_amplitude_returns_400() throws Exception {
+        int len = patternLen();
+        double[] amp = new double[len];
+        double[] phase = new double[len];
+        amp[0] = Double.NaN;
+        WavePatternDto dto = new WavePatternDto(amp, phase);
+        HttpResponse<String> r = post(corpusPath("/insert"), new InsertRequest(dto, Map.of()));
+        assertEquals(400, r.statusCode(), r.body());
+        ErrorResponse err = read(r, ErrorResponse.class);
+        assertEquals("bad_request", err.code());
+    }
+
+    @Test
+    void insert_infinity_phase_returns_400() throws Exception {
+        int len = patternLen();
+        double[] amp = new double[len];
+        double[] phase = new double[len];
+        Arrays.fill(amp, 1.0);
+        phase[len - 1] = Double.POSITIVE_INFINITY;
+        WavePatternDto dto = new WavePatternDto(amp, phase);
+        HttpResponse<String> r = post(corpusPath("/insert"), new InsertRequest(dto, Map.of()));
+        assertEquals(400, r.statusCode(), r.body());
+    }
+
+    @Test
+    void insert_wrong_length_returns_400() throws Exception {
+        WavePatternDto dto = new WavePatternDto(new double[10], new double[10]);
+        HttpResponse<String> r = post(corpusPath("/insert"), new InsertRequest(dto, Map.of()));
+        assertEquals(400, r.statusCode(), r.body());
+    }
+
+    @Test
+    void delete_null_id_returns_400() throws Exception {
+        HttpResponse<String> r = post(corpusPath("/delete"), new DeleteRequest(null));
+        assertEquals(400, r.statusCode(), r.body());
+    }
+
+    @Test
+    void delete_blank_id_returns_400() throws Exception {
+        HttpResponse<String> r = post(corpusPath("/delete"), new DeleteRequest("  "));
+        assertEquals(400, r.statusCode(), r.body());
+    }
+
+    @Test
+    void replace_null_id_returns_400() throws Exception {
+        int len = patternLen();
+        WavePatternDto dto = constantDto(1.0, 0.0, len);
+        HttpResponse<String> r = post(corpusPath("/replace"), new ReplaceRequest(null, dto, Map.of()));
+        assertEquals(400, r.statusCode(), r.body());
+    }
+
+    @Test
+    void query_topK_negative_clamps_to_zero() throws Exception {
+        int len = patternLen();
+        WavePatternDto dto = constantDto(1.0, 0.0, len);
+        HttpResponse<String> r = post(corpusPath("/query"), new QueryRequest(dto, -5));
+        assertEquals(200, r.statusCode(), r.body());
+        JsonNode arr = MAPPER.readTree(r.body());
+        assertTrue(arr.isArray());
+        assertEquals(0, arr.size());
+    }
+
+    @Test
+    void unknown_route_returns_404() throws Exception {
+        HttpResponse<String> r = get("/nonexistent");
+        assertEquals(404, r.statusCode(), r.body());
     }
 
     private static void deleteRecursively(Path root) throws IOException {
