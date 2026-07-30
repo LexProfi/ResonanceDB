@@ -18,10 +18,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
-import java.util.Map;
-import java.util.Random;
-import java.util.Set;
+import java.util.*;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -380,6 +377,47 @@ class DeltaSealIntegrationTest {
         WavePattern query = randomPattern(PATTERN_LEN, 1000);
         List<ResonanceMatch> results = store.query(query, 5);
         assertFalse(results.isEmpty(), "Query should return results after timed seal");
+    }
+
+    @Test
+    void replaceInDeltaWithSameContentVisibleInQuery() {
+        WavePattern p = randomPattern(PATTERN_LEN, 900);
+        String id = store.insert(p, Map.of("version", "1"));
+
+        store.replace(id, p, Map.of("version", "2"));
+
+        assertTrue(store.containsExactPattern(p),
+                "Pattern must be visible after replace with same content");
+
+        List<ResonanceMatch> results = store.query(p, 5);
+        assertTrue(results.stream().anyMatch(m -> m.id().equals(id)),
+                "Replaced pattern must appear in query results");
+    }
+
+    @Test
+    void allInsertedPatternsVisibleBeforeSeal() {
+        int count = 50;
+        Set<String> insertedIds = new HashSet<>();
+        List<WavePattern> patterns = new ArrayList<>();
+
+        for (int i = 0; i < count; i++) {
+            WavePattern p = randomPattern(PATTERN_LEN, 2000 + i);
+            String id = store.insert(p, Map.of());
+            insertedIds.add(id);
+            patterns.add(p);
+        }
+
+        WavePattern query = patterns.get(0);
+        List<ResonanceMatch> results = store.query(query, count);
+
+        Set<String> returnedIds = new HashSet<>();
+        for (ResonanceMatch m : results) returnedIds.add(m.id());
+
+        assertEquals(count, returnedIds.size(),
+                "All " + count + " patterns must be returned when topK >= count. " +
+                        "Returned " + returnedIds.size());
+        assertEquals(insertedIds, returnedIds,
+                "Returned IDs must exactly match inserted IDs");
     }
 
     private static long countSegmentFiles(Path dir) {

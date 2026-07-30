@@ -1391,6 +1391,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                                         double phaseCenter, Map<String, String> metadata) {}
             List<PendingManifestEntry> pendingManifest = new ArrayList<>(frozenEntries.size());
             Set<SegmentWriter> touchedWriters = new LinkedHashSet<>();
+            List<DeltaBuffer.Entry> failedEntries = new ArrayList<>();
 
             for (DeltaBuffer.Entry entry : frozenEntries.values()) {
                 frozenMaxLsn = Math.max(frozenMaxLsn, entry.lsn());
@@ -1413,7 +1414,9 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                             entry.id(), writer.getSegmentName(), offset,
                             phaseCenter, entry.metadata()));
                 } catch (Exception e) {
-                    System.err.println("Seal write failed for " + entry.id() + ": " + e.getMessage());
+                    System.err.println("Seal write failed for " + entry.id() +
+                            ": " + e.getMessage() + " — returning to delta buffer");
+                    failedEntries.add(entry);
                 }
             }
 
@@ -1442,7 +1445,16 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 manifest.flush();
                 metaStore.flush();
                 deltaBuffer.clearFrozen();
+                for (DeltaBuffer.Entry failed : failedEntries) {
+                    deltaBuffer.add(failed.id(), failed.pattern(), failed.metadata(),
+                            failed.phaseCenter(), failed.idBytes(), failed.lsn());
+                }
                 rebuildShardSelector();
+            }
+
+            if (!failedEntries.isEmpty()) {
+                System.err.println("Seal: " + failedEntries.size() +
+                        " entries returned to delta buffer after write failures");
             }
 
             if (wal != null && frozenMaxLsn > 0) {

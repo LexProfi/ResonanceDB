@@ -37,7 +37,7 @@ public final class DeltaBuffer {
         Entry entry = new Entry(id, pattern, metadata, phaseCenter, idBytes, lsn,
                                 uFloat, energy);
         Long tombstoneLsn = tombstones.get(id);
-        if (tombstoneLsn != null && tombstoneLsn < lsn) {
+        if (tombstoneLsn != null && tombstoneLsn <= lsn) {
             tombstones.remove(id);
         }
         active.put(id, entry);

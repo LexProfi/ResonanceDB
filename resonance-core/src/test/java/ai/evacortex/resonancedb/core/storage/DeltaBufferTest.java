@@ -275,6 +275,27 @@ class DeltaBufferTest {
         assertEquals(writerCount * insertsPerWriter, buffer.activeSize());
     }
 
+    @Test
+    void tombstoneClearedOnAddWithSameLsn() {
+        WavePattern p = randomPattern(PATTERN_LEN, 99);
+        String id = "replace-self";
+
+        buffer.add(id, p, Map.of(), 0.0, new byte[16], 1L);
+        buffer.freeze();
+
+        buffer.remove(id, 5L);
+        assertFalse(buffer.contains(id), "After remove, entry should not be visible");
+
+        buffer.add(id, p, Map.of(), 0.0, new byte[16], 5L);
+        assertTrue(buffer.contains(id),
+                "After add with same LSN as tombstone, entry must be visible");
+
+        ResonanceKernel kernel = new JavaKernel();
+        List<ScoredMatch> results = buffer.scoreDelta(p, "q", kernel, 5);
+        assertTrue(results.stream().anyMatch(sm -> sm.match().id().equals(id)),
+                "Entry must appear in scoreDelta results after same-LSN re-add");
+    }
+
     // ─── Helpers ────────────────────────────────────────────────────────
 
     private static WavePattern randomPattern(int len, long seed) {
