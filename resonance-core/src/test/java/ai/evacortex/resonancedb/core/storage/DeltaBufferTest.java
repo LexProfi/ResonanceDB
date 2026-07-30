@@ -11,7 +11,6 @@ package ai.evacortex.resonancedb.core.storage;
 import ai.evacortex.resonancedb.core.engine.JavaKernel;
 import ai.evacortex.resonancedb.core.engine.ResonanceKernel;
 import ai.evacortex.resonancedb.core.storage.DeltaBuffer.ScoredMatch;
-import ai.evacortex.resonancedb.core.storage.DeltaBuffer.ScoredMatchDetailed;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -183,25 +182,6 @@ class DeltaBufferTest {
         assertEquals(id, best.match().id());
         assertTrue(best.match().energy() > 0.99f,
                 "Self-match energy should be ~1.0, got " + best.match().energy());
-    }
-
-    @Test
-    void scoreDeltaDetailedFindsSelfMatch() {
-        ResonanceKernel kernel = new JavaKernel();
-        WavePattern p = randomPattern(PATTERN_LEN, 42);
-        String id = "self-match";
-
-        buffer.add(id, p, Map.of(), 0.0, new byte[16], 1L);
-
-        List<ScoredMatchDetailed> results = buffer.scoreDeltaDetailed(p, id, kernel, 5);
-        assertFalse(results.isEmpty());
-
-        ScoredMatchDetailed best = results.stream()
-                .max(Comparator.comparingDouble(sm -> sm.match().energy()))
-                .orElseThrow();
-        assertEquals(id, best.match().id());
-        assertTrue(best.match().energy() > 0.99f);
-        assertNotNull(best.match().zone());
     }
 
     @Test

@@ -96,17 +96,14 @@ class CandidateSourceGoldenTest {
                 assertEquals(simpleResults.size(), detailedResults.size(),
                         "query and queryDetailed should return same count for query " + q);
 
-                // Same IDs (may differ in order due to zone-based priority in detailed)
-                Set<String> simpleIds = simpleResults.stream()
-                        .map(ResonanceMatch::id).collect(Collectors.toSet());
-                Set<String> detailedIds = detailedResults.stream()
-                        .map(ResonanceMatchDetailed::id).collect(Collectors.toSet());
+                // Identical IDs in identical order (queryDetailed is enrichment of query)
+                List<String> simpleIds = simpleResults.stream()
+                        .map(ResonanceMatch::id).toList();
+                List<String> detailedIds = detailedResults.stream()
+                        .map(ResonanceMatchDetailed::id).toList();
 
-                // At least 80% overlap (detailed may prioritize differently due to zone scoring)
-                long overlap = simpleIds.stream().filter(detailedIds::contains).count();
-                assertTrue(overlap >= Math.min(simpleIds.size(), detailedIds.size()) * 0.7,
-                        "query and queryDetailed should mostly agree on IDs for query " + q +
-                                ": overlap=" + overlap + "/" + simpleIds.size());
+                assertEquals(simpleIds, detailedIds,
+                        "query and queryDetailed must return identical IDs in identical order for query " + q);
             }
 
         } finally {

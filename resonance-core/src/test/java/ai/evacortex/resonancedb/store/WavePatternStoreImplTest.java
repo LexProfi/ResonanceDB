@@ -829,4 +829,67 @@ public class WavePatternStoreImplTest {
         assertEquals(p.energy(), d.energy(), 1e-6,
                 "query and queryDetailed must agree on energy for the same id");
     }
+
+    @Test
+    void testRankingIsPurelyByEnergyDescending() {
+        WavePattern core = constant(1.0, 0.0);
+        WavePattern fringe = constant(1.0, 0.5);
+        WavePattern shadow = constant(1.0, Math.PI);
+
+        store.insert(core, Map.of());
+        store.insert(fringe, Map.of());
+        store.insert(shadow, Map.of());
+
+        WavePattern query = constant(1.0, 0.3);
+        List<ResonanceMatch> results = store.query(query, 3);
+
+        for (int i = 1; i < results.size(); i++) {
+            assertTrue(results.get(i - 1).energy() >= results.get(i).energy(),
+                    "Results must be sorted by energy descending: " +
+                            results.get(i - 1).energy() + " >= " + results.get(i).energy());
+        }
+    }
+
+    @Test
+    void testQueryAndQueryDetailedReturnIdenticalIdsAndOrder() {
+        WavePattern core = constant(1.0, 0.0);
+        WavePattern fringe = constant(1.0, 0.5);
+        WavePattern shadow = constant(1.0, Math.PI);
+
+        store.insert(core, Map.of());
+        store.insert(fringe, Map.of());
+        store.insert(shadow, Map.of());
+
+        WavePattern query = constant(1.0, 0.3);
+        int topK = 3;
+
+        List<ResonanceMatch> plain = store.query(query, topK);
+        List<ResonanceMatchDetailed> detailed = store.queryDetailed(query, topK);
+
+        assertEquals(plain.size(), detailed.size());
+        for (int i = 0; i < plain.size(); i++) {
+            assertEquals(plain.get(i).id(), detailed.get(i).id(),
+                    "ID mismatch at rank " + i);
+            assertEquals(plain.get(i).energy(), detailed.get(i).energy(), 1e-6,
+                    "Energy mismatch at rank " + i);
+        }
+    }
+
+    @Test
+    void testZoneDoesNotAffectRanking() {
+        WavePattern highEnergy = constant(1.0, 0.5);
+        WavePattern lowEnergy = constant(0.1, Math.PI);
+
+        String idHigh = store.insert(highEnergy, Map.of());
+        String idLow = store.insert(lowEnergy, Map.of());
+
+        WavePattern query = constant(1.0, 0.5);
+        List<ResonanceMatchDetailed> results = store.queryDetailed(query, 2);
+
+        assertEquals(2, results.size());
+        assertTrue(results.get(0).energy() >= results.get(1).energy(),
+                "Higher energy must be ranked first regardless of zone");
+        assertEquals(idHigh, results.get(0).id(),
+                "High-energy pattern must be first");
+    }
 }
