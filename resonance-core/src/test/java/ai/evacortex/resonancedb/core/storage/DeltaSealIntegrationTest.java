@@ -16,11 +16,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -35,6 +37,7 @@ class DeltaSealIntegrationTest {
     private static final String[] MANAGED_PROPS = {
             "resonance.wal.enabled", "resonance.wal.durability",
             "resonance.delta.sealThreshold", "resonance.delta.maxEntries",
+            "resonance.delta.sealIntervalSeconds",
             "resonance.index.enabled"
     };
 
@@ -334,6 +337,58 @@ class DeltaSealIntegrationTest {
         List<ResonanceMatch> results = store.query(p, 5);
         assertTrue(results.stream().anyMatch(m -> m.id().equals(id2)),
                 "Re-inserted pattern must appear in query results");
+    }
+
+    @Test
+    void timedSealFlushesDataBelowThreshold() throws Exception {
+        // Close the default store (sealThreshold=100, timer=default 30s)
+        store.close();
+        runtime.close();
+
+        // Re-create with very high threshold but short timer
+        System.setProperty("resonance.delta.sealThreshold", "999999");
+        System.setProperty("resonance.delta.sealIntervalSeconds", "2");
+
+        Path timedDir = tempDir.resolve("timed-seal");
+        Files.createDirectories(timedDir);
+        runtime = StoreRuntimeServices.fromSystemProperties();
+        store = new WavePatternStoreImpl(timedDir, PATTERN_LEN, runtime);
+
+        // Insert a few patterns (well below threshold)
+        for (int i = 0; i < 5; i++) {
+            store.insert(randomPattern(PATTERN_LEN, 1000 + i), Map.of());
+        }
+
+        // Segments dir should be empty initially (data in delta buffer only)
+        Path segmentsDir = timedDir.resolve("segments");
+        long segmentsBefore = countSegmentFiles(segmentsDir);
+
+        // Wait for timed seal to fire (interval = 2s, wait up to 5s)
+        long deadline = System.currentTimeMillis() + 5_000;
+        long segmentsAfter = 0;
+        while (System.currentTimeMillis() < deadline) {
+            Thread.sleep(500);
+            segmentsAfter = countSegmentFiles(segmentsDir);
+            if (segmentsAfter > segmentsBefore) break;
+        }
+
+        assertTrue(segmentsAfter > segmentsBefore,
+                "Timed seal should create segment files even below threshold. " +
+                        "Before=" + segmentsBefore + ", after=" + segmentsAfter);
+
+        // Verify query still works after timed seal
+        WavePattern query = randomPattern(PATTERN_LEN, 1000);
+        List<ResonanceMatch> results = store.query(query, 5);
+        assertFalse(results.isEmpty(), "Query should return results after timed seal");
+    }
+
+    private static long countSegmentFiles(Path dir) {
+        if (!Files.exists(dir)) return 0;
+        try (Stream<Path> files = Files.list(dir)) {
+            return files.filter(p -> p.toString().endsWith(".segment")).count();
+        } catch (Exception e) {
+            return 0;
+        }
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────

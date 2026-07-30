@@ -118,8 +118,10 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     private final int sealThreshold;
     private final int deltaMaxEntries;
     private final long backpressureTimeoutMs;
+    private final long sealIntervalSeconds;
     private final AtomicBoolean sealScheduled = new AtomicBoolean(false);
     private final AtomicReference<ScheduledFuture<?>> sealFuture = new AtomicReference<>();
+    private final ScheduledFuture<?> sealTimerTask;
     private final Object sealMutex = new Object();
     private final WriteAheadLog.DurabilityMode walDurability;
 
@@ -296,6 +298,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         this.sealThreshold = Integer.getInteger("resonance.delta.sealThreshold", 5000);
         this.deltaMaxEntries = Integer.getInteger("resonance.delta.maxEntries", 20_000);
         this.backpressureTimeoutMs = Long.getLong("resonance.delta.backpressureTimeoutMs", 10_000);
+        this.sealIntervalSeconds = Long.getLong("resonance.delta.sealIntervalSeconds", 30);
 
         String durStr = System.getProperty("resonance.wal.durability", "group");
         this.walDurability = switch (durStr.toLowerCase()) {
@@ -337,6 +340,14 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         } else {
             this.wal = null;
             this.deltaBuffer = null;
+        }
+
+        if (this.walEnabled && this.sealIntervalSeconds > 0) {
+            this.sealTimerTask = runtime.scheduler().scheduleAtFixedRate(
+                    this::timedSealCheck,
+                    sealIntervalSeconds, sealIntervalSeconds, TimeUnit.SECONDS);
+        } else {
+            this.sealTimerTask = null;
         }
 
         this.indexEnabled = Boolean.parseBoolean(
@@ -941,6 +952,10 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             return;
         }
 
+        if (sealTimerTask != null) {
+            sealTimerTask.cancel(false);
+        }
+
         ScheduledFuture<?> pendingSeal = sealFuture.getAndSet(null);
         if (pendingSeal != null) {
             pendingSeal.cancel(false);
@@ -1317,6 +1332,16 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         return new ArrayList<>(heap);
     }
 
+
+    private void timedSealCheck() {
+        if (closed.get()) return;
+        if (deltaBuffer == null || deltaBuffer.isEmpty()) return;
+        try {
+            sealDelta();
+        } catch (Throwable t) {
+            System.err.println("Timed seal failed: " + t.getMessage());
+        }
+    }
 
     private void scheduleSeal() {
         if (closed.get()) return;
