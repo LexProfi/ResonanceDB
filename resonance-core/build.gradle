@@ -118,7 +118,7 @@ tasks.named('test') {
 }
 
 tasks.register('testJavaPerf', Test) {
-    description = "Run performance tests with JavaKernel (preset=ide)"
+    description = "Run performance tests with JavaKernel"
     group = "verification"
     javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(22) }
 
@@ -128,25 +128,13 @@ tasks.register('testJavaPerf', Test) {
     maxParallelForks = 1
     forkEvery = 0
 
-    systemProperty 'resonance.pattern.len', '1536'
     systemProperty 'resonance.kernel.native', 'false'
-    systemProperty 'file.encoding', 'UTF-8'
-
-    jvmArgs = [
-            '--enable-preview',
-            '--enable-native-access=ALL-UNNAMED',
-            '--add-modules', 'jdk.incubator.vector',
-            '-Xms512m', '-Xmx512m',
-            '-XX:+UseG1GC',
-            '-XX:G1HeapRegionSize=8m',
-            '-XX:MaxGCPauseMillis=100'
-    ]
 
     testLogging.showStandardStreams = true
 }
 
 tasks.register('testNativePerf', Test) {
-    description = "Run performance tests with NativeKernel (preset=ide)"
+    description = "Run performance tests with NativeKernel"
     group = "verification"
     javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(22) }
 
@@ -156,25 +144,13 @@ tasks.register('testNativePerf', Test) {
     maxParallelForks = 1
     forkEvery = 0
 
-    systemProperty 'resonance.pattern.len', '1536'
     systemProperty 'resonance.kernel.native', 'true'
-    systemProperty 'file.encoding', 'UTF-8'
-
-    jvmArgs = [
-            '--enable-preview',
-            '--enable-native-access=ALL-UNNAMED',
-            '--add-modules', 'jdk.incubator.vector',
-            '-Xms512m', '-Xmx512m',
-            '-XX:+UseG1GC',
-            '-XX:G1HeapRegionSize=8m',
-            '-XX:MaxGCPauseMillis=100'
-    ]
 
     testLogging.showStandardStreams = true
 }
 
 tasks.register('testJavaPerfHeavy', Test) {
-    description = "Run performance tests with JavaKernel (preset=heavy)"
+    description = "Run performance tests with JavaKernel (preset=heavy, use -Ppreset=heavy)"
     group = "verification"
     javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(22) }
 
@@ -184,20 +160,7 @@ tasks.register('testJavaPerfHeavy', Test) {
     maxParallelForks = 1
     forkEvery = 0
 
-    systemProperty 'resonance.pattern.len', '1536'
     systemProperty 'resonance.kernel.native', 'false'
-    systemProperty 'file.encoding', 'UTF-8'
-
-    jvmArgs = [
-            '--enable-preview',
-            '--enable-native-access=ALL-UNNAMED',
-            '--add-modules', 'jdk.incubator.vector',
-            '-Xms2g', '-Xmx2g',
-            '-XX:+UseG1GC',
-            '-XX:G1HeapRegionSize=16m',
-            '-XX:MaxGCPauseMillis=200',
-            '-XX:+AlwaysPreTouch'
-    ]
 
     testLogging.showStandardStreams = true
 }
