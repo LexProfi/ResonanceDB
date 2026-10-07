@@ -274,7 +274,9 @@ public final class IvfCandidateSource implements CandidateSource {
         for (int p : existingProbes) probeSet.add(p);
 
         if (mom != null && mom.isCompatible(K, query.amplitude().length)) {
-            int momentProbeCount = Math.max(adaptiveProbe, baseNProbe);
+            // Route B (moment-weighted) is the weight-aware ranker — give it more probes
+            // than Route A to compensate for L2-based centroid ranking missing weighted matches
+            int momentProbeCount = Math.min(K, (int) Math.ceil(adaptiveProbe * 1.5));
             int[] momentProbes = mom.topCentroidsByMoment(query, pw, momentProbeCount);
             for (int p : momentProbes) probeSet.add(p);
         }
@@ -338,17 +340,22 @@ public final class IvfCandidateSource implements CandidateSource {
     /**
      * Computes adaptive nProbe based on weight drift and phase suppression.
      *
+     * <p>Uses quadratic interpolation from baseNProbe to totalCentroids:
+     * {@code probe = base + (K - base) * factor²}. This naturally scales with
+     * index size and produces moderate increases for small deviations but
+     * aggressive expansion for high drift (sparse weights).</p>
+     *
      * <p>Properties:
      * <ul>
      *   <li>all-one weights → returns baseNProbe exactly</li>
-     *   <li>small drift → small or zero increase</li>
-     *   <li>large drift → monotonically increasing probes</li>
-     *   <li>more uncertainty never reduces probe count</li>
+     *   <li>small drift → small increase (factor²)</li>
+     *   <li>large drift → approaches totalCentroids</li>
+     *   <li>phase-free → returns totalCentroids</li>
      * </ul>
      */
     public static int computeAdaptiveProbe(int baseNProbe, int totalCentroids, PhaseRoutingProfile profile) {
         if (profile == null || profile.isDefault()) return baseNProbe;
-        if (profile.isPhaseFree()) return totalCentroids; // all centroids
+        if (profile.isPhaseFree()) return totalCentroids;
 
         double drift = profile.weightDrift();
         double suppression = 1.0 - profile.meanParticipation();
@@ -356,10 +363,9 @@ public final class IvfCandidateSource implements CandidateSource {
         // Combined factor: maximum of drift and suppression, in [0, 1]
         double factor = Math.max(drift, suppression);
 
-        // Adaptive expansion: linearly interpolate between baseNProbe and totalCentroids
-        double expansionFactor = Double.parseDouble(
-                System.getProperty("resonance.index.weighted.expansion", "2.0"));
-        int adaptiveProbe = (int) Math.ceil(baseNProbe * (1.0 + expansionFactor * factor));
+        // Quadratic interpolation: baseNProbe → totalCentroids as factor → 1.0
+        int adaptiveProbe = (int) Math.ceil(
+                baseNProbe + (double) (totalCentroids - baseNProbe) * factor * factor);
 
         return Math.min(adaptiveProbe, totalCentroids);
     }

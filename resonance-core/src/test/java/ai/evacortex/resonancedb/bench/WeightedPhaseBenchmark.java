@@ -110,12 +110,19 @@ class WeightedPhaseBenchmark {
     void weightedRecallBenchmark() throws Exception {
         printHeader();
 
-        // ── Generate queries (hold-out, separate seed) ──────────────────
-        WavePattern[] queries = new WavePattern[NUM_QUERIES];
+        // ── Generate queries: tuning + holdout split ────────────────────
+        int tuningCount = NUM_QUERIES / 2;
+        int holdoutCount = NUM_QUERIES - tuningCount;
+        WavePattern[] allQueries = new WavePattern[NUM_QUERIES];
         Random queryRng = new Random(QUERY_SEED);
         for (int i = 0; i < NUM_QUERIES; i++) {
-            queries[i] = randomPattern(queryRng, DIM);
+            allQueries[i] = randomPattern(queryRng, DIM);
         }
+        WavePattern[] tuningQueries = Arrays.copyOfRange(allQueries, 0, tuningCount);
+        WavePattern[] holdoutQueries = Arrays.copyOfRange(allQueries, tuningCount, NUM_QUERIES);
+        WavePattern[] queries = holdoutQueries; // main measurement on holdout
+        int effectiveQueries = holdoutCount;
+        System.out.printf("  query split: %d tuning + %d holdout%n", tuningCount, holdoutCount);
 
         // ── Insert data ─────────────────────────────────────────────────
         System.setProperty("resonance.index.enabled", "true");
@@ -156,16 +163,16 @@ class WeightedPhaseBenchmark {
             for (MaskType maskType : MaskType.values()) {
                 CompareOptions options = optionsFor(maskType, DIM, maskRng);
 
-                System.out.printf("%n  [%s] computing ground truth...%n", maskType.label);
+                System.out.printf("%n  [%s] computing ground truth (holdout)...%n", maskType.label);
 
-                // ── Ground truth: exhaustive kernel scoring ──────────
-                String[][] gtIds10 = new String[NUM_QUERIES][];
-                String[][] gtIds50 = new String[NUM_QUERIES][];
-                float[][] gtScores10 = new float[NUM_QUERIES][];
-                float[][] gtScores50 = new float[NUM_QUERIES][];
+                // ── Ground truth: exhaustive kernel scoring on holdout ──
+                String[][] gtIds10 = new String[effectiveQueries][];
+                String[][] gtIds50 = new String[effectiveQueries][];
+                float[][] gtScores10 = new float[effectiveQueries][];
+                float[][] gtScores50 = new float[effectiveQueries][];
 
                 long gtStart = System.nanoTime();
-                for (int q = 0; q < NUM_QUERIES; q++) {
+                for (int q = 0; q < effectiveQueries; q++) {
                     float[] scores = new float[actualN];
                     for (int i = 0; i < actualN; i++) {
                         if (dataPatterns[i] != null && insertedIds[i] != null) {
@@ -192,24 +199,25 @@ class WeightedPhaseBenchmark {
                     }
 
                     if ((q + 1) % 50 == 0) {
-                        System.out.printf("    ground truth: %d/%d queries...%n", q + 1, NUM_QUERIES);
+                        System.out.printf("    ground truth: %d/%d holdout queries...%n", q + 1, effectiveQueries);
                     }
                 }
                 long gtMs = (System.nanoTime() - gtStart) / 1_000_000;
                 System.out.printf("    ground truth: %d ms%n", gtMs);
 
-                // ── Warmup ───────────────────────────────────────────
-                for (int i = 0; i < WARMUP && i < NUM_QUERIES; i++) {
-                    store.query(queries[i], TOP_K, options);
+                // ── Warmup (on tuning queries) ──────────────────────
+                for (int i = 0; i < WARMUP && i < tuningCount; i++) {
+                    store.query(tuningQueries[i], TOP_K, options);
                 }
 
-                // ── Measure: IVF recall + latency ────────────────────
+                // ── Measure: IVF recall + latency on holdout ────────
                 double totalRecall1 = 0, totalRecall10 = 0, totalRecall50 = 0;
                 double totalNdcg10 = 0;
-                long[] latenciesNs10 = new long[NUM_QUERIES];
-                long[] latenciesNs50 = new long[NUM_QUERIES];
+                long[] latenciesNs10 = new long[effectiveQueries];
+                long[] latenciesNs50 = new long[effectiveQueries];
+                double[] perQueryRecall10 = new double[effectiveQueries];
 
-                for (int q = 0; q < NUM_QUERIES; q++) {
+                for (int q = 0; q < effectiveQueries; q++) {
                     // Top-10
                     long t0 = System.nanoTime();
                     List<ResonanceMatch> res10 = store.query(queries[q], TOP_K, options);
@@ -227,7 +235,9 @@ class WeightedPhaseBenchmark {
                     }
 
                     // Recall@10
-                    totalRecall10 += recallAtK(res10, gtIds10[q]);
+                    double r10 = recallAtK(res10, gtIds10[q]);
+                    perQueryRecall10[q] = r10;
+                    totalRecall10 += r10;
 
                     // Recall@50
                     totalRecall50 += recallAtK(res50, gtIds50[q]);
@@ -238,11 +248,19 @@ class WeightedPhaseBenchmark {
 
                 BenchResult br = new BenchResult();
                 br.maskType = maskType;
-                br.recall1 = totalRecall1 / NUM_QUERIES;
-                br.recall10 = totalRecall10 / NUM_QUERIES;
-                br.recall50 = totalRecall50 / NUM_QUERIES;
-                br.ndcg10 = totalNdcg10 / NUM_QUERIES;
+                br.recall1 = totalRecall1 / effectiveQueries;
+                br.recall10 = totalRecall10 / effectiveQueries;
+                br.recall50 = totalRecall50 / effectiveQueries;
+                br.ndcg10 = totalNdcg10 / effectiveQueries;
                 br.gtTimeMs = gtMs;
+
+                // Per-query recall stats
+                Arrays.sort(perQueryRecall10);
+                br.recall10Min = perQueryRecall10[0];
+                br.recall10Max = perQueryRecall10[effectiveQueries - 1];
+                double sumSq = 0;
+                for (double r : perQueryRecall10) sumSq += (r - br.recall10) * (r - br.recall10);
+                br.recall10Std = Math.sqrt(sumSq / effectiveQueries);
 
                 computeLatencyStats(latenciesNs10, br, "10");
                 computeLatencyStats50(latenciesNs50, br);
@@ -250,7 +268,6 @@ class WeightedPhaseBenchmark {
                 // Adaptive nProbe (computed from the profile)
                 PhaseRoutingProfile profile = PhaseRoutingProfile.from(options);
                 int nProbeBase = Integer.getInteger("resonance.index.l1.nprobe", 8);
-                // Approximate total centroids from index build
                 int approxCentroids = Math.max(1, (int) Math.sqrt(actualN));
                 br.adaptiveNProbe = IvfCandidateSource.computeAdaptiveProbe(
                         nProbeBase, approxCentroids, profile);
@@ -262,67 +279,19 @@ class WeightedPhaseBenchmark {
             // ── Print results table ─────────────────────────────────────
             printResultsTable(results);
 
-            // ── Expansion factor comparison ─────────────────────────────
-            System.out.println("\n  === Expansion factor comparison (SPARSE mask) ===");
+            // ── Adaptive probe diagnostic (TUNING queries, SPARSE mask) ────
+            System.out.println("\n  === Adaptive probe diagnostic (SPARSE mask, tuning queries) ===");
             CompareOptions sparseOpts = optionsFor(MaskType.SPARSE, DIM, new Random(MASK_SEED));
-
-            // Precompute ground truth for sparse (reuse from above)
-            String[][] sparseGt10 = new String[NUM_QUERIES][];
-            for (int q = 0; q < NUM_QUERIES; q++) {
-                float[] scores = new float[actualN];
-                for (int i = 0; i < actualN; i++) {
-                    if (dataPatterns[i] != null && insertedIds[i] != null) {
-                        scores[i] = kernel.compare(queries[q], dataPatterns[i], sparseOpts);
-                    }
-                }
-                int[] sorted = partialSort(scores, actualN, TOP_K);
-                sparseGt10[q] = new String[Math.min(TOP_K, sorted.length)];
-                for (int i = 0; i < sparseGt10[q].length; i++) {
-                    sparseGt10[q][i] = insertedIds[sorted[i]];
-                }
-            }
-
-            double[] expansionFactors = {0.0, 0.5, 1.0, 2.0, 5.0, 10.0};
-            String savedExpansion = System.getProperty("resonance.index.weighted.expansion", "2.0");
-
-            System.out.printf("  %-12s  %-10s  %-10s  %-12s%n",
-                    "expansion", "recall@10", "p50 (ms)", "adaptNProbe");
-            System.out.println("  " + "-".repeat(50));
-
-            for (double ef : expansionFactors) {
-                System.setProperty("resonance.index.weighted.expansion", String.valueOf(ef));
-
-                // Warmup
-                for (int i = 0; i < WARMUP && i < NUM_QUERIES; i++) {
-                    store.query(queries[i], TOP_K, sparseOpts);
-                }
-
-                double totalR10 = 0;
-                long[] lats = new long[NUM_QUERIES];
-                for (int q = 0; q < NUM_QUERIES; q++) {
-                    long t0 = System.nanoTime();
-                    List<ResonanceMatch> res = store.query(queries[q], TOP_K, sparseOpts);
-                    lats[q] = System.nanoTime() - t0;
-                    totalR10 += recallAtK(res, sparseGt10[q]);
-                }
-                double r10 = totalR10 / NUM_QUERIES;
-                Arrays.sort(lats);
-                double p50 = lats[(int)(NUM_QUERIES * 0.50)] / 1_000_000.0;
-
-                PhaseRoutingProfile prof = PhaseRoutingProfile.from(sparseOpts);
-                int approxK = Math.max(1, (int) Math.sqrt(actualN));
-                int nProbeBase = Integer.getInteger("resonance.index.l1.nprobe", 8);
-                int adaptiveP = IvfCandidateSource.computeAdaptiveProbe(nProbeBase, approxK, prof);
-
-                System.out.printf("  %-12.1f  %-10.4f  %-10.1f  %-12d%n", ef, r10, p50, adaptiveP);
-            }
-
-            System.setProperty("resonance.index.weighted.expansion", savedExpansion);
+            PhaseRoutingProfile sparseProf = PhaseRoutingProfile.from(sparseOpts);
+            int nProbeBase = Integer.getInteger("resonance.index.l1.nprobe", 8);
+            int approxK = Math.max(1, (int) Math.sqrt(actualN));
+            int adaptiveP = IvfCandidateSource.computeAdaptiveProbe(nProbeBase, approxK, sparseProf);
+            System.out.printf("  baseNProbe=%d, K≈%d, drift=%.3f, suppress=%.3f → adaptiveProbe=%d%n",
+                    nProbeBase, approxK, sparseProf.weightDrift(),
+                    1.0 - sparseProf.meanParticipation(), adaptiveP);
 
             // ── nProbe=K recall verification (should be ~1.0) ─────────
-            System.out.println("\n  === nProbe=K (exact) recall per mask type ===");
-            // exactEquivalence is a final field read at construction time;
-            // set it via reflection so queries use nProbe=Integer.MAX_VALUE.
+            System.out.println("\n  === nProbe=K (exact) recall per mask type (holdout) ===");
             Field eqField = WavePatternStoreImpl.class.getDeclaredField("exactEquivalence");
             eqField.setAccessible(true);
             eqField.set(store, true);
@@ -333,10 +302,9 @@ class WeightedPhaseBenchmark {
             for (MaskType maskType : MaskType.values()) {
                 CompareOptions opts = optionsFor(maskType, DIM, maskRng2);
 
-                // Ground truth from earlier run
-                String[][] gt10 = new String[NUM_QUERIES][];
-                String[][] gt50 = new String[NUM_QUERIES][];
-                for (int q = 0; q < NUM_QUERIES; q++) {
+                String[][] gt10 = new String[effectiveQueries][];
+                String[][] gt50 = new String[effectiveQueries][];
+                for (int q = 0; q < effectiveQueries; q++) {
                     float[] scores = new float[actualN];
                     for (int i = 0; i < actualN; i++) {
                         if (dataPatterns[i] != null && insertedIds[i] != null) {
@@ -352,14 +320,13 @@ class WeightedPhaseBenchmark {
                     for (int j = 0; j < gt50[q].length; j++) gt50[q][j] = insertedIds[sorted[j]];
                 }
 
-                // Warmup
-                for (int i = 0; i < WARMUP && i < NUM_QUERIES; i++) {
-                    store.query(queries[i], TOP_K, opts);
+                for (int i = 0; i < WARMUP && i < tuningCount; i++) {
+                    store.query(tuningQueries[i], TOP_K, opts);
                 }
 
                 double totalR10 = 0, totalR50 = 0;
-                long[] lats = new long[NUM_QUERIES];
-                for (int q = 0; q < NUM_QUERIES; q++) {
+                long[] lats = new long[effectiveQueries];
+                for (int q = 0; q < effectiveQueries; q++) {
                     long t0 = System.nanoTime();
                     List<ResonanceMatch> res10 = store.query(queries[q], TOP_K, opts);
                     lats[q] = System.nanoTime() - t0;
@@ -367,10 +334,10 @@ class WeightedPhaseBenchmark {
                     List<ResonanceMatch> res50 = store.query(queries[q], TOP_K_50, opts);
                     totalR50 += recallAtK(res50, gt50[q]);
                 }
-                double r10 = totalR10 / NUM_QUERIES;
-                double r50 = totalR50 / NUM_QUERIES;
+                double r10 = totalR10 / effectiveQueries;
+                double r50 = totalR50 / effectiveQueries;
                 Arrays.sort(lats);
-                double p50 = lats[(int)(NUM_QUERIES * 0.50)] / 1e6;
+                double p50 = lats[(int)(effectiveQueries * 0.50)] / 1e6;
                 System.out.printf("  %-25s  %8.4f  %8.4f  %8.1f%n", maskType.label, r10, r50, p50);
             }
             eqField.set(store, false);
@@ -655,19 +622,21 @@ class WeightedPhaseBenchmark {
 
     private void printResultsTable(Map<String, BenchResult> results) {
         System.out.println();
-        System.out.println("=".repeat(120));
-        System.out.printf("  %-25s  %8s  %8s  %8s  %8s  %8s  %8s  %8s  %8s%n",
+        System.out.println("=".repeat(140));
+        System.out.printf("  %-25s  %8s  %8s  %8s  %8s  %8s  %8s  %8s  %8s  %6s  %6s  %6s%n",
                 "mask type", "R@1", "R@10", "R@50", "nDCG@10",
-                "p50(ms)", "p95(ms)", "p99(ms)", "nProbe");
-        System.out.println("  " + "-".repeat(110));
+                "p50(ms)", "p95(ms)", "p99(ms)", "nProbe",
+                "R10min", "R10max", "R10std");
+        System.out.println("  " + "-".repeat(130));
 
         for (var entry : results.entrySet()) {
             BenchResult br = entry.getValue();
-            System.out.printf("  %-25s  %8.4f  %8.4f  %8.4f  %8.4f  %8.1f  %8.1f  %8.1f  %8d%n",
+            System.out.printf("  %-25s  %8.4f  %8.4f  %8.4f  %8.4f  %8.1f  %8.1f  %8.1f  %8d  %6.2f  %6.2f  %6.3f%n",
                     entry.getKey(), br.recall1, br.recall10, br.recall50, br.ndcg10,
-                    br.p50_10, br.p95_10, br.p99_10, br.adaptiveNProbe);
+                    br.p50_10, br.p95_10, br.p99_10, br.adaptiveNProbe,
+                    br.recall10Min, br.recall10Max, br.recall10Std);
         }
-        System.out.println("=".repeat(120));
+        System.out.println("=".repeat(140));
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -717,5 +686,6 @@ class WeightedPhaseBenchmark {
         long gtTimeMs;
         int adaptiveNProbe;
         PhaseRoutingProfile profile;
+        double recall10Min, recall10Max, recall10Std;
     }
 }
