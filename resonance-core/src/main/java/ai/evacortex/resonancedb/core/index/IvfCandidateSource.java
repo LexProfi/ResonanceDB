@@ -704,6 +704,8 @@ public final class IvfCandidateSource implements CandidateSource {
             partitions.put(i, new PostingSidecar.PartitionData());
         }
 
+        ResonanceMoments.Builder momentsBuilder = new ResonanceMoments.Builder(k, patternLen);
+
         for (String segName : segmentNames) {
             CachedReader reader = safeGetReader(readerProvider, segName);
             if (reader == null) continue;
@@ -717,6 +719,7 @@ public final class IvfCandidateSource implements CandidateSource {
                 int nearest = SphericalKMeans.nearestCentroid(u, index.centroids(), unfoldedDim);
                 PostingSidecar.PartitionData pd = partitions.get(nearest);
                 if (pd != null) pd.add(id, UnfoldedMath.unfoldFloat32(p), UnfoldedMath.energyFloat32(p));
+                momentsBuilder.addPattern(nearest, p);
             }
         }
 
@@ -732,6 +735,17 @@ public final class IvfCandidateSource implements CandidateSource {
             System.err.println("rebuildSidecar failed: " + e.getMessage());
             replaceSidecar(null);
         }
+
+        ResonanceMoments builtMoments = momentsBuilder.build();
+        Path momentsPath = this.momentsPathRef;
+        if (momentsPath != null) {
+            try {
+                builtMoments.write(momentsPath);
+            } catch (Exception e) {
+                System.err.println("Failed to write moments during sidecar rebuild: " + e.getMessage());
+            }
+        }
+        this.moments = builtMoments;
     }
 
     private Map<String, Collection<String>> groupBySegment(Set<String> patternIds) {
