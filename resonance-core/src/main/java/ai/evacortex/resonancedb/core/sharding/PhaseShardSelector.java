@@ -8,6 +8,7 @@
  */
 package ai.evacortex.resonancedb.core.sharding;
 
+import ai.evacortex.resonancedb.core.engine.PhaseRoutingProfile;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
 import ai.evacortex.resonancedb.core.storage.ManifestIndex;
 
@@ -132,6 +133,38 @@ public class PhaseShardSelector {
         return -1;
     }
 
+    /**
+     * Returns relevant shards for a weighted query using adaptive phase envelope.
+     *
+     * <p>The envelope expands the search radius by the routing uncertainty
+     * derived from the phase weight distribution. When the profile is phase-free,
+     * all shards are returned.</p>
+     *
+     * @param query   the query pattern
+     * @param baseEps the base routing epsilon
+     * @param profile the phase routing profile (may be null for default behavior)
+     * @return list of relevant shard/segment names
+     */
+    public List<String> getRelevantShardsWeighted(WavePattern query, double baseEps,
+                                                   PhaseRoutingProfile profile) {
+        if (profile == null || profile.isDefault()) {
+            return getRelevantShards(query, baseEps);
+        }
+        if (profile.isPhaseFree()) {
+            return allShards();
+        }
+        if (!useExplicitRanges) {
+            return List.of(selectShard(query));
+        }
+        if (phaseShardMap.isEmpty()) return List.of();
+
+        double weightedCenter = profile.weightedPhaseCenter(query);
+        double normalizedCenter = normalizePhase(weightedCenter);
+        double expandedEps = baseEps + profile.routingUncertainty();
+
+        return findShardsInRange(normalizedCenter, expandedEps);
+    }
+
     public List<String> getRelevantShards(WavePattern query, double customEps) {
         if (!useExplicitRanges) {
             return List.of(selectShard(query));
@@ -141,8 +174,12 @@ public class PhaseShardSelector {
         double avg = normalizePhase(Arrays.stream(query.phase()).average().orElse(0.0));
         double eps = Math.max(0.0, customEps);
 
-        double min = avg - eps;
-        double max = avg + eps;
+        return findShardsInRange(avg, eps);
+    }
+
+    private List<String> findShardsInRange(double center, double eps) {
+        double min = center - eps;
+        double max = center + eps;
 
         List<String> out = new ArrayList<>();
         if (min < -PI) {

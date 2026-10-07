@@ -8,6 +8,8 @@
  */
 package ai.evacortex.resonancedb.core.index;
 
+import ai.evacortex.resonancedb.core.engine.PhaseRoutingProfile;
+import ai.evacortex.resonancedb.core.engine.PhaseWeights;
 import ai.evacortex.resonancedb.core.math.UnfoldedMath;
 import ai.evacortex.resonancedb.core.storage.ManifestIndex;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
@@ -37,6 +39,8 @@ public final class IvfCandidateSource implements CandidateSource {
 
     private volatile PostingSidecar.Loaded postingSidecar;
     private volatile Path sidecarPathRef;
+    private volatile Path momentsPathRef;
+    private volatile ResonanceMoments moments;
 
     private volatile boolean shutdown;
 
@@ -63,6 +67,33 @@ public final class IvfCandidateSource implements CandidateSource {
 
     public void setSidecarPath(Path path) {
         this.sidecarPathRef = path;
+    }
+
+    public void setMomentsPath(Path path) {
+        this.momentsPathRef = path;
+    }
+
+    public boolean loadMoments() {
+        Path path = momentsPathRef;
+        if (path == null) return false;
+        try {
+            ResonanceMoments loaded = ResonanceMoments.load(path);
+            if (loaded != null) {
+                CentroidIndex index = indexRef.get();
+                if (index != null && loaded.isCompatible(index.size(), index.dim() / 2)) {
+                    this.moments = loaded;
+                    return true;
+                }
+                System.err.println("Moments incompatible with current index, ignoring");
+            }
+        } catch (Exception e) {
+            System.err.println("Failed to load moments: " + e.getMessage());
+        }
+        return false;
+    }
+
+    public ResonanceMoments currentMoments() {
+        return moments;
     }
 
     public boolean loadSidecar() {
@@ -204,6 +235,135 @@ public final class IvfCandidateSource implements CandidateSource {
         return new ScoredCandidates(results, false);
     }
 
+    /**
+     * Weighted scored candidates using dual-route IVF: existing centroid ranking + moment-weighted ranking.
+     *
+     * <p>For default weights (null/all-one), delegates to the standard {@link #scoredCandidates} path.
+     * For weighted queries, computes adaptive nProbe based on weight drift and forms a deduplicated
+     * union of existing IVF probes and moment-ranked probes.</p>
+     */
+    public ScoredCandidates scoredCandidatesWeighted(WavePattern query, int topK,
+                                                      int baseNProbe,
+                                                      PhaseRoutingProfile profile) {
+        if (profile == null || profile.isDefault()) {
+            return scoredCandidates(query, topK, baseNProbe);
+        }
+
+        CentroidIndex index = indexRef.get();
+        PostingSidecar.Loaded sidecar = this.postingSidecar;
+        ResonanceMoments mom = this.moments;
+
+        if (index == null || sidecar == null) {
+            return CandidateSource.super.scoredCandidates(query, topK);
+        }
+
+        int K = index.size();
+        PhaseWeights pw = profile.phaseWeights();
+
+        // Adaptive nProbe: increase probe count based on weight drift
+        int adaptiveProbe = computeAdaptiveProbe(baseNProbe, K, profile);
+
+        // Route A: existing IVF centroid ranking
+        double[] queryUDouble = UnfoldedMath.unfold(query);
+        UnfoldedMath.l2Normalize(queryUDouble);
+        int[] existingProbes = SphericalKMeans.topNearestCentroids(
+                queryUDouble, index.centroids(), index.dim(), adaptiveProbe);
+
+        // Route B: moment-weighted ranking (if moments available)
+        Set<Integer> probeSet = new LinkedHashSet<>();
+        for (int p : existingProbes) probeSet.add(p);
+
+        if (mom != null && mom.isCompatible(K, query.amplitude().length)) {
+            int momentProbeCount = Math.max(adaptiveProbe, baseNProbe);
+            int[] momentProbes = mom.topCentroidsByMoment(query, pw, momentProbeCount);
+            for (int p : momentProbes) probeSet.add(p);
+        }
+
+        // Scan union of probes
+        float[] queryU = UnfoldedMath.unfoldFloat32(query);
+        float queryEnergy = UnfoldedMath.energyFloat32(query);
+
+        List<PostingSidecar.ScoredCandidate> results = new ArrayList<>();
+        for (int partIdx : probeSet) {
+            sidecar.scanPartition(partIdx, queryU, queryEnergy, results);
+        }
+
+        results.removeIf(sc -> delta.isDeleted(sc.id()));
+
+        Set<String> scoredIds = new HashSet<>(results.size());
+        for (PostingSidecar.ScoredCandidate sc : results) {
+            scoredIds.add(sc.id());
+        }
+
+        // Vamana graph search on probed partitions
+        Map<Integer, VamanaGraph> graphs = vamanaGraphs.get();
+        if (!graphs.isEmpty() && readerProvider != null) {
+            for (int partIdx : probeSet) {
+                VamanaGraph graph = graphs.get(partIdx);
+                if (graph == null || graph.nodeCount() == 0) continue;
+
+                java.util.function.IntFunction<WavePattern> loader = nodeIdx -> {
+                    if (nodeIdx < 0 || nodeIdx >= graph.nodeCount()) return null;
+                    String patId = graph.patternIds()[nodeIdx];
+                    ManifestIndex.PatternLocation loc = manifest.get(patId);
+                    if (loc == null) return null;
+                    try {
+                        CachedReader reader = readerProvider.apply(loc.segmentName());
+                        return (reader != null) ? reader.readById(patId) : null;
+                    } catch (RuntimeException e) {
+                        return null;
+                    }
+                };
+
+                for (String id : graph.search(query, loader, efSearch, graph.nodeCount())) {
+                    if (!scoredIds.contains(id) && !delta.isDeleted(id)) {
+                        results.add(PostingSidecar.ScoredCandidate.forExactRescore(id));
+                        scoredIds.add(id);
+                    }
+                }
+            }
+        }
+
+        // Delta entries
+        Set<String> deltaIds = delta.allIds();
+        for (String id : deltaIds) {
+            if (!scoredIds.contains(id)) {
+                results.add(PostingSidecar.ScoredCandidate.forExactRescore(id));
+            }
+        }
+
+        return new ScoredCandidates(results, false);
+    }
+
+    /**
+     * Computes adaptive nProbe based on weight drift and phase suppression.
+     *
+     * <p>Properties:
+     * <ul>
+     *   <li>all-one weights → returns baseNProbe exactly</li>
+     *   <li>small drift → small or zero increase</li>
+     *   <li>large drift → monotonically increasing probes</li>
+     *   <li>more uncertainty never reduces probe count</li>
+     * </ul>
+     */
+    public static int computeAdaptiveProbe(int baseNProbe, int totalCentroids, PhaseRoutingProfile profile) {
+        if (profile == null || profile.isDefault()) return baseNProbe;
+        if (profile.isPhaseFree()) return totalCentroids; // all centroids
+
+        double drift = profile.weightDrift();
+        double suppression = 1.0 - profile.meanParticipation();
+
+        // Combined factor: maximum of drift and suppression, in [0, 1]
+        double factor = Math.max(drift, suppression);
+
+        // Adaptive expansion: linearly interpolate between baseNProbe and totalCentroids
+        double expansionFactor = Double.parseDouble(
+                System.getProperty("resonance.index.weighted.expansion", "2.0"));
+        int adaptiveProbe = (int) Math.ceil(baseNProbe * (1.0 + expansionFactor * factor));
+
+        return Math.min(adaptiveProbe, totalCentroids);
+    }
+
     @Override
     public boolean isExhaustive() {
         return indexRef.get() == null;
@@ -277,6 +437,8 @@ public final class IvfCandidateSource implements CandidateSource {
             partitions.put(i, new PostingSidecar.PartitionData());
         }
 
+        ResonanceMoments.Builder momentsBuilder = new ResonanceMoments.Builder(k, patternLen);
+
         for (String id : allValidIds) {
             if (shutdown) return;
             WavePattern p = safeReadPattern(readerProvider, idToSegment.get(id), id, patternLen);
@@ -288,6 +450,7 @@ public final class IvfCandidateSource implements CandidateSource {
 
             int nearest = SphericalKMeans.nearestCentroid(u, centroids, unfoldedDim);
             partitions.get(nearest).add(id, UnfoldedMath.unfoldFloat32(p), UnfoldedMath.energyFloat32(p));
+            momentsBuilder.addPattern(nearest, p);
         }
         allValidIds = null;
         idToSegment = null;
@@ -308,6 +471,17 @@ public final class IvfCandidateSource implements CandidateSource {
                 replaceSidecar(null);
             }
         }
+
+        ResonanceMoments builtMoments = momentsBuilder.build();
+        Path momentsPath = this.momentsPathRef;
+        if (momentsPath != null) {
+            try {
+                builtMoments.write(momentsPath);
+            } catch (Exception e) {
+                System.err.println("Failed to write moments: " + e.getMessage());
+            }
+        }
+        this.moments = builtMoments;
 
         indexRef.set(newIndex);
         delta.drainAll();

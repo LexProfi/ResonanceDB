@@ -13,6 +13,7 @@ import ai.evacortex.resonancedb.core.corpus.CorpusService;
 import ai.evacortex.resonancedb.core.corpus.CorpusSpec;
 import ai.evacortex.resonancedb.core.corpus.CorpusState;
 import ai.evacortex.resonancedb.core.ResonanceStore;
+import ai.evacortex.resonancedb.core.engine.CompareOptions;
 import ai.evacortex.resonancedb.core.exceptions.PatternNotFoundException;
 import ai.evacortex.resonancedb.core.storage.io.SegmentReader;
 import ai.evacortex.resonancedb.core.storage.responce.InterferenceEntry;
@@ -783,11 +784,33 @@ public final class FileSystemCorpusService implements CorpusService, Closeable {
         }
 
         @Override
+        public List<ResonanceMatch> query(WavePattern query, int topK, CompareOptions options) {
+            slot.beginAccess();
+            try {
+                WavePatternStoreImpl store = slot.openForRead();
+                return store == null ? List.of() : store.query(query, topK, options);
+            } finally {
+                slot.endAccess();
+            }
+        }
+
+        @Override
         public List<ResonanceMatchDetailed> queryDetailed(WavePattern query, int topK) {
             slot.beginAccess();
             try {
                 WavePatternStoreImpl store = slot.openForRead();
                 return store == null ? List.of() : store.queryDetailed(query, topK);
+            } finally {
+                slot.endAccess();
+            }
+        }
+
+        @Override
+        public List<ResonanceMatchDetailed> queryDetailed(WavePattern query, int topK, CompareOptions options) {
+            slot.beginAccess();
+            try {
+                WavePatternStoreImpl store = slot.openForRead();
+                return store == null ? List.of() : store.queryDetailed(query, topK, options);
             } finally {
                 slot.endAccess();
             }

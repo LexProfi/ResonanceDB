@@ -121,6 +121,12 @@ public final class DeltaBuffer {
 
     public List<ScoredMatch> scoreDelta(WavePattern query, String queryId,
                                         ResonanceKernel kernel, int topK) {
+        return scoreDelta(query, queryId, kernel, topK, null);
+    }
+
+    public List<ScoredMatch> scoreDelta(WavePattern query, String queryId,
+                                        ResonanceKernel kernel, int topK,
+                                        ai.evacortex.resonancedb.core.engine.CompareOptions options) {
         List<Entry> entries = collectAllEntries();
         if (entries.isEmpty()) return List.of();
 
@@ -128,7 +134,9 @@ public final class DeltaBuffer {
 
         List<WavePattern> patterns = new ArrayList<>(entries.size());
         for (Entry e : entries) patterns.add(e.pattern());
-        float[] scores = kernel.compareMany(query, patterns);
+        float[] scores = (options != null)
+                ? kernel.compareMany(query, patterns, options)
+                : kernel.compareMany(query, patterns);
 
         for (int i = 0; i < entries.size(); i++) {
             Entry e = entries.get(i);

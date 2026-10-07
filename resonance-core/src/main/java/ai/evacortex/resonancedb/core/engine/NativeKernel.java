@@ -40,6 +40,11 @@ public final class NativeKernel implements ResonanceKernel {
             throw new IllegalArgumentException("Amplitude/phase length mismatch");
         }
 
+        // Weighted phase mode: delegate to Java kernel (native weighted kernel not yet implemented)
+        if (options.hasEffectivePhaseWeights()) {
+            return JAVA_FALLBACK.compare(a, b, options);
+        }
+
         if (options.ignorePhase()) {
             return JAVA_FALLBACK.compare(a, b, options);
         }
@@ -72,6 +77,12 @@ public final class NativeKernel implements ResonanceKernel {
         Objects.requireNonNull(options, "CompareOptions must not be null");
 
         if (candidates.isEmpty()) return new float[0];
+
+        // Weighted phase mode: delegate to Java kernel
+        if (options.hasEffectivePhaseWeights()) {
+            return JAVA_FALLBACK.compareMany(query, candidates, options);
+        }
+
         if (options.ignorePhase()) {
             return JAVA_FALLBACK.compareMany(query, candidates, options);
         }
@@ -129,13 +140,24 @@ public final class NativeKernel implements ResonanceKernel {
 
     @Override
     public ComparisonResult compareWithPhaseDelta(WavePattern a, WavePattern b) {
+        return compareWithPhaseDelta(a, b, CompareOptions.defaultOptions());
+    }
+
+    @Override
+    public ComparisonResult compareWithPhaseDelta(WavePattern a, WavePattern b, CompareOptions options) {
         Objects.requireNonNull(a, "First pattern must not be null");
         Objects.requireNonNull(b, "Second pattern must not be null");
+        Objects.requireNonNull(options, "CompareOptions must not be null");
 
         if (a.amplitude().length != a.phase().length ||
                 b.amplitude().length != b.phase().length ||
                 a.amplitude().length != b.amplitude().length) {
             throw new IllegalArgumentException("Pattern length mismatch");
+        }
+
+        // Weighted phase mode: delegate to Java kernel
+        if (options.hasEffectivePhaseWeights()) {
+            return JAVA_FALLBACK.compareWithPhaseDelta(a, b, options);
         }
 
         final int len = a.amplitude().length;
@@ -150,7 +172,7 @@ public final class NativeKernel implements ResonanceKernel {
             float[] out = NativeCompare.compareWithPhaseDelta(amp1, phase1, amp2, phase2);
             return new ComparisonResult(out[0], out[1]);
         } catch (Throwable e) {
-            return JAVA_FALLBACK.compareWithPhaseDelta(a, b);
+            return JAVA_FALLBACK.compareWithPhaseDelta(a, b, options);
         }
     }
 

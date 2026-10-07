@@ -9,6 +9,8 @@
 package ai.evacortex.resonancedb.core.storage;
 
 import ai.evacortex.resonancedb.core.ResonanceStore;
+import ai.evacortex.resonancedb.core.engine.CompareOptions;
+import ai.evacortex.resonancedb.core.engine.PhaseRoutingProfile;
 import ai.evacortex.resonancedb.core.engine.ResonanceKernel;
 import ai.evacortex.resonancedb.core.exceptions.DuplicatePatternException;
 import ai.evacortex.resonancedb.core.exceptions.InvalidWavePatternException;
@@ -368,6 +370,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             this.ivfSource = new IvfCandidateSource(
                     null, deltaIndex, manifest, ivfNProbe, fallback);
             this.ivfSource.setSidecarPath(this.rootDir.resolve("index/postings.ivf"));
+            this.ivfSource.setMomentsPath(this.rootDir.resolve("index/moments.rmom"));
 
             if (!ivfSource.loadIndex(centroidsPath)) {
                 scheduleIndexRebuild();
@@ -376,6 +379,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 if (!ivfSource.loadSidecar()) {
                     rebuildSidecar();
                 }
+                ivfSource.loadMoments();
             }
         } else {
             this.deltaIndex = null;
@@ -789,6 +793,11 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
     @Override
     public List<ResonanceMatch> query(WavePattern query, int topK) {
+        return query(query, topK, null);
+    }
+
+    @Override
+    public List<ResonanceMatch> query(WavePattern query, int topK, CompareOptions options) {
         ensureOpen();
         validateWavePatternLen(query);
         if (topK <= 0) {
@@ -804,20 +813,24 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
             if (ivfSource != null && ivfSource.currentIndex() != null) {
                 int effectiveProbe = exactEquivalence ? Integer.MAX_VALUE : ivfNProbe;
+                PhaseRoutingProfile ivfProfile = PhaseRoutingProfile.from(options);
                 CandidateSource.ScoredCandidates scored =
-                        ivfSource.scoredCandidates(query, topK, effectiveProbe);
+                        (ivfProfile.isDefault())
+                        ? ivfSource.scoredCandidates(query, topK, effectiveProbe)
+                        : ivfSource.scoredCandidatesWeighted(query, topK, effectiveProbe, ivfProfile);
                 if (!scored.exhaustive() && !scored.candidates().isEmpty()) {
-                    collected = exactScoreFinalists(scored, query, queryId, topK);
+                    collected = exactScoreFinalists(scored, query, queryId, topK, options);
                 } else {
                     collected = collectMatchesFromCandidates(
-                            ivfSource.candidates(query, topK), query, queryId, topK);
+                            ivfSource.candidates(query, topK), query, queryId, topK, options);
                 }
             } else {
-                List<SegmentWriter> writers = selectWritersForQuery(query);
+                PhaseRoutingProfile profile = PhaseRoutingProfile.from(options);
+                List<SegmentWriter> writers = selectWritersForQuery(query, profile);
                 int threshold = Math.max(4, writers.size() / Math.max(1, tune.poolParallelism));
 
                 collected = queryPool.invoke(
-                        new MatchQueryTask(writers, query, queryId, topK, 0, writers.size(), threshold)
+                        new MatchQueryTask(writers, query, queryId, topK, 0, writers.size(), threshold, options)
                 );
 
                 if (collected.size() < topK) {
@@ -832,7 +845,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
                     if (!rest.isEmpty()) {
                         List<HeapItem> extra = queryPool.invoke(
-                                new MatchQueryTask(rest, query, queryId, topK, 0, rest.size(), threshold)
+                                new MatchQueryTask(rest, query, queryId, topK, 0, rest.size(), threshold, options)
                         );
                         collected.addAll(extra);
                     }
@@ -840,7 +853,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             }
 
             if (deltaBuffer != null && !deltaBuffer.isEmpty()) {
-                for (DeltaBuffer.ScoredMatch sm : deltaBuffer.scoreDelta(query, queryId, resonanceKernel, topK)) {
+                for (DeltaBuffer.ScoredMatch sm : deltaBuffer.scoreDelta(query, queryId, resonanceKernel, topK, options)) {
                     collected.add(new HeapItem(sm.match()));
                 }
             }
@@ -856,8 +869,13 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
     @Override
     public List<ResonanceMatchDetailed> queryDetailed(WavePattern query, int topK) {
-        List<ResonanceMatch> baseResults = query(query, topK);
-        return enrichWithDetails(query, baseResults);
+        return queryDetailed(query, topK, null);
+    }
+
+    @Override
+    public List<ResonanceMatchDetailed> queryDetailed(WavePattern query, int topK, CompareOptions options) {
+        List<ResonanceMatch> baseResults = query(query, topK, options);
+        return enrichWithDetails(query, baseResults, options);
     }
 
     @Override
@@ -1050,7 +1068,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     private List<HeapItem> collectMatchesFromWriter(SegmentWriter writer,
                                                     WavePattern query,
                                                     String queryId,
-                                                    int topK) {
+                                                    int topK,
+                                                    CompareOptions options) {
         if (writer == null) {
             return List.of();
         }
@@ -1074,13 +1093,13 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         for (String id : reader.allIds()) {
             fb.ids[inBatch++] = id;
             if (inBatch == batchSize) {
-                processMatchBatch(reader, query, queryId, topK, len, inBatch, useFlat, fb, heap, cmp);
+                processMatchBatch(reader, query, queryId, topK, len, inBatch, useFlat, fb, heap, cmp, options);
                 inBatch = 0;
             }
         }
 
         if (inBatch > 0) {
-            processMatchBatch(reader, query, queryId, topK, len, inBatch, useFlat, fb, heap, cmp);
+            processMatchBatch(reader, query, queryId, topK, len, inBatch, useFlat, fb, heap, cmp, options);
         }
 
         return new ArrayList<>(heap);
@@ -1095,20 +1114,21 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                                    boolean useFlat,
                                    FlatBuffers fb,
                                    PriorityQueue<HeapItem> heap,
-                                   Comparator<HeapItem> cmp) {
+                                   Comparator<HeapItem> cmp,
+                                   CompareOptions options) {
         acquireIoPermitBatch();
         try {
             if (useFlat) {
                 int ready = fillFlatBatch(reader, fb, len, count);
                 if (ready > 0) {
-                    scoreAndMergeFlat(query, queryId, fb, len, ready, heap, cmp, topK);
+                    scoreAndMergeFlat(query, queryId, fb, len, ready, heap, cmp, topK, options);
                 }
             } else {
                 List<String> idBatch = new ArrayList<>(count);
                 List<WavePattern> candBatch = new ArrayList<>(count);
                 int ready = fillObjectBatch(reader, fb.ids, count, idBatch, candBatch, len);
                 if (ready > 0) {
-                    scoreAndMergeObject(query, queryId, idBatch, candBatch, heap, cmp, topK);
+                    scoreAndMergeObject(query, queryId, idBatch, candBatch, heap, cmp, topK, options);
                 }
             }
         } finally {
@@ -1157,8 +1177,11 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                                      List<WavePattern> cands,
                                      PriorityQueue<HeapItem> heap,
                                      Comparator<HeapItem> cmp,
-                                     int topK) {
-        float[] scores = resonanceKernel.compareMany(query, cands);
+                                     int topK,
+                                     CompareOptions options) {
+        float[] scores = (options != null)
+                ? resonanceKernel.compareMany(query, cands, options)
+                : resonanceKernel.compareMany(query, cands);
         for (int i = 0; i < scores.length; i++) {
             String id = ids.get(i);
             float energy = scores[i];
@@ -1175,7 +1198,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                                    int count,
                                    PriorityQueue<HeapItem> heap,
                                    Comparator<HeapItem> cmp,
-                                   int topK) {
+                                   int topK,
+                                   CompareOptions options) {
         List<String> ids = new ArrayList<>(count);
         List<WavePattern> cands = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
@@ -1185,7 +1209,9 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             cands.add(new WavePattern(a, p));
         }
 
-        float[] scores = resonanceKernel.compareMany(query, cands);
+        float[] scores = (options != null)
+                ? resonanceKernel.compareMany(query, cands, options)
+                : resonanceKernel.compareMany(query, cands);
         for (int i = 0; i < scores.length; i++) {
             HeapItem item = new HeapItem(new ResonanceMatch(ids.get(i), scores[i], null));
             heapAddOrEvict(heap, item, cmp, topK);
@@ -1210,7 +1236,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     }
 
     private List<HeapItem> exactScoreFinalists(CandidateSource.ScoredCandidates scored,
-                                                WavePattern query, String queryId, int topK) {
+                                                WavePattern query, String queryId, int topK,
+                                                CompareOptions options) {
         int overfetchFloor = topK * tune.overfetchForTopK(topK);
 
         List<PostingSidecar.ScoredCandidate> ivfCandidates = new ArrayList<>();
@@ -1237,11 +1264,11 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         fb.ensure(len, 1);
 
         for (int i = 0; i < finalistCount; i++) {
-            exactScoreCandidate(ivfCandidates.get(i).id(), query, queryId, len, fb, heap, cmp, topK);
+            exactScoreCandidate(ivfCandidates.get(i).id(), query, queryId, len, fb, heap, cmp, topK, options);
         }
 
         for (PostingSidecar.ScoredCandidate dc : deltaCandidates) {
-            exactScoreCandidate(dc.id(), query, queryId, len, fb, heap, cmp, topK);
+            exactScoreCandidate(dc.id(), query, queryId, len, fb, heap, cmp, topK, options);
         }
 
         return new ArrayList<>(heap);
@@ -1250,7 +1277,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     private void exactScoreCandidate(String id, WavePattern query, String queryId,
                                       int len, FlatBuffers fb,
                                       PriorityQueue<HeapItem> heap, Comparator<HeapItem> cmp,
-                                      int topK) {
+                                      int topK, CompareOptions options) {
         ManifestIndex.PatternLocation loc = manifest.get(id);
         if (loc == null) return;
 
@@ -1263,17 +1290,19 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 java.util.Arrays.copyOf(fb.ampFlat, len),
                 java.util.Arrays.copyOf(fb.phaseFlat, len));
 
-        float energy = resonanceKernel.compare(query, cand);
+        float energy = (options != null)
+                ? resonanceKernel.compare(query, cand, options)
+                : resonanceKernel.compare(query, cand);
         HeapItem item = new HeapItem(new ResonanceMatch(id, energy, cand));
         heapAddOrEvict(heap, item, cmp, topK);
     }
 
     private List<HeapItem> collectMatchesFromCandidates(
             Map<String, Collection<String>> candidatesBySegment,
-            WavePattern query, String queryId, int topK) {
+            WavePattern query, String queryId, int topK, CompareOptions options) {
 
         if (candidatesBySegment.size() <= 1) {
-            return collectMatchesFromCandidatesSequential(candidatesBySegment, query, queryId, topK);
+            return collectMatchesFromCandidatesSequential(candidatesBySegment, query, queryId, topK, options);
         }
 
         List<ForkJoinTask<List<HeapItem>>> tasks = new ArrayList<>(candidatesBySegment.size());
@@ -1282,7 +1311,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             Collection<String> ids = entry.getValue();
             tasks.add(queryPool.submit(() ->
                     collectMatchesFromCandidatesSequential(
-                            Map.of(segName, ids), query, queryId, topK)));
+                            Map.of(segName, ids), query, queryId, topK, options)));
         }
 
         List<HeapItem> collected = new ArrayList<>();
@@ -1298,7 +1327,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
     private List<HeapItem> collectMatchesFromCandidatesSequential(
             Map<String, Collection<String>> candidatesBySegment,
-            WavePattern query, String queryId, int topK) {
+            WavePattern query, String queryId, int topK, CompareOptions options) {
 
         final Comparator<HeapItem> cmp = HEAP_ORDER;
         final int len = query.amplitude().length;
@@ -1319,13 +1348,13 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 fb.ids[inBatch++] = id;
                 if (inBatch == batchSize) {
                     processMatchBatch(reader, query, queryId, topK, len,
-                            inBatch, useFlat, fb, heap, cmp);
+                            inBatch, useFlat, fb, heap, cmp, options);
                     inBatch = 0;
                 }
             }
             if (inBatch > 0) {
                 processMatchBatch(reader, query, queryId, topK, len,
-                        inBatch, useFlat, fb, heap, cmp);
+                        inBatch, useFlat, fb, heap, cmp, options);
             }
         }
 
@@ -1651,16 +1680,26 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     }
 
     private List<SegmentWriter> selectWritersForQuery(WavePattern query) {
+        return selectWritersForQuery(query, null);
+    }
+
+    private List<SegmentWriter> selectWritersForQuery(WavePattern query, PhaseRoutingProfile profile) {
         PhaseShardSelector selector = shardSelectorRef.get();
 
-        double eps = READ_EPSILON;
-        List<String> shardNames = selector.getRelevantShards(query, eps);
-
-        int tries = 0;
-        while (shardNames.isEmpty() && tries < PHASE_NEIGHBORS_MAX) {
-            eps += BUCKET_WIDTH_RAD;
+        List<String> shardNames;
+        if (profile != null && !profile.isDefault()) {
+            // Adaptive Phase Envelope: use weighted center + routing uncertainty
+            shardNames = selector.getRelevantShardsWeighted(query, READ_EPSILON, profile);
+        } else {
+            double eps = READ_EPSILON;
             shardNames = selector.getRelevantShards(query, eps);
-            tries++;
+
+            int tries = 0;
+            while (shardNames.isEmpty() && tries < PHASE_NEIGHBORS_MAX) {
+                eps += BUCKET_WIDTH_RAD;
+                shardNames = selector.getRelevantShards(query, eps);
+                tries++;
+            }
         }
 
         Set<String> allowed = new LinkedHashSet<>(shardNames);
@@ -1891,12 +1930,15 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     }
 
     private List<ResonanceMatchDetailed> enrichWithDetails(WavePattern query,
-                                                              List<ResonanceMatch> baseResults) {
+                                                              List<ResonanceMatch> baseResults,
+                                                              CompareOptions options) {
         List<ResonanceMatchDetailed> detailed = new ArrayList<>(baseResults.size());
         for (ResonanceMatch m : baseResults) {
             WavePattern cand = m.pattern();
             if (cand != null) {
-                ComparisonResult cr = resonanceKernel.compareWithPhaseDelta(query, cand);
+                ComparisonResult cr = (options != null)
+                        ? resonanceKernel.compareWithPhaseDelta(query, cand, options)
+                        : resonanceKernel.compareWithPhaseDelta(query, cand);
                 double phaseDelta = cr.phaseDelta();
                 ResonanceZone zone = ResonanceZoneClassifier.classify(m.energy(), phaseDelta);
                 detailed.add(new ResonanceMatchDetailed(
@@ -2030,6 +2072,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         private final WavePattern query;
         private final String queryId;
         private final int topK;
+        private final CompareOptions options;
 
         private MatchQueryTask(List<SegmentWriter> writers,
                                WavePattern query,
@@ -2037,21 +2080,23 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                                int topK,
                                int from,
                                int to,
-                               int threshold) {
+                               int threshold,
+                               CompareOptions options) {
             super(writers, from, to, threshold);
             this.query = query;
             this.queryId = queryId;
             this.topK = topK;
+            this.options = options;
         }
 
         @Override
         protected List<HeapItem> process(SegmentWriter writer) {
-            return collectMatchesFromWriter(writer, query, queryId, topK);
+            return collectMatchesFromWriter(writer, query, queryId, topK, options);
         }
 
         @Override
         protected QueryTask<HeapItem> cloneFor(int from, int to, int threshold) {
-            return new MatchQueryTask(this.writers, query, queryId, topK, from, to, threshold);
+            return new MatchQueryTask(this.writers, query, queryId, topK, from, to, threshold, options);
         }
     }
 

@@ -8,6 +8,7 @@
  */
 package ai.evacortex.resonancedb.core;
 
+import ai.evacortex.resonancedb.core.engine.CompareOptions;
 import ai.evacortex.resonancedb.core.exceptions.*;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
 import ai.evacortex.resonancedb.core.storage.responce.InterferenceEntry;
@@ -97,6 +98,19 @@ public interface ResonanceStore {
     List<ResonanceMatch> query(WavePattern query, int topK);
 
     /**
+     * Queries the store for the top-K most resonant matches using specified comparison options.
+     *
+     * <p>When {@link CompareOptions#phaseWeights()} is set, scoring uses weighted phase participation
+     * and routing adapts to the effective phase geometry.</p>
+     *
+     * @param query   the input pattern
+     * @param topK    the number of top matches to return
+     * @param options comparison configuration including optional phase weights
+     * @return list of {@link ResonanceMatch}, ordered by descending similarity
+     */
+    List<ResonanceMatch> query(WavePattern query, int topK, CompareOptions options);
+
+    /**
      * Queries the store and returns detailed match results, including phase deltas and zones.
      *
      * <p>This is typically used for semantic zone classification or diagnostics.</p>
@@ -106,6 +120,16 @@ public interface ResonanceStore {
      * @return list of {@link ResonanceMatchDetailed} results
      */
     List<ResonanceMatchDetailed> queryDetailed(WavePattern query, int topK);
+
+    /**
+     * Queries the store and returns detailed match results using specified comparison options.
+     *
+     * @param query   the input pattern
+     * @param topK    the number of top detailed matches to return
+     * @param options comparison configuration including optional phase weights
+     * @return list of {@link ResonanceMatchDetailed} results
+     */
+    List<ResonanceMatchDetailed> queryDetailed(WavePattern query, int topK, CompareOptions options);
 
     /**
      * Computes a high-level interference map for the query pattern, aggregating detailed results.
