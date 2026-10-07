@@ -1080,29 +1080,38 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             return List.of();
         }
 
-        final int len = query.amplitude().length;
-        final int batchSize = tune.batchSizeForLen(len, activeTasksEstimate());
-        final int localCap = Math.max(topK, 8);
-        final boolean useFlat = compareManyFlatMethod != null;
+        try {
+            reader.acquire();
+        } catch (IllegalStateException e) {
+            return List.of();
+        }
+        try {
+            final int len = query.amplitude().length;
+            final int batchSize = tune.batchSizeForLen(len, activeTasksEstimate());
+            final int localCap = Math.max(topK, 8);
+            final boolean useFlat = compareManyFlatMethod != null;
 
-        final PriorityQueue<HeapItem> heap = new PriorityQueue<>(localCap, cmp);
-        final FlatBuffers fb = TL_FLAT.get();
-        fb.ensure(len, batchSize);
+            final PriorityQueue<HeapItem> heap = new PriorityQueue<>(localCap, cmp);
+            final FlatBuffers fb = TL_FLAT.get();
+            fb.ensure(len, batchSize);
 
-        int inBatch = 0;
-        for (String id : reader.allIds()) {
-            fb.ids[inBatch++] = id;
-            if (inBatch == batchSize) {
-                processMatchBatch(reader, query, queryId, topK, len, inBatch, useFlat, fb, heap, cmp, options);
-                inBatch = 0;
+            int inBatch = 0;
+            for (String id : reader.allIds()) {
+                fb.ids[inBatch++] = id;
+                if (inBatch == batchSize) {
+                    processMatchBatch(reader, query, queryId, topK, len, inBatch, useFlat, fb, heap, cmp, options);
+                    inBatch = 0;
+                }
             }
-        }
 
-        if (inBatch > 0) {
-            processMatchBatch(reader, query, queryId, topK, len, inBatch, useFlat, fb, heap, cmp, options);
-        }
+            if (inBatch > 0) {
+                processMatchBatch(reader, query, queryId, topK, len, inBatch, useFlat, fb, heap, cmp, options);
+            }
 
-        return new ArrayList<>(heap);
+            return new ArrayList<>(heap);
+        } finally {
+            reader.release();
+        }
     }
 
     private void processMatchBatch(CachedReader reader,
@@ -1293,7 +1302,16 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         CachedReader reader = readerCache.getOrLoad(loc.segmentName());
         if (reader == null) return;
 
-        if (!reader.readPatternFlat(id, fb.ampFlat, 0, fb.phaseFlat, 0, len)) return;
+        try {
+            reader.acquire();
+        } catch (IllegalStateException e) {
+            return;
+        }
+        try {
+            if (!reader.readPatternFlat(id, fb.ampFlat, 0, fb.phaseFlat, 0, len)) return;
+        } finally {
+            reader.release();
+        }
 
         WavePattern cand = new WavePattern(
                 java.util.Arrays.copyOf(fb.ampFlat, len),
@@ -1352,18 +1370,27 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             CachedReader reader = readerCache.getOrLoad(entry.getKey());
             if (reader == null) continue;
 
-            int inBatch = 0;
-            for (String id : entry.getValue()) {
-                fb.ids[inBatch++] = id;
-                if (inBatch == batchSize) {
+            try {
+                reader.acquire();
+            } catch (IllegalStateException e) {
+                continue;
+            }
+            try {
+                int inBatch = 0;
+                for (String id : entry.getValue()) {
+                    fb.ids[inBatch++] = id;
+                    if (inBatch == batchSize) {
+                        processMatchBatch(reader, query, queryId, topK, len,
+                                inBatch, useFlat, fb, heap, cmp, options);
+                        inBatch = 0;
+                    }
+                }
+                if (inBatch > 0) {
                     processMatchBatch(reader, query, queryId, topK, len,
                             inBatch, useFlat, fb, heap, cmp, options);
-                    inBatch = 0;
                 }
-            }
-            if (inBatch > 0) {
-                processMatchBatch(reader, query, queryId, topK, len,
-                        inBatch, useFlat, fb, heap, cmp, options);
+            } finally {
+                reader.release();
             }
         }
 
@@ -1929,7 +1956,14 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             if (loc != null) {
                 CachedReader reader = readerCache.get(loc.segmentName());
                 if (reader != null) {
-                    pattern = readNoSemaphore(reader, id);
+                    try {
+                        reader.acquire();
+                        try {
+                            pattern = readNoSemaphore(reader, id);
+                        } finally {
+                            reader.release();
+                        }
+                    } catch (IllegalStateException ignored) {}
                 }
             }
 

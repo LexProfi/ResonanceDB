@@ -99,7 +99,7 @@ public class CachedReader implements AutoCloseable {
             pos += totalSize;
         }
 
-        return new CachedReader(segmentPath, channel, mmap, offsetMap, lastOffset, fileSize);
+        return new CachedReader(segmentPath, channel, mmap, offsetMap, lastOffset, lastOffset);
     }
 
     public Set<String> allIds() {
@@ -221,6 +221,12 @@ public class CachedReader implements AutoCloseable {
         if (recordOffset == null) return false;
 
         int base = recordOffset.intValue();
+        int capacity = mmap.capacity();
+
+        // Bounds check: ensure full record fits within mapped region
+        int endOfPhase = base + HEADER_SIZE + 4 + expectedLen * 8 * 2;
+        if (base < 0 || base + HEADER_SIZE + 4 > capacity || endOfPhase > capacity) return false;
+
         int storedLen = mmap.getInt(base + 17);
         if (storedLen != expectedLen) return false;
 
