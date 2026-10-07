@@ -22,6 +22,7 @@ import ai.evacortex.resonancedb.core.storage.responce.ResonanceMatch;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.lang.reflect.Field;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
@@ -106,7 +107,7 @@ class WeightedPhaseBenchmark {
 
     @Test
     @DisplayName("Weighted phase routing: recall + latency validation")
-    void weightedRecallBenchmark() {
+    void weightedRecallBenchmark() throws Exception {
         printHeader();
 
         // ── Generate queries (hold-out, separate seed) ──────────────────
@@ -320,7 +321,11 @@ class WeightedPhaseBenchmark {
 
             // ── nProbe=K recall verification (should be ~1.0) ─────────
             System.out.println("\n  === nProbe=K (exact) recall per mask type ===");
-            System.setProperty("resonance.index.exactEquivalence", "true");
+            // exactEquivalence is a final field read at construction time;
+            // set it via reflection so queries use nProbe=Integer.MAX_VALUE.
+            Field eqField = WavePatternStoreImpl.class.getDeclaredField("exactEquivalence");
+            eqField.setAccessible(true);
+            eqField.set(store, true);
             System.out.printf("  %-25s  %8s  %8s  %8s%n", "mask type", "R@10", "R@50", "p50(ms)");
             System.out.println("  " + "-".repeat(60));
 
@@ -368,7 +373,7 @@ class WeightedPhaseBenchmark {
                 double p50 = lats[(int)(NUM_QUERIES * 0.50)] / 1e6;
                 System.out.printf("  %-25s  %8.4f  %8.4f  %8.1f%n", maskType.label, r10, r50, p50);
             }
-            System.setProperty("resonance.index.exactEquivalence", "false");
+            eqField.set(store, false);
 
             // ── Native fallback latency comparison ──────────────────────
             System.out.println("\n  === Kernel latency: default vs weighted ===");

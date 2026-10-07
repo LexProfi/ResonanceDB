@@ -100,7 +100,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
     private final boolean indexEnabled;
-    private final boolean exactEquivalence;
+    private boolean exactEquivalence;
     private final IvfCandidateSource ivfSource;
     private final DeltaIndex deltaIndex;
     private final Path centroidsPath;
@@ -1253,8 +1253,17 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         ivfCandidates.sort(Comparator.comparingDouble((PostingSidecar.ScoredCandidate sc) -> -sc.approxScore())
                 .thenComparing(PostingSidecar.ScoredCandidate::id));
 
-        int finalistCount = epsilonCutoffCount(ivfCandidates, topK,
-                phase1Epsilon(query.amplitude().length * 2), overfetchFloor);
+        int finalistCount;
+        boolean hasWeights = options != null && options.hasEffectivePhaseWeights();
+        if (hasWeights) {
+            // Weighted scoring changes rank order: sidecar approx scores are unweighted,
+            // so epsilon cutoff based on them would miss true weighted top-K.
+            // Re-score all IVF candidates with weighted kernel.
+            finalistCount = ivfCandidates.size();
+        } else {
+            finalistCount = epsilonCutoffCount(ivfCandidates, topK,
+                    phase1Epsilon(query.amplitude().length * 2), overfetchFloor);
+        }
 
         Comparator<HeapItem> cmp = HEAP_ORDER;
         PriorityQueue<HeapItem> heap = new PriorityQueue<>(Math.max(topK, 8), cmp);
