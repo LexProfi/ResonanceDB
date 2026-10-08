@@ -18,7 +18,6 @@ public final class ErrorMapper {
 
     public RestError map(Throwable t) {
 
-        // 400: explicit BadRequest
         if (t instanceof BadRequestException br) {
             return new RestError(
                     400,
@@ -26,7 +25,6 @@ public final class ErrorMapper {
             );
         }
 
-        // 400: JSON parse errors
         if (t instanceof JsonProcessingException jpe) {
             return new RestError(
                     400,
@@ -37,7 +35,6 @@ public final class ErrorMapper {
             );
         }
 
-        // 400: invalid pattern (domain validation)
         if (t instanceof InvalidWavePatternException iwpe) {
             return new RestError(
                     400,
@@ -45,7 +42,6 @@ public final class ErrorMapper {
             );
         }
 
-        // 409: duplicate
         if (t instanceof DuplicatePatternException dpe) {
             return new RestError(
                     409,
@@ -53,7 +49,6 @@ public final class ErrorMapper {
             );
         }
 
-        // 404: not found
         if (t instanceof PatternNotFoundException pnfe) {
             return new RestError(
                     404,
@@ -61,7 +56,6 @@ public final class ErrorMapper {
             );
         }
 
-        // Fallback: 500
         return new RestError(
                 500,
                 new ErrorResponse("internal_error", safeMsg(t))

@@ -35,10 +35,30 @@ public final class NativeCompare {
     private static final FunctionDescriptor DELTA_DESC = FunctionDescriptor.ofVoid(
             ADDRESS, ADDRESS, ADDRESS, ADDRESS, JAVA_INT, ADDRESS);
 
+    private static final FunctionDescriptor SCALAR_W_DESC = FunctionDescriptor.of(
+            JAVA_FLOAT, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS, JAVA_INT);
+
+    private static final FunctionDescriptor SCALAR_PF_DESC = FunctionDescriptor.of(
+            JAVA_FLOAT, ADDRESS, ADDRESS, JAVA_INT);
+
+    private static final FunctionDescriptor FLAT_W_DESC = FunctionDescriptor.ofVoid(
+            ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS, JAVA_INT, JAVA_INT, ADDRESS);
+
+    private static final FunctionDescriptor FLAT_PF_DESC = FunctionDescriptor.ofVoid(
+            ADDRESS, ADDRESS, JAVA_INT, JAVA_INT, ADDRESS);
+
+    private static final FunctionDescriptor DELTA_W_DESC = FunctionDescriptor.ofVoid(
+            ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS, JAVA_INT, ADDRESS);
+
     private static final MethodHandle SCALAR;
     private static final MethodHandle BATCH;
     private static final MethodHandle FLAT;
     private static final MethodHandle DELTA;
+    private static final MethodHandle SCALAR_WEIGHTED;
+    private static final MethodHandle SCALAR_PHASE_FREE;
+    private static final MethodHandle FLAT_WEIGHTED;
+    private static final MethodHandle FLAT_PHASE_FREE;
+    private static final MethodHandle DELTA_WEIGHTED;
 
     static {
         loadNativeLibrary("resonance");
@@ -48,6 +68,12 @@ public final class NativeCompare {
             BATCH  = LINKER.downcallHandle(lookup.find("compare_many").orElseThrow(),           BATCH_DESC);
             FLAT   = LINKER.downcallHandle(lookup.find("compare_many_flat").orElseThrow(),      FLAT_DESC);
             DELTA  = LINKER.downcallHandle(lookup.find("compare_with_phase_delta").orElseThrow(), DELTA_DESC);
+
+            SCALAR_WEIGHTED   = LINKER.downcallHandle(lookup.find("compare_wave_patterns_weighted").orElseThrow(), SCALAR_W_DESC);
+            SCALAR_PHASE_FREE = LINKER.downcallHandle(lookup.find("compare_wave_patterns_phase_free").orElseThrow(), SCALAR_PF_DESC);
+            FLAT_WEIGHTED     = LINKER.downcallHandle(lookup.find("compare_many_flat_weighted").orElseThrow(), FLAT_W_DESC);
+            FLAT_PHASE_FREE   = LINKER.downcallHandle(lookup.find("compare_many_flat_phase_free").orElseThrow(), FLAT_PF_DESC);
+            DELTA_WEIGHTED    = LINKER.downcallHandle(lookup.find("compare_with_phase_delta_weighted").orElseThrow(), DELTA_W_DESC);
         }
     }
 
@@ -164,6 +190,95 @@ public final class NativeCompare {
             MemorySegment p2  = arena.allocateFrom(JAVA_FLOAT, phase2);
             MemorySegment out = arena.allocate(JAVA_FLOAT, 2);
             DELTA.invoke(a1, p1, a2, p2, amp1.length, out);
+            return out.toArray(JAVA_FLOAT);
+        }
+    }
+
+    public static float compareWeighted(float[] amp1, float[] phase1,
+                                        float[] amp2, float[] phase2,
+                                        float[] weights) throws Throwable {
+        validate(amp1, phase1, amp2, phase2);
+        if (weights == null || weights.length != amp1.length)
+            throw new IllegalArgumentException("Weights length mismatch");
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment a1 = arena.allocateFrom(JAVA_FLOAT, amp1);
+            MemorySegment p1 = arena.allocateFrom(JAVA_FLOAT, phase1);
+            MemorySegment a2 = arena.allocateFrom(JAVA_FLOAT, amp2);
+            MemorySegment p2 = arena.allocateFrom(JAVA_FLOAT, phase2);
+            MemorySegment w  = arena.allocateFrom(JAVA_FLOAT, weights);
+            return (float) SCALAR_WEIGHTED.invoke(a1, p1, a2, p2, w, amp1.length);
+        }
+    }
+
+    public static float[] compareManyFlatWeighted(float[] ampQ, float[] phaseQ,
+                                                  float[] ampAll, float[] phaseAll,
+                                                  float[] weights,
+                                                  int len, int count) throws Throwable {
+        validateFlat(ampQ, phaseQ, ampAll, phaseAll, len, count);
+        if (weights == null || weights.length != len)
+            throw new IllegalArgumentException("Weights length mismatch");
+
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment qA   = arena.allocateFrom(JAVA_FLOAT, ampQ);
+            MemorySegment qP   = arena.allocateFrom(JAVA_FLOAT, phaseQ);
+            MemorySegment allA = arena.allocateFrom(JAVA_FLOAT, ampAll);
+            MemorySegment allP = arena.allocateFrom(JAVA_FLOAT, phaseAll);
+            MemorySegment wSeg = arena.allocateFrom(JAVA_FLOAT, weights);
+            MemorySegment out  = arena.allocate(JAVA_FLOAT, count);
+            FLAT_WEIGHTED.invoke(qA, qP, allA, allP, wSeg, len, count, out);
+            return out.toArray(JAVA_FLOAT);
+        }
+    }
+
+    public static float[] compareWithPhaseDeltaWeighted(float[] amp1, float[] phase1,
+                                                        float[] amp2, float[] phase2,
+                                                        float[] weights) throws Throwable {
+        validate(amp1, phase1, amp2, phase2);
+        if (weights == null || weights.length != amp1.length)
+            throw new IllegalArgumentException("Weights length mismatch");
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment a1  = arena.allocateFrom(JAVA_FLOAT, amp1);
+            MemorySegment p1  = arena.allocateFrom(JAVA_FLOAT, phase1);
+            MemorySegment a2  = arena.allocateFrom(JAVA_FLOAT, amp2);
+            MemorySegment p2  = arena.allocateFrom(JAVA_FLOAT, phase2);
+            MemorySegment wSeg = arena.allocateFrom(JAVA_FLOAT, weights);
+            MemorySegment out = arena.allocate(JAVA_FLOAT, 2);
+            DELTA_WEIGHTED.invoke(a1, p1, a2, p2, wSeg, amp1.length, out);
+            return out.toArray(JAVA_FLOAT);
+        }
+    }
+
+    public static float comparePhaseFree(float[] amp1, float[] amp2) throws Throwable {
+        if (amp1 == null || amp2 == null)
+            throw new IllegalArgumentException("Null array");
+        if (amp1.length == 0)
+            throw new IllegalArgumentException("Empty array");
+        if (amp1.length != amp2.length)
+            throw new IllegalArgumentException("Length mismatch");
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment a1 = arena.allocateFrom(JAVA_FLOAT, amp1);
+            MemorySegment a2 = arena.allocateFrom(JAVA_FLOAT, amp2);
+            return (float) SCALAR_PHASE_FREE.invoke(a1, a2, amp1.length);
+        }
+    }
+
+    public static float[] compareManyFlatPhaseFree(float[] ampQ,
+                                                   float[] ampAll,
+                                                   int len, int count) throws Throwable {
+        if (ampQ == null || ampAll == null)
+            throw new IllegalArgumentException("Null input array");
+        if (len <= 0) throw new IllegalArgumentException("len must be > 0");
+        if (count <= 0) throw new IllegalArgumentException("count must be > 0");
+        if (ampQ.length != len)
+            throw new IllegalArgumentException("Query vector length mismatch");
+        if (ampAll.length != (long) len * count)
+            throw new IllegalArgumentException("Database matrix length mismatch");
+
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment qA   = arena.allocateFrom(JAVA_FLOAT, ampQ);
+            MemorySegment allA = arena.allocateFrom(JAVA_FLOAT, ampAll);
+            MemorySegment out  = arena.allocate(JAVA_FLOAT, count);
+            FLAT_PHASE_FREE.invoke(qA, allA, len, count, out);
             return out.toArray(JAVA_FLOAT);
         }
     }

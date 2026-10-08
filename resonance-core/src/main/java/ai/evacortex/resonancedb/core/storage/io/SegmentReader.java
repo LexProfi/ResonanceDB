@@ -52,7 +52,7 @@ public final class SegmentReader implements AutoCloseable {
         try {
             this.channel = FileChannel.open(path, StandardOpenOption.READ);
 
-            verifyManifestVersion(path); // ← TODO: compare-and-swap manifest version check + mmap refresh if needed
+            verifyManifestVersion(path);
 
             this.mmap = Buffers.mmap(channel, FileChannel.MapMode.READ_ONLY, 0, channel.size());
 
@@ -204,7 +204,6 @@ public final class SegmentReader implements AutoCloseable {
 
 
     private static void verifyManifestVersion(Path path) {
-        // no-op for now
     }
 
 

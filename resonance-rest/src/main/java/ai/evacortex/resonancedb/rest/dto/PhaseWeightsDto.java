@@ -8,9 +8,14 @@
  */
 package ai.evacortex.resonancedb.rest.dto;
 
-public record QueryRequest(WavePatternDto query, Integer topK, PhaseWeightsDto phaseWeights) {
+public final class PhaseWeightsDto {
 
-    public QueryRequest(WavePatternDto query, Integer topK) {
-        this(query, topK, null);
+    public double[] weights;
+
+    public PhaseWeightsDto() {
+    }
+
+    public PhaseWeightsDto(double[] weights) {
+        this.weights = weights;
     }
 }

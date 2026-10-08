@@ -40,19 +40,26 @@ public final class NativeKernel implements ResonanceKernel {
             throw new IllegalArgumentException("Amplitude/phase length mismatch");
         }
 
-        if (options.ignorePhase()) {
-            return JAVA_FALLBACK.compare(a, b, options);
-        }
-
         final int len = a.amplitude().length;
         try {
+            if (options.ignorePhase()) {
+                float[] amp1 = ensureAndFill(TL_Q_AMP, a.amplitude(), len);
+                float[] amp2 = new float[len];
+                castCopy(b.amplitude(), amp2, 0, len);
+                return NativeCompare.comparePhaseFree(amp1, amp2);
+            }
+
             float[] amp1   = ensureAndFill(TL_Q_AMP,   a.amplitude(), len);
             float[] phase1 = ensureAndFill(TL_Q_PHASE, a.phase(),     len);
-
             float[] amp2   = new float[len];
             float[] phase2 = new float[len];
             castCopy(b.amplitude(), amp2,  0, len);
             castCopy(b.phase(),     phase2, 0, len);
+
+            if (options.hasEffectivePhaseWeights()) {
+                float[] weights = prepareWeights(options, len);
+                return NativeCompare.compareWeighted(amp1, phase1, amp2, phase2, weights);
+            }
 
             return NativeCompare.compare(amp1, phase1, amp2, phase2);
         } catch (Throwable e) {
@@ -72,37 +79,43 @@ public final class NativeKernel implements ResonanceKernel {
         Objects.requireNonNull(options, "CompareOptions must not be null");
 
         if (candidates.isEmpty()) return new float[0];
-        if (options.ignorePhase()) {
-            return JAVA_FALLBACK.compareMany(query, candidates, options);
-        }
 
         final int len = query.amplitude().length;
         final int count = candidates.size();
 
-        final boolean flatCompatible = candidates.stream()
-                .allMatch(c -> c.amplitude().length == len && c.phase().length == len);
-
         try {
+            if (options.ignorePhase()) {
+                return compareManyPhaseFree(query, candidates, len, count);
+            }
+
             final float[] ampQ   = ensureAndFill(TL_Q_AMP,   query.amplitude(), len);
             final float[] phaseQ = ensureAndFill(TL_Q_PHASE, query.phase(),     len);
+
+            final boolean flatCompatible = candidates.stream()
+                    .allMatch(c -> c.amplitude().length == len && c.phase().length == len);
+
+            if (options.hasEffectivePhaseWeights()) {
+                float[] weights = prepareWeights(options, len);
+                if (flatCompatible) {
+                    final int need = len * count;
+                    final float[] ampAll   = ensureCapacity(TL_FLAT_AMP,   need);
+                    final float[] phaseAll = ensureCapacity(TL_FLAT_PHASE, need);
+                    packFlat(candidates, ampAll, phaseAll, len, count);
+                    return NativeCompare.compareManyFlatWeighted(ampQ, phaseQ, ampAll, phaseAll, weights, len, count);
+                }
+                return scalarFallbackWeighted(ampQ, phaseQ, candidates, weights, len, count);
+            }
 
             if (flatCompatible) {
                 final int need = len * count;
                 final float[] ampAll   = ensureCapacity(TL_FLAT_AMP,   need);
                 final float[] phaseAll = ensureCapacity(TL_FLAT_PHASE, need);
-                int dstOff = 0;
-                for (int i = 0; i < count; i++) {
-                    WavePattern c = candidates.get(i);
-                    castCopy(c.amplitude(), ampAll,   dstOff, len);
-                    castCopy(c.phase(),     phaseAll, dstOff, len);
-                    dstOff += len;
-                }
+                packFlat(candidates, ampAll, phaseAll, len, count);
                 return NativeCompare.compareManyFlat(ampQ, phaseQ, ampAll, phaseAll, len, count);
             }
 
             final float[] out = new float[count];
             final int batchSize = CFG_BATCH;
-
             for (int start = 0; start < count; start += batchSize) {
                 final int n = Math.min(batchSize, count - start);
                 final float[][] ampArr = new float[n][];
@@ -116,7 +129,6 @@ public final class NativeKernel implements ResonanceKernel {
                     ampArr[i] = a;
                     phaseArr[i] = p;
                 }
-
                 float[] part = NativeCompare.compareMany(ampQ, phaseQ, ampArr, phaseArr);
                 System.arraycopy(part, 0, out, start, n);
             }
@@ -129,8 +141,14 @@ public final class NativeKernel implements ResonanceKernel {
 
     @Override
     public ComparisonResult compareWithPhaseDelta(WavePattern a, WavePattern b) {
+        return compareWithPhaseDelta(a, b, CompareOptions.defaultOptions());
+    }
+
+    @Override
+    public ComparisonResult compareWithPhaseDelta(WavePattern a, WavePattern b, CompareOptions options) {
         Objects.requireNonNull(a, "First pattern must not be null");
         Objects.requireNonNull(b, "Second pattern must not be null");
+        Objects.requireNonNull(options, "CompareOptions must not be null");
 
         if (a.amplitude().length != a.phase().length ||
                 b.amplitude().length != b.phase().length ||
@@ -147,10 +165,16 @@ public final class NativeKernel implements ResonanceKernel {
             castCopy(b.amplitude(), amp2, 0, len);
             castCopy(b.phase(),     phase2, 0, len);
 
+            if (options.hasEffectivePhaseWeights()) {
+                float[] weights = prepareWeights(options, len);
+                float[] out = NativeCompare.compareWithPhaseDeltaWeighted(amp1, phase1, amp2, phase2, weights);
+                return new ComparisonResult(out[0], out[1]);
+            }
+
             float[] out = NativeCompare.compareWithPhaseDelta(amp1, phase1, amp2, phase2);
             return new ComparisonResult(out[0], out[1]);
         } catch (Throwable e) {
-            return JAVA_FALLBACK.compareWithPhaseDelta(a, b);
+            return JAVA_FALLBACK.compareWithPhaseDelta(a, b, options);
         }
     }
 
@@ -174,5 +198,64 @@ public final class NativeKernel implements ResonanceKernel {
         for (int i = 0; i < len; i++) {
             dst[dstOff + i] = (float) src[i];
         }
+    }
+
+    private static float[] prepareWeights(CompareOptions options, int len) {
+        double[] raw = options.phaseWeights().rawWeights();
+        float[] w = new float[len];
+        for (int i = 0; i < len; i++) {
+            w[i] = (float) raw[i];
+        }
+        return w;
+    }
+
+    private static void packFlat(List<WavePattern> candidates, float[] ampAll, float[] phaseAll,
+                                 int len, int count) {
+        int dstOff = 0;
+        for (int i = 0; i < count; i++) {
+            WavePattern c = candidates.get(i);
+            castCopy(c.amplitude(), ampAll,   dstOff, len);
+            castCopy(c.phase(),     phaseAll, dstOff, len);
+            dstOff += len;
+        }
+    }
+
+    private float[] compareManyPhaseFree(WavePattern query, List<WavePattern> candidates,
+                                         int len, int count) throws Throwable {
+        final float[] ampQ = ensureAndFill(TL_Q_AMP, query.amplitude(), len);
+        final boolean flatCompatible = candidates.stream()
+                .allMatch(c -> c.amplitude().length == len);
+        if (flatCompatible) {
+            final int need = len * count;
+            final float[] ampAll = ensureCapacity(TL_FLAT_AMP, need);
+            int dstOff = 0;
+            for (int i = 0; i < count; i++) {
+                castCopy(candidates.get(i).amplitude(), ampAll, dstOff, len);
+                dstOff += len;
+            }
+            return NativeCompare.compareManyFlatPhaseFree(ampQ, ampAll, len, count);
+        }
+        float[] out = new float[count];
+        for (int i = 0; i < count; i++) {
+            float[] amp2 = new float[len];
+            castCopy(candidates.get(i).amplitude(), amp2, 0, len);
+            out[i] = NativeCompare.comparePhaseFree(ampQ, amp2);
+        }
+        return out;
+    }
+
+    private float[] scalarFallbackWeighted(float[] ampQ, float[] phaseQ,
+                                           List<WavePattern> candidates,
+                                           float[] weights, int len, int count) throws Throwable {
+        float[] out = new float[count];
+        for (int i = 0; i < count; i++) {
+            WavePattern c = candidates.get(i);
+            float[] amp2 = new float[len];
+            float[] phase2 = new float[len];
+            castCopy(c.amplitude(), amp2, 0, len);
+            castCopy(c.phase(), phase2, 0, len);
+            out[i] = NativeCompare.compareWeighted(ampQ, phaseQ, amp2, phase2, weights);
+        }
+        return out;
     }
 }

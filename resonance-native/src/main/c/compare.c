@@ -534,6 +534,500 @@ EXPORT void compare_with_phase_delta(const float* restrict A1, const float* rest
 #endif
 }
 
+/* ── Weighted phase participation: G[i] = (1 - w[i]) + w[i] * cos(Δφ[i]) ── */
+
+static float compare_scalar_weighted(const float *a1, const float *p1,
+                                     const float *a2, const float *p2,
+                                     const float *w, int len) {
+    float EA = 0.0f, EB = 0.0f, cross = 0.0f;
+    for (int i = 0; i < len; ++i) {
+        const float ai = a1[i], aj = a2[i];
+        EA += ai * ai;
+        EB += aj * aj;
+        const float dphi = p2[i] - p1[i];
+        const float G = (1.0f - w[i]) + w[i] * cosf(dphi);
+        cross += ai * aj * G;
+    }
+    const float denom = EA + EB;
+    if (denom <= MIN_ENERGY) return 0.0f;
+    const float IF   = EA + EB + 2.0f * cross;
+    const float base = 0.5f * (IF / denom);
+    const float ampF = (EA > MIN_ENERGY && EB > MIN_ENERGY)
+                     ? 2.0f * sqrtf(EA * EB) / denom : 0.0f;
+    return base * ampF;
+}
+
+EXPORT float compare_wave_patterns_weighted(const float *a1, const float *p1,
+                                            const float *a2, const float *p2,
+                                            const float *weights, int len)
+{
+    if (!a1 || !p1 || !a2 || !p2 || !weights || len <= 0 || len > (int)MAX_LEN)
+        return 0.0f;
+
+#if defined(__AVX2__)
+    const int step = 8;
+    const __m256 ones = _mm256_set1_ps(1.0f);
+    int i = 0;
+
+    __m256 EA_v = _mm256_setzero_ps();
+    __m256 EB_v = _mm256_setzero_ps();
+    __m256 CR_v = _mm256_setzero_ps();
+
+    for (; i <= len - step; i += step) {
+        __m256 va1 = _mm256_loadu_ps(a1 + i);
+        __m256 vp1 = _mm256_loadu_ps(p1 + i);
+        __m256 va2 = _mm256_loadu_ps(a2 + i);
+        __m256 vp2 = _mm256_loadu_ps(p2 + i);
+        __m256 vw  = _mm256_loadu_ps(weights + i);
+
+        EA_v = _mm256_fmadd_ps(va1, va1, EA_v);
+        EB_v = _mm256_fmadd_ps(va2, va2, EB_v);
+
+        Sleef___m256_2 scQ = Sleef_sincosf8_u35avx2(vp1);
+        Sleef___m256_2 sc2 = Sleef_sincosf8_u35avx2(vp2);
+        __m256 cos_delta = _mm256_fmadd_ps(sc2.y, scQ.y, _mm256_mul_ps(sc2.x, scQ.x));
+
+        /* G = (1 - w) + w * cos_delta = fmadd(w, cos_delta, 1 - w) */
+        __m256 G = _mm256_fmadd_ps(vw, cos_delta, _mm256_sub_ps(ones, vw));
+
+        __m256 vA1A2 = _mm256_mul_ps(va1, va2);
+        CR_v = _mm256_fmadd_ps(vA1A2, G, CR_v);
+    }
+
+    float EA    = hsum256_ps(EA_v);
+    float EB    = hsum256_ps(EB_v);
+    float cross = hsum256_ps(CR_v);
+
+    /* scalar tail */
+    for (; i < len; ++i) {
+        const float ai = a1[i], aj = a2[i];
+        EA += ai * ai;
+        EB += aj * aj;
+        const float dphi = p2[i] - p1[i];
+        const float G = (1.0f - weights[i]) + weights[i] * cosf(dphi);
+        cross += ai * aj * G;
+    }
+
+    const float denom = EA + EB;
+    if (denom <= MIN_ENERGY) { _mm256_zeroupper(); return 0.0f; }
+    const float IF   = EA + EB + 2.0f * cross;
+    const float base = 0.5f * (IF / denom);
+    const float ampF = (EA > MIN_ENERGY && EB > MIN_ENERGY)
+                     ? 2.0f * sqrtf(EA * EB) / denom : 0.0f;
+    _mm256_zeroupper();
+    return base * ampF;
+#else
+    return compare_scalar_weighted(a1, p1, a2, p2, weights, len);
+#endif
+}
+
+/* ── Phase-free (amplitude-only): no cos, no phase arrays needed ── */
+
+static float compare_scalar_phase_free(const float *a1, const float *a2, int len) {
+    float EA = 0.0f, EB = 0.0f, cross = 0.0f;
+    for (int i = 0; i < len; ++i) {
+        const float ai = a1[i], aj = a2[i];
+        EA += ai * ai;
+        EB += aj * aj;
+        cross += ai * aj;
+    }
+    const float denom = EA + EB;
+    if (denom <= MIN_ENERGY) return 0.0f;
+    const float IF   = EA + EB + 2.0f * cross;
+    const float base = 0.5f * (IF / denom);
+    const float ampF = (EA > MIN_ENERGY && EB > MIN_ENERGY)
+                     ? 2.0f * sqrtf(EA * EB) / denom : 0.0f;
+    return base * ampF;
+}
+
+EXPORT float compare_wave_patterns_phase_free(const float *a1, const float *a2,
+                                              int len)
+{
+    if (!a1 || !a2 || len <= 0 || len > (int)MAX_LEN)
+        return 0.0f;
+
+#if defined(__AVX2__)
+    const int step = 8;
+    int i = 0;
+
+    __m256 EA_v = _mm256_setzero_ps();
+    __m256 EB_v = _mm256_setzero_ps();
+    __m256 CR_v = _mm256_setzero_ps();
+
+    for (; i <= len - step; i += step) {
+        __m256 va1 = _mm256_loadu_ps(a1 + i);
+        __m256 va2 = _mm256_loadu_ps(a2 + i);
+
+        EA_v = _mm256_fmadd_ps(va1, va1, EA_v);
+        EB_v = _mm256_fmadd_ps(va2, va2, EB_v);
+        CR_v = _mm256_fmadd_ps(va1, va2, CR_v);
+    }
+
+    float EA    = hsum256_ps(EA_v);
+    float EB    = hsum256_ps(EB_v);
+    float cross = hsum256_ps(CR_v);
+
+    for (; i < len; ++i) {
+        const float ai = a1[i], aj = a2[i];
+        EA += ai * ai;
+        EB += aj * aj;
+        cross += ai * aj;
+    }
+
+    const float denom = EA + EB;
+    if (denom <= MIN_ENERGY) { _mm256_zeroupper(); return 0.0f; }
+    const float IF   = EA + EB + 2.0f * cross;
+    const float base = 0.5f * (IF / denom);
+    const float ampF = (EA > MIN_ENERGY && EB > MIN_ENERGY)
+                     ? 2.0f * sqrtf(EA * EB) / denom : 0.0f;
+    _mm256_zeroupper();
+    return base * ampF;
+#else
+    return compare_scalar_phase_free(a1, a2, len);
+#endif
+}
+
+/* ── Batch weighted (flat layout) ── */
+
+EXPORT void compare_many_flat_weighted(
+    const float* restrict ampQ, const float* restrict phaseQ,
+    const float* restrict ampAll, const float* restrict phaseAll,
+    const float* restrict weights,
+    int len, int count, float* restrict out)
+{
+    if (!ampQ || !phaseQ || !ampAll || !phaseAll || !weights || !out ||
+        len <= 0 || count <= 0 || len > (int)MAX_LEN || count > (int)MAX_COUNT)
+        return;
+
+#if defined(__AVX2__)
+    const int step = 8;
+    const __m256 ones = _mm256_set1_ps(1.0f);
+
+    /* precompute query energy */
+    int i = 0;
+    __m256 EA0 = _mm256_setzero_ps(), EA1 = _mm256_setzero_ps();
+    for (; i <= len - 2*step; i += 2*step) {
+        __m256 va0 = _mm256_loadu_ps(ampQ + i);
+        __m256 va1 = _mm256_loadu_ps(ampQ + i + step);
+        EA0 = _mm256_fmadd_ps(va0, va0, EA0);
+        EA1 = _mm256_fmadd_ps(va1, va1, EA1);
+    }
+    __m256 EA_v = _mm256_add_ps(EA0, EA1);
+    for (; i < len; ++i) {
+        __m256 va = _mm256_set1_ps(ampQ[i]);
+        EA_v = _mm256_fmadd_ps(va, va, EA_v);
+    }
+    float EA = hsum256_ps(EA_v);
+
+    OMP_FOR(omp parallel for schedule(static) if (count >= 64))
+    for (int k = 0; k < count; ++k) {
+        const float* a2 = ampAll   + (size_t)k * len;
+        const float* p2 = phaseAll + (size_t)k * len;
+
+        int j = 0;
+        __m256 EB0_ = _mm256_setzero_ps(), EB1_ = _mm256_setzero_ps();
+        __m256 CR0_ = _mm256_setzero_ps(), CR1_ = _mm256_setzero_ps();
+
+        for (; j <= len - 2*step; j += 2*step) {
+            __m256 va1_0 = _mm256_loadu_ps(ampQ + j);
+            __m256 vp1_0 = _mm256_loadu_ps(phaseQ + j);
+            __m256 va2_0 = _mm256_loadu_ps(a2 + j);
+            __m256 vp2_0 = _mm256_loadu_ps(p2 + j);
+            __m256 vw_0  = _mm256_loadu_ps(weights + j);
+
+            Sleef___m256_2 scQ0 = Sleef_sincosf8_u35avx2(vp1_0);
+            Sleef___m256_2 sc20 = Sleef_sincosf8_u35avx2(vp2_0);
+            __m256 cos_d0 = _mm256_fmadd_ps(sc20.y, scQ0.y, _mm256_mul_ps(sc20.x, scQ0.x));
+
+            EB0_ = _mm256_fmadd_ps(va2_0, va2_0, EB0_);
+            __m256 G0 = _mm256_fmadd_ps(vw_0, cos_d0, _mm256_sub_ps(ones, vw_0));
+            __m256 vA1A20 = _mm256_mul_ps(va1_0, va2_0);
+            CR0_ = _mm256_fmadd_ps(vA1A20, G0, CR0_);
+
+            __m256 va1_1 = _mm256_loadu_ps(ampQ + j + step);
+            __m256 vp1_1 = _mm256_loadu_ps(phaseQ + j + step);
+            __m256 va2_1 = _mm256_loadu_ps(a2 + j + step);
+            __m256 vp2_1 = _mm256_loadu_ps(p2 + j + step);
+            __m256 vw_1  = _mm256_loadu_ps(weights + j + step);
+
+            Sleef___m256_2 scQ1 = Sleef_sincosf8_u35avx2(vp1_1);
+            Sleef___m256_2 sc21 = Sleef_sincosf8_u35avx2(vp2_1);
+            __m256 cos_d1 = _mm256_fmadd_ps(sc21.y, scQ1.y, _mm256_mul_ps(sc21.x, scQ1.x));
+
+            EB1_ = _mm256_fmadd_ps(va2_1, va2_1, EB1_);
+            __m256 G1 = _mm256_fmadd_ps(vw_1, cos_d1, _mm256_sub_ps(ones, vw_1));
+            __m256 vA1A21 = _mm256_mul_ps(va1_1, va2_1);
+            CR1_ = _mm256_fmadd_ps(vA1A21, G1, CR1_);
+        }
+
+        __m256 EB_v_ = _mm256_add_ps(EB0_, EB1_);
+        __m256 CR_v_ = _mm256_add_ps(CR0_, CR1_);
+
+        for (; j < len; ++j) {
+            const float a1j = ampQ[j], a2j = a2[j];
+            EB_v_ = _mm256_add_ps(EB_v_, _mm256_set1_ps(a2j * a2j));
+            const float dphi = p2[j] - phaseQ[j];
+            const float G = (1.0f - weights[j]) + weights[j] * cosf(dphi);
+            CR_v_ = _mm256_add_ps(CR_v_, _mm256_set1_ps(a1j * a2j * G));
+        }
+
+        float EB = hsum256_ps(EB_v_);
+        float cross = hsum256_ps(CR_v_);
+
+        const float denom = EA + EB;
+        float score = 0.0f;
+        if (denom > MIN_ENERGY) {
+            const float IF   = EA + EB + 2.0f * cross;
+            const float base = 0.5f * (IF / denom);
+            const float ampF = (EA > MIN_ENERGY && EB > MIN_ENERGY)
+                             ? 2.0f * sqrtf(EA * EB) / denom : 0.0f;
+            score = base * ampF;
+        }
+        out[k] = score;
+    }
+
+    _mm256_zeroupper();
+#else
+    float EA = 0.0f;
+    for (int i = 0; i < len; ++i) EA += ampQ[i] * ampQ[i];
+
+    OMP_FOR(omp parallel for schedule(static) if (count >= 64))
+    for (int k = 0; k < count; ++k) {
+        const float* a2 = ampAll   + (size_t)k * len;
+        const float* p2 = phaseAll + (size_t)k * len;
+        float EB = 0.0f, cross = 0.0f;
+        for (int j = 0; j < len; ++j) {
+            const float a1j = ampQ[j], a2j = a2[j];
+            EB += a2j * a2j;
+            const float dphi = p2[j] - phaseQ[j];
+            const float G = (1.0f - weights[j]) + weights[j] * cosf(dphi);
+            cross += a1j * a2j * G;
+        }
+        const float denom = EA + EB;
+        float score = 0.0f;
+        if (denom > MIN_ENERGY) {
+            const float IF   = EA + EB + 2.0f * cross;
+            const float base = 0.5f * (IF / denom);
+            const float ampF = (EA > MIN_ENERGY && EB > MIN_ENERGY)
+                             ? 2.0f * sqrtf(EA * EB) / denom : 0.0f;
+            score = base * ampF;
+        }
+        out[k] = score;
+    }
+#endif
+}
+
+/* ── Batch phase-free (flat layout) ── */
+
+EXPORT void compare_many_flat_phase_free(
+    const float* restrict ampQ,
+    const float* restrict ampAll,
+    int len, int count, float* restrict out)
+{
+    if (!ampQ || !ampAll || !out ||
+        len <= 0 || count <= 0 || len > (int)MAX_LEN || count > (int)MAX_COUNT)
+        return;
+
+#if defined(__AVX2__)
+    const int step = 8;
+
+    int i = 0;
+    __m256 EA0 = _mm256_setzero_ps(), EA1 = _mm256_setzero_ps();
+    for (; i <= len - 2*step; i += 2*step) {
+        __m256 va0 = _mm256_loadu_ps(ampQ + i);
+        __m256 va1 = _mm256_loadu_ps(ampQ + i + step);
+        EA0 = _mm256_fmadd_ps(va0, va0, EA0);
+        EA1 = _mm256_fmadd_ps(va1, va1, EA1);
+    }
+    __m256 EA_v = _mm256_add_ps(EA0, EA1);
+    for (; i < len; ++i) {
+        __m256 va = _mm256_set1_ps(ampQ[i]);
+        EA_v = _mm256_fmadd_ps(va, va, EA_v);
+    }
+    float EA = hsum256_ps(EA_v);
+
+    OMP_FOR(omp parallel for schedule(static) if (count >= 64))
+    for (int k = 0; k < count; ++k) {
+        const float* a2 = ampAll + (size_t)k * len;
+
+        int j = 0;
+        __m256 EB0_ = _mm256_setzero_ps(), EB1_ = _mm256_setzero_ps();
+        __m256 CR0_ = _mm256_setzero_ps(), CR1_ = _mm256_setzero_ps();
+
+        for (; j <= len - 2*step; j += 2*step) {
+            __m256 va1_0 = _mm256_loadu_ps(ampQ + j);
+            __m256 va2_0 = _mm256_loadu_ps(a2 + j);
+            EB0_ = _mm256_fmadd_ps(va2_0, va2_0, EB0_);
+            CR0_ = _mm256_fmadd_ps(va1_0, va2_0, CR0_);
+
+            __m256 va1_1 = _mm256_loadu_ps(ampQ + j + step);
+            __m256 va2_1 = _mm256_loadu_ps(a2 + j + step);
+            EB1_ = _mm256_fmadd_ps(va2_1, va2_1, EB1_);
+            CR1_ = _mm256_fmadd_ps(va1_1, va2_1, CR1_);
+        }
+
+        __m256 EB_v_ = _mm256_add_ps(EB0_, EB1_);
+        __m256 CR_v_ = _mm256_add_ps(CR0_, CR1_);
+
+        for (; j < len; ++j) {
+            const float a1j = ampQ[j], a2j = a2[j];
+            EB_v_ = _mm256_add_ps(EB_v_, _mm256_set1_ps(a2j * a2j));
+            CR_v_ = _mm256_add_ps(CR_v_, _mm256_set1_ps(a1j * a2j));
+        }
+
+        float EB = hsum256_ps(EB_v_);
+        float cross = hsum256_ps(CR_v_);
+
+        const float denom = EA + EB;
+        float score = 0.0f;
+        if (denom > MIN_ENERGY) {
+            const float IF   = EA + EB + 2.0f * cross;
+            const float base = 0.5f * (IF / denom);
+            const float ampF = (EA > MIN_ENERGY && EB > MIN_ENERGY)
+                             ? 2.0f * sqrtf(EA * EB) / denom : 0.0f;
+            score = base * ampF;
+        }
+        out[k] = score;
+    }
+
+    _mm256_zeroupper();
+#else
+    float EA = 0.0f;
+    for (int i = 0; i < len; ++i) EA += ampQ[i] * ampQ[i];
+
+    OMP_FOR(omp parallel for schedule(static) if (count >= 64))
+    for (int k = 0; k < count; ++k) {
+        const float* a2 = ampAll + (size_t)k * len;
+        float EB = 0.0f, cross = 0.0f;
+        for (int j = 0; j < len; ++j) {
+            const float a1j = ampQ[j], a2j = a2[j];
+            EB    += a2j * a2j;
+            cross += a1j * a2j;
+        }
+        const float denom = EA + EB;
+        float score = 0.0f;
+        if (denom > MIN_ENERGY) {
+            const float IF   = EA + EB + 2.0f * cross;
+            const float base = 0.5f * (IF / denom);
+            const float ampF = (EA > MIN_ENERGY && EB > MIN_ENERGY)
+                             ? 2.0f * sqrtf(EA * EB) / denom : 0.0f;
+            score = base * ampF;
+        }
+        out[k] = score;
+    }
+#endif
+}
+
+/* ── Weighted compare with phase delta ── */
+
+EXPORT void compare_with_phase_delta_weighted(
+    const float* restrict A1, const float* restrict P1,
+    const float* restrict A2, const float* restrict P2,
+    const float* restrict weights,
+    int len, float* restrict out)
+{
+    if (!out) return;
+    out[0] = out[1] = 0.0f;
+    if (!A1 || !P1 || !A2 || !P2 || !weights || len <= 0 || len > (int)MAX_LEN)
+        return;
+
+#if defined(__AVX2__)
+    const int step = 8;
+    const __m256 ones = _mm256_set1_ps(1.0f);
+    int i = 0;
+
+    __m256 EA_v = _mm256_setzero_ps();
+    __m256 EB_v = _mm256_setzero_ps();
+    __m256 CR_v = _mm256_setzero_ps();
+    __m256 SIN_v = _mm256_setzero_ps();
+    __m256 COS_v = _mm256_setzero_ps();
+    __m256 WS_v  = _mm256_setzero_ps();
+
+    for (; i <= len - step; i += step) {
+        __m256 a1_v = _mm256_loadu_ps(A1 + i);
+        __m256 a2_v = _mm256_loadu_ps(A2 + i);
+        __m256 p1_v = _mm256_loadu_ps(P1 + i);
+        __m256 p2_v = _mm256_loadu_ps(P2 + i);
+        __m256 vw   = _mm256_loadu_ps(weights + i);
+
+        EA_v = _mm256_fmadd_ps(a1_v, a1_v, EA_v);
+        EB_v = _mm256_fmadd_ps(a2_v, a2_v, EB_v);
+
+        __m256 delta = _mm256_sub_ps(p2_v, p1_v);
+        Sleef___m256_2 sc = Sleef_sincosf8_u10avx2(delta);
+        __m256 sin_d = sc.x;
+        __m256 cos_d = sc.y;
+
+        /* G = (1-w) + w*cos(delta) */
+        __m256 G = _mm256_fmadd_ps(vw, cos_d, _mm256_sub_ps(ones, vw));
+        __m256 vA1A2 = _mm256_mul_ps(a1_v, a2_v);
+        CR_v = _mm256_fmadd_ps(vA1A2, G, CR_v);
+
+        /* weighted circular mean accumulators: w*sin, w*cos, sum(w) */
+        SIN_v = _mm256_fmadd_ps(vw, sin_d, SIN_v);
+        COS_v = _mm256_fmadd_ps(vw, cos_d, COS_v);
+        WS_v  = _mm256_add_ps(WS_v, vw);
+    }
+
+    float EA       = hsum256_ps(EA_v);
+    float EB       = hsum256_ps(EB_v);
+    float cross    = hsum256_ps(CR_v);
+    float sinSum   = hsum256_ps(SIN_v);
+    float cosSum   = hsum256_ps(COS_v);
+    float weightSum = hsum256_ps(WS_v);
+
+    /* scalar tail */
+    for (; i < len; ++i) {
+        const float a = A1[i], b = A2[i];
+        EA += a * a;
+        EB += b * b;
+        const float dphi = P2[i] - P1[i];
+        const float cd = cosf(dphi);
+        const float sd = sinf(dphi);
+        const float G = (1.0f - weights[i]) + weights[i] * cd;
+        cross   += a * b * G;
+        sinSum  += weights[i] * sd;
+        cosSum  += weights[i] * cd;
+        weightSum += weights[i];
+    }
+
+    const float denom = EA + EB;
+    if (denom > MIN_ENERGY) {
+        const float IF   = EA + EB + 2.0f * cross;
+        const float ampF = (EA > MIN_ENERGY && EB > MIN_ENERGY)
+                         ? 2.0f * sqrtf(EA * EB) / denom : 0.0f;
+        out[0] = 0.5f * (IF / denom) * ampF;
+        out[1] = (weightSum > 0.0f) ? atan2f(sinSum, cosSum) : 0.0f;
+    }
+
+    _mm256_zeroupper();
+#else
+    float EA = 0.0f, EB = 0.0f, cross = 0.0f;
+    float sinSum = 0.0f, cosSum = 0.0f, weightSum = 0.0f;
+    for (int i = 0; i < len; ++i) {
+        const float a = A1[i], b = A2[i];
+        EA += a * a;
+        EB += b * b;
+        const float dphi = P2[i] - P1[i];
+        const float cd = cosf(dphi);
+        const float sd = sinf(dphi);
+        const float G = (1.0f - weights[i]) + weights[i] * cd;
+        cross += a * b * G;
+        sinSum += weights[i] * sd;
+        cosSum += weights[i] * cd;
+        weightSum += weights[i];
+    }
+    const float denom = EA + EB;
+    if (denom > MIN_ENERGY) {
+        const float IF   = EA + EB + 2.0f * cross;
+        const float ampF = (EA > MIN_ENERGY && EB > MIN_ENERGY)
+                         ? 2.0f * sqrtf(EA * EB) / denom : 0.0f;
+        out[0] = 0.5f * (IF / denom) * ampF;
+        out[1] = (weightSum > 0.0f) ? atan2f(sinSum, cosSum) : 0.0f;
+    }
+#endif
+}
+
 #ifdef __cplusplus
 }
 #endif

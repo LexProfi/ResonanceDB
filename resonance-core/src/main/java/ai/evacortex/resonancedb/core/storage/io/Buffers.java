@@ -21,7 +21,6 @@ import java.nio.channels.FileChannel;
 @SuppressWarnings({"removal", "UnsafeUsage"})
 final class Buffers {
 
-    //TODO wait JEP 454
     private static final Unsafe UNSAFE;
     private static final java.lang.reflect.Method INVOKE_CLEANER;
 

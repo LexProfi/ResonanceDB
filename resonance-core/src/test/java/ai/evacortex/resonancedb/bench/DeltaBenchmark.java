@@ -149,7 +149,6 @@ class DeltaBenchmark {
         System.out.println("--- Legacy insert throughput (no WAL) ---");
 
         System.setProperty("resonance.index.enabled", "false");
-        // WAL disabled by default
 
         Path storeDir = tempDir.resolve("legacy");
         WavePatternStoreImpl store = new WavePatternStoreImpl(storeDir, DIM, runtime);
@@ -189,25 +188,21 @@ class DeltaBenchmark {
         WavePatternStoreImpl store = new WavePatternStoreImpl(storeDir, DIM, runtime);
 
         try {
-            // Insert all into delta (no seal)
             Random rng = new Random(SEED + 3);
             for (int i = 0; i < BENCH_N; i++) {
                 store.insert(randomPattern(rng, DIM), Map.of());
             }
 
-            // Generate queries
             Random queryRng = new Random(SEED + 9999);
             WavePattern[] queries = new WavePattern[WARMUP_QUERIES + MEASURE_QUERIES];
             for (int i = 0; i < queries.length; i++) {
                 queries[i] = randomPattern(queryRng, DIM);
             }
 
-            // Warmup
             for (int i = 0; i < WARMUP_QUERIES; i++) {
                 store.query(queries[i], TOP_K);
             }
 
-            // Measure
             long[] latenciesNs = new long[MEASURE_QUERIES];
             for (int i = 0; i < MEASURE_QUERIES; i++) {
                 long t0 = System.nanoTime();
@@ -225,13 +220,11 @@ class DeltaBenchmark {
             System.out.printf("  query delta (topK=%d, deltaSize=%d): p50=%.1f ms, p90=%.1f ms, p99=%.1f ms, mean=%.1f ms%n",
                     TOP_K, BENCH_N, p50, p90, p99, mean);
 
-            // Seal and measure again
             long sealStart = System.nanoTime();
             store.sealDelta();
             long sealElapsed = System.nanoTime() - sealStart;
             System.out.printf("  seal: %.0f ms%n", sealElapsed / 1_000_000.0);
 
-            // Query after seal
             for (int i = 0; i < WARMUP_QUERIES; i++) {
                 store.query(queries[i], TOP_K);
             }
@@ -269,13 +262,12 @@ class DeltaBenchmark {
         System.setProperty("resonance.delta.sealThreshold", String.valueOf(n + 100));
         System.setProperty("resonance.delta.maxEntries", String.valueOf(n + 500));
         System.setProperty("resonance.index.enabled", "true");
-        System.setProperty("resonance.index.l2.enabled", "false"); // L1 only for speed
+        System.setProperty("resonance.index.l2.enabled", "false");
 
         Path storeDir = tempDir.resolve("delta-ivf");
         WavePatternStoreImpl store = new WavePatternStoreImpl(storeDir, DIM, runtime);
 
         try {
-            // ── Phase 1: Bulk insert via delta ──────────────────────────
             Random rng = new Random(SEED + 10);
             long insertStart = System.nanoTime();
             for (int i = 0; i < n; i++) {
@@ -285,7 +277,6 @@ class DeltaBenchmark {
             System.out.printf("  insert %d: %.0f ms (%.0f/sec)%n",
                     n, insertElapsed / 1e6, n / (insertElapsed / 1e9));
 
-            // ── Phase 2: Query while in delta (no index yet) ────────────
             Random queryRng = new Random(SEED + 8888);
             WavePattern[] queries = new WavePattern[WARMUP_QUERIES + MEASURE_QUERIES];
             for (int i = 0; i < queries.length; i++) {
@@ -303,7 +294,6 @@ class DeltaBenchmark {
             System.out.printf("  query (delta, pre-seal): p50=%.1f ms, p99=%.1f ms%n",
                     deltaLatencies[50] / 1e6, deltaLatencies[99] / 1e6);
 
-            // ── Phase 3: Seal + Index rebuild ───────────────────────────
             long sealStart = System.nanoTime();
             store.sealDelta();
             long sealElapsed = System.nanoTime() - sealStart;
@@ -314,7 +304,6 @@ class DeltaBenchmark {
             long indexElapsed = System.nanoTime() - indexStart;
             System.out.printf("  index rebuild: %.0f ms%n", indexElapsed / 1e6);
 
-            // ── Phase 4: Query with IVF ─────────────────────────────────
             for (int i = 0; i < WARMUP_QUERIES; i++) store.query(queries[i], TOP_K);
             long[] ivfLatencies = new long[MEASURE_QUERIES];
             for (int i = 0; i < MEASURE_QUERIES; i++) {
@@ -337,8 +326,6 @@ class DeltaBenchmark {
             System.clearProperty("resonance.index.l2.enabled");
         }
     }
-
-    // ─── Helpers ────────────────────────────────────────────────────────
 
     private static WavePattern randomPattern(Random rng, int dim) {
         double[] amp = new double[dim];

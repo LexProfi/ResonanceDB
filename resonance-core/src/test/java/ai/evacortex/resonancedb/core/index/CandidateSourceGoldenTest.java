@@ -53,50 +53,42 @@ class CandidateSourceGoldenTest {
             Random rng = new Random(SEED);
             Set<String> insertedIds = new LinkedHashSet<>();
 
-            // Insert N patterns
             for (int i = 0; i < N; i++) {
                 WavePattern p = randomPattern(rng, DIM);
                 try {
                     String id = store.insert(p, Map.of());
                     insertedIds.add(id);
                 } catch (Exception e) {
-                    // skip duplicates
                 }
             }
 
             assertTrue(insertedIds.size() >= N * 0.95,
                     "At least 95% of patterns should be unique: got " + insertedIds.size());
 
-            // Run queries through the store (current pipeline)
             for (int q = 0; q < QUERIES; q++) {
                 WavePattern query = randomPattern(rng, DIM);
                 List<ResonanceMatch> storeResults = store.query(query, TOP_K);
 
-                // Verify all returned IDs are from our inserted set
                 for (ResonanceMatch match : storeResults) {
                     assertTrue(insertedIds.contains(match.id()),
                             "Query result ID must be from inserted set: " + match.id());
                 }
 
-                // Verify ordering: descending by energy
                 for (int i = 1; i < storeResults.size(); i++) {
                     assertTrue(storeResults.get(i - 1).energy() >= storeResults.get(i).energy(),
                             "Results should be ordered by descending energy at index " + i);
                 }
             }
 
-            // Verify queryDetailed returns same IDs as query
             Random rng2 = new Random(SEED + 100);
             for (int q = 0; q < QUERIES; q++) {
                 WavePattern query = randomPattern(rng2, DIM);
                 List<ResonanceMatch> simpleResults = store.query(query, TOP_K);
                 List<ResonanceMatchDetailed> detailedResults = store.queryDetailed(query, TOP_K);
 
-                // Same number of results
                 assertEquals(simpleResults.size(), detailedResults.size(),
                         "query and queryDetailed should return same count for query " + q);
 
-                // Identical IDs in identical order (queryDetailed is enrichment of query)
                 List<String> simpleIds = simpleResults.stream()
                         .map(ResonanceMatch::id).toList();
                 List<String> detailedIds = detailedResults.stream()
@@ -121,14 +113,12 @@ class CandidateSourceGoldenTest {
         try {
             Random rng = new Random(SEED + 42);
 
-            // Insert patterns
             for (int i = 0; i < 100; i++) {
                 try {
                     store.insert(randomPattern(rng, DIM), Map.of());
                 } catch (Exception e) { /* skip */ }
             }
 
-            // Same query, twice
             WavePattern query = randomPattern(new Random(SEED + 99), DIM);
 
             List<ResonanceMatch> run1 = store.query(query, TOP_K);

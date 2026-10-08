@@ -8,4 +8,9 @@
  */
 package ai.evacortex.resonancedb.rest.dto;
 
-public record CompareRequest(WavePatternDto a, WavePatternDto b) {}
+public record CompareRequest(WavePatternDto a, WavePatternDto b, PhaseWeightsDto phaseWeights) {
+
+    public CompareRequest(WavePatternDto a, WavePatternDto b) {
+        this(a, b, null);
+    }
+}

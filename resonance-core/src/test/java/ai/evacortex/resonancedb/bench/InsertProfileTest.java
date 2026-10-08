@@ -53,7 +53,6 @@ class InsertProfileTest {
             patterns[i] = randomPattern(rng, DIM);
         }
 
-        // Warmup
         for (int i = 0; i < 500; i++) {
             HashingUtil.computeContentHash(patterns[i % N]);
         }
@@ -124,9 +123,9 @@ class InsertProfileTest {
     @Test
     @DisplayName("Profile: raw mmap write speed")
     void profileMmapWrite(@TempDir Path dir) throws Exception {
-        int N = 2_000;  // ~49MB, fits in 64MB mmap
-        int patternBytes = 4 + DIM * 8 * 2; // len + amp + phase
-        long fileSize = 64L * 1024 * 1024; // 64MB
+        int N = 2_000;
+        int patternBytes = 4 + DIM * 8 * 2;
+        long fileSize = 64L * 1024 * 1024;
 
         java.nio.file.Path file = dir.resolve("mmap-bench.dat");
         java.nio.file.Files.createFile(file);
@@ -142,7 +141,6 @@ class InsertProfileTest {
                 patterns[i] = randomPattern(rng, DIM);
             }
 
-            // Warmup
             int pos = 0;
             for (int i = 0; i < 100; i++) {
                 WavePattern p = patterns[i % N];
@@ -153,7 +151,6 @@ class InsertProfileTest {
                 pos += patternBytes;
             }
 
-            // Measure
             pos = 0;
             mmap.position(0);
             long t0 = System.nanoTime();
@@ -171,7 +168,6 @@ class InsertProfileTest {
             System.out.printf("  raw mmap write (per-element): %.3f ms/op, %.0f ops/sec%n",
                     msPerOp, opsPerSec);
 
-            // Now test bulk write via DoubleBuffer
             pos = 0;
             mmap.position(0);
             java.nio.ByteBuffer staging = java.nio.ByteBuffer.allocate(DIM * 8 * 2)
@@ -193,7 +189,6 @@ class InsertProfileTest {
             System.out.printf("  raw mmap write (bulk staging): %.3f ms/op, %.0f ops/sec%n",
                     msPerOp, opsPerSec);
 
-            // Test pure hash speed
             t0 = System.nanoTime();
             for (int i = 0; i < N; i++) {
                 HashingUtil.computeContentHash(patterns[i % N]);

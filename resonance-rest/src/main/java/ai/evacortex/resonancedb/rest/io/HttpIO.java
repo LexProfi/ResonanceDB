@@ -29,10 +29,6 @@ public final class HttpIO {
         this.cfg = Objects.requireNonNull(cfg, "cfg");
     }
 
-    // =========================
-    // JSON read/write
-    // =========================
-
     public <T> T readJson(HttpExchange ex, Class<T> type) throws IOException {
         byte[] body = readBody(ex);
         if (body.length == 0) {
@@ -51,10 +47,6 @@ public final class HttpIO {
         ex.sendResponseHeaders(status, bytes.length);
         ex.getResponseBody().write(bytes);
     }
-
-    // =========================
-    // Body handling
-    // =========================
 
     private byte[] readBody(HttpExchange ex) throws IOException {
         long lenHeader = -1;
@@ -89,10 +81,6 @@ public final class HttpIO {
             return out.toByteArray();
         }
     }
-
-    // =========================
-    // Exchange closing
-    // =========================
 
     /**
      * Equivalent to original safeCloseExchange().

@@ -161,4 +161,20 @@ public interface ResonanceKernel {
      */
     ComparisonResult compareWithPhaseDelta(WavePattern a, WavePattern b);
 
+    /**
+     * Computes resonance energy and weighted average phase difference using specified options.
+     *
+     * <p>When phase weights are active, only dimensions with non-zero weight contribute
+     * to the phase delta calculation. The energy score uses the weighted phase formula:
+     * {@code G_i = (1 - w_i) + w_i * cos(Δφ_i)}.</p>
+     *
+     * @param a the first wave pattern
+     * @param b the second wave pattern
+     * @param options comparison configuration including optional phase weights
+     * @return {@code ComparisonResult} with weighted energy and Δφ
+     * @throws IllegalArgumentException if lengths differ or phase weight dimensions mismatch
+     * @throws NullPointerException if any argument is {@code null}
+     */
+    ComparisonResult compareWithPhaseDelta(WavePattern a, WavePattern b, CompareOptions options);
+
 }

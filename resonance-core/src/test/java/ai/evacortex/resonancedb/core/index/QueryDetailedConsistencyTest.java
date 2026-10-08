@@ -102,7 +102,6 @@ class QueryDetailedConsistencyTest {
         Path dir = tempDir.resolve("consistency-reopen");
 
         try {
-            // Phase 1: build store, insert data, build index, close
             {
                 WavePatternStoreImpl store = new WavePatternStoreImpl(dir, DIM, runtime);
                 insertData(store);
@@ -110,7 +109,6 @@ class QueryDetailedConsistencyTest {
                 store.close();
             }
 
-            // Phase 2: reopen store (loads centroids from disk, rebuilds sidecar)
             {
                 WavePatternStoreImpl store = new WavePatternStoreImpl(dir, DIM, runtime);
                 try {
@@ -131,8 +129,6 @@ class QueryDetailedConsistencyTest {
             System.clearProperty("resonance.index.delta.maxSize");
         }
     }
-
-    // ─── Helpers ────────────────────────────────────────────────────────────
 
     private void insertData(WavePatternStoreImpl store) {
         Random rng = new Random(SEED);
@@ -169,12 +165,10 @@ class QueryDetailedConsistencyTest {
             }
             WavePattern query = new WavePattern(amp, phase);
 
-            // query()
             List<ResonanceMatch> queryResults = store.query(query, TOP_K);
             Set<String> queryIds = new LinkedHashSet<>();
             for (ResonanceMatch m : queryResults) queryIds.add(m.id());
 
-            // queryDetailed()
             long t0 = System.nanoTime();
             List<ResonanceMatchDetailed> detailedResults = store.queryDetailed(query, TOP_K);
             detailedLatencies[q] = System.nanoTime() - t0;
@@ -182,7 +176,6 @@ class QueryDetailedConsistencyTest {
             Set<String> detailedIds = new LinkedHashSet<>();
             for (ResonanceMatchDetailed m : detailedResults) detailedIds.add(m.id());
 
-            // Measure overlap
             int overlap = 0;
             for (String id : queryIds) {
                 if (detailedIds.contains(id)) overlap++;

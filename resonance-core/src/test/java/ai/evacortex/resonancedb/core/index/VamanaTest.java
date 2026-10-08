@@ -45,7 +45,6 @@ class VamanaTest {
         assertEquals(16, graph.maxDegree());
         assertTrue(graph.medoid() >= 0 && graph.medoid() < n);
 
-        // Every node should have at least 1 neighbor (except possibly isolated nodes in small graphs)
         int nodesWithNeighbors = 0;
         for (int[] nbrs : graph.neighbors()) {
             if (nbrs.length > 0) nodesWithNeighbors++;
@@ -91,7 +90,6 @@ class VamanaTest {
         for (int q = 0; q < queries; q++) {
             WavePattern query = randomPattern(qRng, DIM);
 
-            // Exact top-K
             float[] scores = new float[n];
             for (int i = 0; i < n; i++) {
                 scores[i] = kernel.compare(query, patterns[i]);
@@ -105,7 +103,6 @@ class VamanaTest {
                 trueTopK.add(ids[sorted[i]]);
             }
 
-            // Vamana search
             List<String> vamanaResults = graph.search(query, patterns, efSearch, topK);
 
             for (String id : vamanaResults) {
@@ -132,10 +129,8 @@ class VamanaTest {
         VamanaGraph graph = VamanaBuilder.build(ids, patterns, SEED);
         WavePattern query = randomPattern(new Random(SEED + 1), DIM);
 
-        // efSearch > nodeCount → brute force path
         List<String> results = graph.search(query, patterns, 100, 5);
         assertEquals(5, results.size());
-        // All results should be valid IDs
         for (String id : results) {
             assertTrue(id.startsWith("id-"));
         }
@@ -199,8 +194,6 @@ class VamanaTest {
         assertEquals(0, graph.nodeCount());
         assertTrue(graph.search(randomPattern(new Random(1), DIM), new WavePattern[0], 64, 10).isEmpty());
     }
-
-    // ─── Helpers ─────────────────────────────────────────────────────────────
 
     private static WavePattern[] randomPatterns(int n, int dim, long seed) {
         Random rng = new Random(seed);

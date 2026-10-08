@@ -29,8 +29,6 @@ class DeltaBufferTest {
         buffer = new DeltaBuffer(PATTERN_LEN);
     }
 
-    // ─── Basic CRUD ─────────────────────────────────────────────────────
-
     @Test
     void addAndContains() {
         WavePattern p = randomPattern(PATTERN_LEN, 1);
@@ -72,8 +70,6 @@ class DeltaBufferTest {
         assertArrayEquals(p.amplitude(), e.pattern().amplitude());
     }
 
-    // ─── Tombstone semantics ────────────────────────────────────────────
-
     @Test
     void tombstoneHidesEntry() {
         buffer.add("id1", randomPattern(PATTERN_LEN, 1), Map.of(), 0.0, new byte[16], 1L);
@@ -81,7 +77,6 @@ class DeltaBufferTest {
 
         assertFalse(buffer.contains("id1"));
         assertNull(buffer.get("id1"));
-        // Size includes active entries minus tombstoned — but active was removed by markDeleted
         assertEquals(0, buffer.activeSize());
     }
 
@@ -90,14 +85,11 @@ class DeltaBufferTest {
         buffer.add("id1", randomPattern(PATTERN_LEN, 1), Map.of(), 0.0, new byte[16], 1L);
         buffer.freeze();
 
-        // id1 is now in frozen, remove should create tombstone
         DeltaBuffer.Entry removed = buffer.remove("id1", 2L);
         assertNotNull(removed);
         assertFalse(buffer.contains("id1"));
         assertNull(buffer.get("id1"));
     }
-
-    // ─── Freeze / Clear lifecycle ───────────────────────────────────────
 
     @Test
     void freezeMovesActiveToFrozen() {
@@ -109,14 +101,11 @@ class DeltaBufferTest {
         assertTrue(frozenEntries.containsKey("id1"));
         assertTrue(frozenEntries.containsKey("id2"));
 
-        // Active should be empty
         assertEquals(0, buffer.activeSize());
 
-        // But contains should still see frozen entries
         assertTrue(buffer.contains("id1"));
         assertTrue(buffer.contains("id2"));
 
-        // Total size = frozen entries
         assertEquals(2, buffer.size());
     }
 
@@ -128,9 +117,9 @@ class DeltaBufferTest {
         buffer.add("id2", randomPattern(PATTERN_LEN, 2), Map.of(), 0.0, new byte[16], 2L);
 
         assertEquals(1, buffer.activeSize());
-        assertEquals(2, buffer.size()); // 1 frozen + 1 active
-        assertTrue(buffer.contains("id1")); // in frozen
-        assertTrue(buffer.contains("id2")); // in active
+        assertEquals(2, buffer.size());
+        assertTrue(buffer.contains("id1"));
+        assertTrue(buffer.contains("id2"));
     }
 
     @Test
@@ -138,13 +127,12 @@ class DeltaBufferTest {
         buffer.add("id1", randomPattern(PATTERN_LEN, 1), Map.of(), 0.0, new byte[16], 1L);
         buffer.freeze();
 
-        // Add new entry to active
         buffer.add("id2", randomPattern(PATTERN_LEN, 2), Map.of(), 0.0, new byte[16], 2L);
 
         buffer.clearFrozen();
 
-        assertFalse(buffer.contains("id1")); // was in frozen, now cleared
-        assertTrue(buffer.contains("id2"));  // still in active
+        assertFalse(buffer.contains("id1"));
+        assertTrue(buffer.contains("id2"));
         assertEquals(1, buffer.size());
     }
 
@@ -153,16 +141,12 @@ class DeltaBufferTest {
         buffer.add("id1", randomPattern(PATTERN_LEN, 1), Map.of(), 0.0, new byte[16], 1L);
         buffer.freeze();
 
-        // Tombstone id1 while it's frozen
         buffer.markDeleted("id1", 2L);
         assertTrue(buffer.tombstones().containsKey("id1"));
 
-        // After clear, tombstone for id1 should also be removed
         buffer.clearFrozen();
         assertFalse(buffer.tombstones().containsKey("id1"));
     }
-
-    // ─── Scoring ────────────────────────────────────────────────────────
 
     @Test
     void scoreDeltaFindsSelfMatch() {
@@ -175,7 +159,6 @@ class DeltaBufferTest {
         List<ScoredMatch> results = buffer.scoreDelta(p, id, kernel, 5);
         assertFalse(results.isEmpty());
 
-        // Self-match should have high energy
         ScoredMatch best = results.stream()
                 .max(Comparator.comparingDouble(sm -> sm.match().energy()))
                 .orElseThrow();
@@ -206,7 +189,6 @@ class DeltaBufferTest {
         buffer.freeze();
         buffer.add("id2", p2, Map.of(), 0.0, new byte[16], 2L);
 
-        // Query with p1 — should find both id1 (frozen) and id2 (active)
         List<ScoredMatch> results = buffer.scoreDelta(p1, "query", kernel, 10);
 
         Set<String> foundIds = new HashSet<>();
@@ -225,8 +207,6 @@ class DeltaBufferTest {
         assertTrue(results.isEmpty());
     }
 
-    // ─── Concurrency ────────────────────────────────────────────────────
-
     @Test
     void concurrentAddAndScore() throws Exception {
         ResonanceKernel kernel = new JavaKernel();
@@ -239,7 +219,6 @@ class DeltaBufferTest {
         CountDownLatch start = new CountDownLatch(1);
         List<Future<?>> futures = new ArrayList<>();
 
-        // Writers
         for (int w = 0; w < writerCount; w++) {
             int writer = w;
             futures.add(pool.submit(() -> {
@@ -252,14 +231,12 @@ class DeltaBufferTest {
             }));
         }
 
-        // Readers
         for (int r = 0; r < readerCount; r++) {
             int reader = r;
             futures.add(pool.submit(() -> {
                 try { start.await(); } catch (InterruptedException e) { return; }
                 WavePattern query = randomPattern(PATTERN_LEN, reader + 9999);
                 for (int i = 0; i < queriesPerReader; i++) {
-                    // Should not throw
                     buffer.scoreDelta(query, "q", kernel, 5);
                 }
             }));
@@ -271,7 +248,6 @@ class DeltaBufferTest {
         }
         pool.shutdown();
 
-        // All inserts should be visible
         assertEquals(writerCount * insertsPerWriter, buffer.activeSize());
     }
 
@@ -296,14 +272,12 @@ class DeltaBufferTest {
                 "Entry must appear in scoreDelta results after same-LSN re-add");
     }
 
-    // ─── Helpers ────────────────────────────────────────────────────────
-
     private static WavePattern randomPattern(int len, long seed) {
         Random rng = new Random(seed);
         double[] amp = new double[len];
         double[] phase = new double[len];
         for (int i = 0; i < len; i++) {
-            amp[i] = 0.5 + rng.nextDouble() * 0.5; // positive amplitudes
+            amp[i] = 0.5 + rng.nextDouble() * 0.5;
             phase[i] = rng.nextDouble() * 2 * Math.PI - Math.PI;
         }
         return new WavePattern(amp, phase);

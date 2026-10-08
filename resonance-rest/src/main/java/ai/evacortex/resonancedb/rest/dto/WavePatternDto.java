@@ -14,7 +14,6 @@ public final class WavePatternDto {
     public double[] phase;
 
     public WavePatternDto() {
-        // Required by Jackson
     }
 
     public WavePatternDto(double[] amplitude, double[] phase) {

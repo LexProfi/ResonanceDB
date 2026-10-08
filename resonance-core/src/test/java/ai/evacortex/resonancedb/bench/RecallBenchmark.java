@@ -51,7 +51,6 @@ class RecallBenchmark {
     private static final long QUERY_SEED = 161803L;
 
     private static final int DIM = Integer.getInteger("resonance.pattern.len", 1536);
-    // Default N=5K fits in 5 min with default heap. For N=50K use -Ppreset=heavy -Dbench.N=50000
     private static final int N = Integer.getInteger("bench.N", 5_000);
     private static final int NUM_QUERIES = Integer.getInteger("bench.queries", 200);
     private static final int TOP_K = 10;
@@ -89,7 +88,6 @@ class RecallBenchmark {
                 Runtime.getRuntime().availableProcessors());
         System.out.println("=".repeat(80));
 
-        // ── Hold-out queries (separate seed, NOT from indexed data) ──────
         WavePattern[] queries = new WavePattern[NUM_QUERIES];
         Random queryRng = new Random(QUERY_SEED);
         for (int i = 0; i < NUM_QUERIES; i++) {
@@ -97,9 +95,7 @@ class RecallBenchmark {
         }
         System.out.printf("  queries generated: %d hold-out patterns%n", NUM_QUERIES);
 
-        // ── Insert data into IVF-enabled store ──────────────────────────
         System.setProperty("resonance.index.enabled", "true");
-        // Set delta threshold above N to prevent background rebuild during insert
         System.setProperty("resonance.index.delta.maxSize", String.valueOf(N + 1));
 
         Path storeDir = tempDir.resolve("recall-ivf");
@@ -115,22 +111,17 @@ class RecallBenchmark {
                 try {
                     insertedIds[i] = store.insert(dataPatterns[i], Map.of());
                 } catch (Exception e) {
-                    // skip duplicates
                 }
             }
             long insertMs = (System.nanoTime() - insertStart) / 1_000_000;
             System.out.printf("  insert: %d patterns in %d ms (%.0f inserts/sec)%n",
                     N, insertMs, N / (insertMs / 1000.0));
 
-            // ── Ground truth: brute-force kernel.compare in-process ─────
-            //    Direct kernel scoring against all N patterns.
-            //    No store query path involved → no phase-sharding artifacts.
             ResonanceKernel kernel = new JavaKernel();
             String[][] groundTruthIds = new String[NUM_QUERIES][];
 
             long gtStart = System.nanoTime();
             for (int q = 0; q < NUM_QUERIES; q++) {
-                // Score against all patterns
                 float[] scores = new float[N];
                 for (int i = 0; i < N; i++) {
                     if (dataPatterns[i] != null) {
@@ -138,7 +129,6 @@ class RecallBenchmark {
                     }
                 }
 
-                // Partial sort: find top-K indices
                 int k = Math.min(TOP_K, N);
                 int[] idx = new int[N];
                 for (int i = 0; i < N; i++) idx[i] = i;
@@ -164,21 +154,17 @@ class RecallBenchmark {
             System.out.printf("  ground truth: %d queries × %d patterns in %d ms%n",
                     NUM_QUERIES, N, gtMs);
 
-            // Free data patterns — no longer needed
             dataPatterns = null;
 
-            // ── Explicit blocking index build ───────────────────────────
             long buildStart = System.nanoTime();
             store.forceIndexRebuild();
             long buildMs = (System.nanoTime() - buildStart) / 1_000_000;
             System.out.printf("  index build: %d ms%n", buildMs);
 
-            // ── Warmup ──────────────────────────────────────────────────
             for (int i = 0; i < WARMUP_QUERIES && i < NUM_QUERIES; i++) {
                 store.query(queries[i], TOP_K);
             }
 
-            // ── Measure: recall + latency ───────────────────────────────
             double totalRecall1 = 0;
             double totalRecall10 = 0;
             long[] latenciesNs = new long[NUM_QUERIES];
@@ -195,13 +181,11 @@ class RecallBenchmark {
                     if (firstId == null) firstId = r.id();
                 }
 
-                // recall@1
                 if (groundTruthIds[q].length > 0 && firstId != null
                         && firstId.equals(groundTruthIds[q][0])) {
                     totalRecall1 += 1.0;
                 }
 
-                // recall@10
                 int hits = 0;
                 int gtK = Math.min(TOP_K, groundTruthIds[q].length);
                 for (int j = 0; j < gtK; j++) {
@@ -215,7 +199,6 @@ class RecallBenchmark {
             double recall1 = totalRecall1 / NUM_QUERIES;
             double recall10 = totalRecall10 / NUM_QUERIES;
 
-            // ── Latency stats ───────────────────────────────────────────
             Arrays.sort(latenciesNs);
             double p50 = latenciesNs[(int) (NUM_QUERIES * 0.50)] / 1_000_000.0;
             double p90 = latenciesNs[(int) (NUM_QUERIES * 0.90)] / 1_000_000.0;
@@ -223,7 +206,6 @@ class RecallBenchmark {
             double totalQueryMs = Arrays.stream(latenciesNs).sum() / 1_000_000.0;
             double qps = NUM_QUERIES / (totalQueryMs / 1000.0);
 
-            // ── Results table ───────────────────────────────────────────
             System.out.println();
             System.out.println("┌──────────────┬───────────────┐");
             System.out.println("│ Metric       │ Value         │");
@@ -246,8 +228,6 @@ class RecallBenchmark {
             try { store.close(); } catch (Exception e) { /* ignore */ }
         }
     }
-
-    // ─── Helpers ────────────────────────────────────────────────────────────
 
     private static WavePattern randomPattern(Random rng, int dim) {
         double[] amp = new double[dim];

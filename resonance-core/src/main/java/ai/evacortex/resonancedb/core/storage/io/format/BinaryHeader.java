@@ -13,7 +13,7 @@ import java.nio.ByteOrder;
 
 public final class BinaryHeader {
 
-    public static final int MAGIC = 0x5244534E; // ASCII: 'RDSN'
+    public static final int MAGIC = 0x5244534E;
     public static final int MAGIC_LENGTH = 4;
     public static final int VERSION_LENGTH = 2;
     public static final int TIMESTAMP_LENGTH = 8;

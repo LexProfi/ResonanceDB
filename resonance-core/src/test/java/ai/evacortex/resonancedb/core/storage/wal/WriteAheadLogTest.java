@@ -38,8 +38,6 @@ class WriteAheadLogTest {
         walDir = tempDir.resolve("wal");
     }
 
-    // ─── WalRecord roundtrip tests ──────────────────────────────────────
-
     @Test
     void insertRecordRoundtrip() {
         WavePattern pattern = randomPattern(64);
@@ -135,7 +133,6 @@ class WriteAheadLogTest {
     void crcMismatchDetected() {
         WalRecord record = WalRecord.insert(1L, "hash", Map.of(), randomPattern(8));
         byte[] bytes = record.toBytes();
-        // Corrupt one byte in the middle of the payload
         bytes[bytes.length / 2] ^= 0xFF;
 
         ByteBuffer buf = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
@@ -146,7 +143,6 @@ class WriteAheadLogTest {
     void partialRecordReturnsNull() throws WalCorruptionException {
         WalRecord record = WalRecord.insert(1L, "hash", Map.of(), randomPattern(8));
         byte[] bytes = record.toBytes();
-        // Truncate: provide only half the data
         byte[] truncated = new byte[bytes.length / 2];
         System.arraycopy(bytes, 0, truncated, 0, truncated.length);
 
@@ -154,8 +150,6 @@ class WriteAheadLogTest {
         WalRecord decoded = WalRecord.fromBuffer(buf);
         assertNull(decoded, "Partial record should return null");
     }
-
-    // ─── WriteAheadLog integration tests ────────────────────────────────
 
     @Test
     void appendAndReplayStrict() throws Exception {
@@ -181,7 +175,6 @@ class WriteAheadLogTest {
             assertEquals(lsn3, f3.get(5, TimeUnit.SECONDS));
         }
 
-        // Replay from disk
         List<WalRecord> records = WriteAheadLog.replay(walDir);
         assertEquals(3, records.size());
 
@@ -213,7 +206,6 @@ class WriteAheadLogTest {
         List<WalRecord> records = WriteAheadLog.replay(walDir);
         assertEquals(count, records.size());
 
-        // Verify LSN ordering
         for (int i = 1; i < records.size(); i++) {
             assertTrue(records.get(i).lsn() > records.get(i - 1).lsn(),
                     "LSNs must be monotonically increasing");
@@ -222,7 +214,6 @@ class WriteAheadLogTest {
 
     @Test
     void tailCorruptionDiscarded() throws Exception {
-        // Write some valid records
         try (WriteAheadLog wal = new WriteAheadLog(walDir,
                 WriteAheadLog.DurabilityMode.STRICT, 1, 1, 128L << 20)) {
             for (int i = 0; i < 5; i++) {
@@ -232,29 +223,26 @@ class WriteAheadLogTest {
             }
         }
 
-        // Append garbage at the end of the WAL file
         List<WriteAheadLog.WalFileInfo> files =
                 WriteAheadLog.listWalFilesStatic(walDir);
         assertFalse(files.isEmpty());
         Path lastFile = files.getLast().path();
         try (var raf = new RandomAccessFile(lastFile.toFile(), "rw")) {
             raf.seek(raf.length());
-            raf.write(new byte[]{0x00, 0x10, 0x00, 0x00, // len=16 (valid-looking)
-                    0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42,  // garbage lsn
-                    0x01,  // type
-                    (byte)0xDE, (byte)0xAD,  // garbage payload
-                    (byte)0xBA, (byte)0xD0, (byte)0xBA, (byte)0xD0 // bad crc
+            raf.write(new byte[]{0x00, 0x10, 0x00, 0x00,
+                    0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42,
+                    0x01,
+                    (byte)0xDE, (byte)0xAD,
+                    (byte)0xBA, (byte)0xD0, (byte)0xBA, (byte)0xD0
             });
         }
 
-        // Replay should discard the garbage tail, return 5 valid records
         List<WalRecord> records = WriteAheadLog.replay(walDir);
         assertEquals(5, records.size());
     }
 
     @Test
     void midFileCorruptionFails() throws Exception {
-        // Write valid records
         try (WriteAheadLog wal = new WriteAheadLog(walDir,
                 WriteAheadLog.DurabilityMode.STRICT, 1, 1, 128L << 20)) {
             for (int i = 0; i < 10; i++) {
@@ -264,7 +252,6 @@ class WriteAheadLogTest {
             }
         }
 
-        // Corrupt a byte in the middle of the file
         List<WriteAheadLog.WalFileInfo> files =
                 WriteAheadLog.listWalFilesStatic(walDir);
         Path lastFile = files.getLast().path();
@@ -273,14 +260,12 @@ class WriteAheadLogTest {
         data[midPoint] ^= 0xFF;
         Files.write(lastFile, data);
 
-        // Replay should throw — mid-file corruption is fatal (A5)
         assertThrows(WalCorruptionException.class, () -> WriteAheadLog.replay(walDir));
     }
 
     @Test
     void fileRotation() throws Exception {
-        // Use tiny segment size to force rotation
-        long tinySegment = 256; // 256 bytes per file
+        long tinySegment = 256;
         int count = 20;
 
         try (WriteAheadLog wal = new WriteAheadLog(walDir,
@@ -292,12 +277,10 @@ class WriteAheadLogTest {
             }
         }
 
-        // Should have multiple WAL files
         List<WriteAheadLog.WalFileInfo> files =
                 WriteAheadLog.listWalFilesStatic(walDir);
         assertTrue(files.size() > 1, "Expected multiple WAL files after rotation");
 
-        // All records should be replayable
         List<WalRecord> records = WriteAheadLog.replay(walDir);
         assertEquals(count, records.size());
     }
@@ -307,7 +290,6 @@ class WriteAheadLogTest {
         try (WriteAheadLog wal = new WriteAheadLog(walDir,
                 WriteAheadLog.DurabilityMode.STRICT, 1, 1, 200)) {
 
-            // Write 10 records across multiple files (tiny segment = rotation)
             long[] lsns = new long[10];
             for (int i = 0; i < 10; i++) {
                 lsns[i] = wal.nextLsn();
@@ -317,7 +299,6 @@ class WriteAheadLogTest {
 
             int filesBefore = WriteAheadLog.listWalFilesStatic(walDir).size();
 
-            // Checkpoint at LSN 5 — should truncate files with max LSN <= 5
             wal.checkpoint(lsns[4]);
 
             int filesAfter = WriteAheadLog.listWalFilesStatic(walDir).size();
@@ -345,7 +326,6 @@ class WriteAheadLogTest {
             lastLsn = wal.currentLsn();
         }
 
-        // Reopen — LSN should continue from where we left off
         try (WriteAheadLog wal = new WriteAheadLog(walDir,
                 WriteAheadLog.DurabilityMode.STRICT, 1, 1, 128L << 20)) {
             long nextLsn = wal.nextLsn();
@@ -375,7 +355,6 @@ class WriteAheadLogTest {
             CompletableFuture.allOf(futures).get(10, TimeUnit.SECONDS);
             long elapsed = System.nanoTime() - start;
 
-            // Async should be fast: all 100 records acked quickly
             assertTrue(elapsed < TimeUnit.SECONDS.toNanos(2),
                     "Async mode should ack quickly, took " +
                     TimeUnit.NANOSECONDS.toMillis(elapsed) + " ms");
@@ -413,8 +392,6 @@ class WriteAheadLogTest {
         assertEquals(WalRecord.TYPE_REPLACE, records.get(2).type());
         assertEquals(WalRecord.TYPE_CHECKPOINT, records.get(3).type());
     }
-
-    // ─── Helpers ────────────────────────────────────────────────────────
 
     private static final Random RNG = new Random(42);
 
