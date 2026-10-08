@@ -35,9 +35,6 @@ class DimensionIndependenceTest {
 
     private static final ResonanceKernel kernel = new JavaKernel();
     private static final long SEED = 314159L;
-
-    // ─── Helpers ───────────────────────────────────────────────────────────────
-
     private static WavePattern randomPattern(Random rng, int dim) {
         double[] amp = new double[dim];
         double[] phase = new double[dim];
@@ -72,34 +69,27 @@ class DimensionIndependenceTest {
         return w;
     }
 
-    // ─── PhaseWeights at arbitrary dimension ───────────────────────────────────
-
     @ParameterizedTest(name = "D={0}")
     @ValueSource(ints = {1, 7, 17, 127, 513})
     @DisplayName("PhaseWeights: construction and properties at arbitrary dimension")
     void phaseWeightsAtDim(int dim) {
         Random rng = new Random(SEED);
 
-        // all-one
         PhaseWeights pw1 = new PhaseWeights(allOne(dim));
         assertTrue(pw1.isDefault());
         assertFalse(pw1.isPhaseFree());
         assertEquals(dim, pw1.length());
 
-        // all-zero
         PhaseWeights pw0 = new PhaseWeights(allZero(dim));
         assertFalse(pw0.isDefault());
         assertTrue(pw0.isPhaseFree());
         assertEquals(dim, pw0.length());
 
-        // random continuous
         PhaseWeights pwr = new PhaseWeights(randomWeights(rng, dim));
         assertEquals(dim, pwr.length());
         pwr.validateDimension(dim);
         assertThrows(IllegalArgumentException.class, () -> pwr.validateDimension(dim + 1));
     }
-
-    // ─── JavaKernel default compare ────────────────────────────────────────────
 
     @ParameterizedTest(name = "D={0}")
     @ValueSource(ints = {1, 7, 17, 127, 513})
@@ -114,8 +104,6 @@ class DimensionIndependenceTest {
         assertEquals(1.0f, kernel.compare(a, a), 1e-5f, "self-compare should be ~1.0");
     }
 
-    // ─── JavaKernel weighted compare ───────────────────────────────────────────
-
     @ParameterizedTest(name = "D={0}")
     @ValueSource(ints = {1, 7, 17, 127, 513})
     @DisplayName("JavaKernel: weighted compare at arbitrary dimension")
@@ -124,30 +112,24 @@ class DimensionIndependenceTest {
         WavePattern a = randomPattern(rng, dim);
         WavePattern b = randomPattern(rng, dim);
 
-        // all-one weighted == default
         CompareOptions optDefault = CompareOptions.defaultOptions();
         CompareOptions optAllOne = CompareOptions.withPhaseWeights(new PhaseWeights(allOne(dim)));
         float scoreDefault = kernel.compare(a, b, optDefault);
         float scoreAllOne = kernel.compare(a, b, optAllOne);
         assertEquals(scoreDefault, scoreAllOne, 1e-6f, "all-one must equal default");
 
-        // all-zero: phase-free
         CompareOptions optAllZero = CompareOptions.withPhaseWeights(new PhaseWeights(allZero(dim)));
         float scoreZero = kernel.compare(a, b, optAllZero);
         assertTrue(scoreZero >= 0.0f && scoreZero <= 1.0f, "phase-free score out of range");
 
-        // random weighted
         CompareOptions optRandom = CompareOptions.withPhaseWeights(new PhaseWeights(randomWeights(rng, dim)));
         float scoreWeighted = kernel.compare(a, b, optRandom);
         assertTrue(scoreWeighted >= 0.0f && scoreWeighted <= 1.0f, "weighted score out of range");
 
-        // sparse
         CompareOptions optSparse = CompareOptions.withPhaseWeights(new PhaseWeights(sparse(rng, dim, 0.1)));
         float scoreSparse = kernel.compare(a, b, optSparse);
         assertTrue(scoreSparse >= 0.0f && scoreSparse <= 1.0f, "sparse score out of range");
     }
-
-    // ─── JavaKernel compareWithPhaseDelta ──────────────────────────────────────
 
     @ParameterizedTest(name = "D={0}")
     @ValueSource(ints = {1, 7, 17, 127, 513})
@@ -157,24 +139,19 @@ class DimensionIndependenceTest {
         WavePattern a = randomPattern(rng, dim);
         WavePattern b = randomPattern(rng, dim);
 
-        // default
         ComparisonResult r1 = kernel.compareWithPhaseDelta(a, b);
         assertTrue(r1.energy() >= 0.0f && r1.energy() <= 1.0f);
         assertTrue(Math.abs(r1.phaseDelta()) <= Math.PI + 0.01);
 
-        // weighted
         CompareOptions opts = CompareOptions.withPhaseWeights(new PhaseWeights(randomWeights(rng, dim)));
         ComparisonResult r2 = kernel.compareWithPhaseDelta(a, b, opts);
         assertTrue(r2.energy() >= 0.0f && r2.energy() <= 1.0f);
         assertTrue(Math.abs(r2.phaseDelta()) <= Math.PI + 0.01);
 
-        // phase-free: delta should be 0
         CompareOptions optFree = CompareOptions.withPhaseWeights(new PhaseWeights(allZero(dim)));
         ComparisonResult r3 = kernel.compareWithPhaseDelta(a, b, optFree);
         assertEquals(0.0, r3.phaseDelta(), 1e-10, "phase-free delta must be 0");
     }
-
-    // ─── JavaKernel compareMany ────────────────────────────────────────────────
 
     @ParameterizedTest(name = "D={0}")
     @ValueSource(ints = {1, 7, 17, 127, 513})
@@ -185,7 +162,6 @@ class DimensionIndependenceTest {
         List<WavePattern> candidates = new java.util.ArrayList<>();
         for (int i = 0; i < 20; i++) candidates.add(randomPattern(rng, dim));
 
-        // Default
         float[] scores = kernel.compareMany(query, candidates);
         assertEquals(20, scores.length);
         for (int i = 0; i < 20; i++) {
@@ -193,7 +169,6 @@ class DimensionIndependenceTest {
                     "compareMany[" + i + "] must match scalar compare");
         }
 
-        // Weighted
         CompareOptions opts = CompareOptions.withPhaseWeights(new PhaseWeights(randomWeights(rng, dim)));
         float[] wScores = kernel.compareMany(query, candidates, opts);
         for (int i = 0; i < 20; i++) {
@@ -201,8 +176,6 @@ class DimensionIndependenceTest {
                     "weighted compareMany[" + i + "] must match scalar");
         }
     }
-
-    // ─── ResonanceMoments at arbitrary dimension ──────────────────────────────
 
     @ParameterizedTest(name = "D={0}")
     @ValueSource(ints = {1, 7, 17, 127, 513})
@@ -220,31 +193,23 @@ class DimensionIndependenceTest {
         }
         ResonanceMoments moments = builder.build();
 
-        // Score with all mask types
         WavePattern query = randomPattern(rng, dim);
 
-        // Default
         float s1 = moments.scoreCentroid(0, query, null);
         assertTrue(Float.isFinite(s1), "default score must be finite");
 
-        // All-one
         float s2 = moments.scoreCentroid(0, query, new PhaseWeights(allOne(dim)));
         assertEquals(s1, s2, 1e-5f, "all-one must equal default");
 
-        // All-zero
         float s3 = moments.scoreCentroid(0, query, new PhaseWeights(allZero(dim)));
         assertTrue(Float.isFinite(s3), "phase-free score must be finite");
 
-        // Random weighted
         float s4 = moments.scoreCentroid(0, query, new PhaseWeights(randomWeights(rng, dim)));
         assertTrue(Float.isFinite(s4), "weighted score must be finite");
 
-        // topCentroidsByMoment
         int[] top = moments.topCentroidsByMoment(query, new PhaseWeights(randomWeights(new Random(SEED + 1), dim)), 3);
         assertEquals(3, top.length);
     }
-
-    // ─── ResonanceMoments persistence at arbitrary dimension ──────────────────
 
     @ParameterizedTest(name = "D={0}")
     @ValueSource(ints = {1, 7, 17, 127, 513})
@@ -267,7 +232,6 @@ class DimensionIndependenceTest {
         ResonanceMoments loaded = ResonanceMoments.load(path);
         assertNotNull(loaded);
 
-        // Verify scoring matches after roundtrip
         WavePattern query = randomPattern(new Random(SEED + 42), dim);
         PhaseWeights weights = new PhaseWeights(randomWeights(new Random(SEED + 99), dim));
         for (int c = 0; c < K; c++) {
@@ -277,30 +241,24 @@ class DimensionIndependenceTest {
                     "centroid " + c + " score must match after persistence roundtrip");
         }
 
-        // Verify file size: header + K*(3*D*4 + 4 + 4) + CRC
-        long expectedSize = 4 + 4 + 4 + 4  // magic, version, K, D
-                + (long) K * (3L * dim * 4 + 4 + 4)  // meanA, meanR, meanI, meanE, count
-                + 4;  // CRC32C
+        long expectedSize = 4 + 4 + 4 + 4
+                + (long) K * (3L * dim * 4 + 4 + 4)
+                + 4;
         assertEquals(expectedSize, java.nio.file.Files.size(path),
                 "sidecar size must be exactly header + K*(3*D*4+8) + CRC");
     }
-
-    // ─── PhaseRoutingProfile at arbitrary dimension ───────────────────────────
 
     @ParameterizedTest(name = "D={0}")
     @ValueSource(ints = {1, 7, 17, 127, 513})
     @DisplayName("PhaseRoutingProfile: from CompareOptions at arbitrary dimension")
     void routingProfileAtDim(int dim) {
-        // Default
         PhaseRoutingProfile p1 = PhaseRoutingProfile.from(null);
         assertTrue(p1.isDefault());
 
-        // All-one
         CompareOptions optOne = CompareOptions.withPhaseWeights(new PhaseWeights(allOne(dim)));
         PhaseRoutingProfile p2 = PhaseRoutingProfile.from(optOne);
         assertTrue(p2.isDefault(), "all-one profile should be default");
 
-        // Random weighted
         Random rng = new Random(SEED);
         CompareOptions optW = CompareOptions.withPhaseWeights(new PhaseWeights(randomWeights(rng, dim)));
         PhaseRoutingProfile p3 = PhaseRoutingProfile.from(optW);
@@ -308,14 +266,11 @@ class DimensionIndependenceTest {
         assertTrue(p3.weightDrift() >= 0.0);
         assertTrue(p3.meanParticipation() >= 0.0 && p3.meanParticipation() <= 1.0);
 
-        // All-zero
         CompareOptions optZero = CompareOptions.withPhaseWeights(new PhaseWeights(allZero(dim)));
         PhaseRoutingProfile p4 = PhaseRoutingProfile.from(optZero);
         assertFalse(p4.isDefault());
         assertEquals(0.0, p4.meanParticipation(), 1e-10);
     }
-
-    // ─── Determinism at arbitrary dimension ───────────────────────────────────
 
     @ParameterizedTest(name = "D={0}")
     @ValueSource(ints = {1, 7, 17, 127, 513})

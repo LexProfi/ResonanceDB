@@ -57,9 +57,9 @@ import java.nio.MappedByteBuffer;
  */
 public class WavePatternCodec {
 
-    private static final int MAGIC = 0x57565750; // 'WWWP'
+    private static final int MAGIC = 0x57565750;
     public static final ByteOrder ORDER = ByteOrder.LITTLE_ENDIAN;
-    public static final int MAX_SUPPORTED_LENGTH = 65_536; // architectural sanity limit
+    public static final int MAX_SUPPORTED_LENGTH = 65_536;
 
     public static void writeTo(ByteBuffer buf, WavePattern pattern, boolean withMagic) {
         double[] amp = pattern.amplitude();

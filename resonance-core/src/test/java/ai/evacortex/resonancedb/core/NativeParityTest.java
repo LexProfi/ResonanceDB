@@ -51,8 +51,6 @@ class NativeParityTest {
         assumeTrue(NATIVE != null, "NativeKernel not available — skipping");
     }
 
-    // ─── Helpers ───────────────────────────────────────────────────────────────
-
     private static WavePattern randomPattern(Random rng, int dim) {
         double[] amp = new double[dim];
         double[] phase = new double[dim];
@@ -86,8 +84,6 @@ class NativeParityTest {
         return w;
     }
 
-    // ─── Scalar compare: default path ──────────────────────────────────────────
-
     @ParameterizedTest(name = "D={0}")
     @ValueSource(ints = {1, 7, 17, 127, 513})
     @DisplayName("Parity: scalar compare — default path")
@@ -109,8 +105,6 @@ class NativeParityTest {
         }
         System.out.printf("  D=%d default scalar maxErr=%.2e%n", dim, maxErr);
     }
-
-    // ─── Scalar compare: weighted path ─────────────────────────────────────────
 
     @ParameterizedTest(name = "D={0}")
     @ValueSource(ints = {1, 7, 17, 127, 513})
@@ -136,8 +130,6 @@ class NativeParityTest {
         System.out.printf("  D=%d weighted scalar maxErr=%.2e%n", dim, maxErr);
     }
 
-    // ─── Scalar compare: phase-free path ───────────────────────────────────────
-
     @ParameterizedTest(name = "D={0}")
     @ValueSource(ints = {1, 7, 17, 127, 513})
     @DisplayName("Parity: scalar compare — phase-free path")
@@ -160,8 +152,6 @@ class NativeParityTest {
         }
         System.out.printf("  D=%d phase-free scalar maxErr=%.2e%n", dim, maxErr);
     }
-
-    // ─── Scalar compare: sparse weights ────────────────────────────────────────
 
     @ParameterizedTest(name = "D={0}")
     @ValueSource(ints = {1, 7, 17, 127, 513})
@@ -186,8 +176,6 @@ class NativeParityTest {
         }
         System.out.printf("  D=%d sparse scalar maxErr=%.2e%n", dim, maxErr);
     }
-
-    // ─── Batch compareMany: all paths ──────────────────────────────────────────
 
     @ParameterizedTest(name = "D={0}")
     @ValueSource(ints = {1, 7, 17, 127, 513})
@@ -265,8 +253,6 @@ class NativeParityTest {
         }
         System.out.printf("  D=%d phase-free batch maxErr=%.2e%n", dim, maxErr);
     }
-
-    // ─── compareWithPhaseDelta: all paths ──────────────────────────────────────
 
     @ParameterizedTest(name = "D={0}")
     @ValueSource(ints = {1, 7, 17, 127, 513})
@@ -351,8 +337,6 @@ class NativeParityTest {
         System.out.printf("  D=%d phase-free delta maxEnergyErr=%.2e%n", dim, maxEnergyErr);
     }
 
-    // ─── Self-compare: identity check ──────────────────────────────────────────
-
     @ParameterizedTest(name = "D={0}")
     @ValueSource(ints = {1, 7, 17, 127, 513})
     @DisplayName("Parity: self-compare = 1.0 on both kernels, all paths")
@@ -363,23 +347,18 @@ class NativeParityTest {
         for (int trial = 0; trial < 20; trial++) {
             WavePattern p = randomPattern(rng, dim);
 
-            // Default
             assertEquals(1.0f, JAVA.compare(p, p), EPSILON, "Java self-compare");
             assertEquals(1.0f, NATIVE.compare(p, p), EPSILON, "Native self-compare");
 
-            // Weighted
             CompareOptions opts = CompareOptions.withPhaseWeights(new PhaseWeights(randomWeights(rng, dim)));
             assertEquals(1.0f, JAVA.compare(p, p, opts), EPSILON, "Java weighted self-compare");
             assertEquals(1.0f, NATIVE.compare(p, p, opts), EPSILON, "Native weighted self-compare");
 
-            // Phase-free
             CompareOptions optsFree = CompareOptions.withPhaseWeights(new PhaseWeights(allZero(dim)));
             assertEquals(1.0f, JAVA.compare(p, p, optsFree), EPSILON, "Java phase-free self-compare");
             assertEquals(1.0f, NATIVE.compare(p, p, optsFree), EPSILON, "Native phase-free self-compare");
         }
     }
-
-    // ─── All-one weights = default path equivalence ────────────────────────────
 
     @ParameterizedTest(name = "D={0}")
     @ValueSource(ints = {1, 7, 17, 127, 513})

@@ -235,17 +235,59 @@ public final class IvfCandidateSource implements CandidateSource {
         return new ScoredCandidates(results, false);
     }
 
+    /** Maximum probe fraction for weighted queries (configurable). Default: 40% of centroids. */
+    private static final double MAX_PROBE_FRACTION =
+            safeParseDouble("resonance.index.weighted.maxProbePct", 0.40);
+
+    /** Progressive probing round fractions of K. */
+    private static final double[] PROBE_ROUNDS = {0.15, 0.25, 0.40};
+
     /**
-     * Weighted scored candidates using dual-route IVF: existing centroid ranking + moment-weighted ranking.
+     * Minimum moment score spread (top vs median centroid) to use bounded probing.
+     * Below this threshold, moment routing has no discriminating power —
+     * the cost model falls back to exhaustive scan.
+     */
+    private static final double MOMENT_SPREAD_THRESHOLD =
+            safeParseDouble("resonance.index.weighted.momentSpreadMin", 0.01);
+
+    /** Last query's probe statistics (diagnostic/benchmark only, not thread-safe). */
+    private volatile WeightedProbeStats lastProbeStats;
+
+    /** Diagnostic statistics for the last weighted query. */
+    public record WeightedProbeStats(int totalCentroids, int visitedCentroids,
+                                      int candidatesCollected, int rounds,
+                                      boolean budgetExhausted) {
+        public double probeFraction() {
+            return totalCentroids > 0 ? (double) visitedCentroids / totalCentroids : 0;
+        }
+        public double candidateFraction(int corpusSize) {
+            return corpusSize > 0 ? (double) candidatesCollected / corpusSize : 0;
+        }
+    }
+
+    public WeightedProbeStats lastProbeStats() { return lastProbeStats; }
+
+    /**
+     * Weighted scored candidates using bounded progressive dual-route IVF.
      *
      * <p>For default weights (null/all-one), delegates to the standard {@link #scoredCandidates} path.
-     * For weighted queries, computes adaptive nProbe based on weight drift and forms a deduplicated
-     * union of existing IVF probes and moment-ranked probes.</p>
+     * For weighted queries, uses progressive probing with a hard cap at {@link #MAX_PROBE_FRACTION}
+     * of total centroids:</p>
+     * <ol>
+     *   <li>Compute full rankings: Route A (L2/cosine) and Route B (ResonanceMoments)</li>
+     *   <li>Progressive rounds: probe 15% → 25% → 40% of centroids, interleaving both routes</li>
+     *   <li>In each round, collect candidates only from NEW centroids</li>
+     *   <li>Early stop if a round adds fewer new candidates than topK</li>
+     * </ol>
+     *
+     * <p>This approach bounds centroid coverage while maximizing GT centroid discovery
+     * through route diversity.</p>
      */
     public ScoredCandidates scoredCandidatesWeighted(WavePattern query, int topK,
                                                       int baseNProbe,
                                                       PhaseRoutingProfile profile) {
         if (profile == null || profile.isDefault()) {
+            lastProbeStats = null;
             return scoredCandidates(query, topK, baseNProbe);
         }
 
@@ -254,53 +296,97 @@ public final class IvfCandidateSource implements CandidateSource {
         ResonanceMoments mom = this.moments;
 
         if (index == null || sidecar == null) {
+            lastProbeStats = null;
             return CandidateSource.super.scoredCandidates(query, topK);
         }
 
         int K = index.size();
         PhaseWeights pw = profile.phaseWeights();
 
-        // Adaptive nProbe: increase probe count based on weight drift
-        int adaptiveProbe = computeAdaptiveProbe(baseNProbe, K, profile);
-
-        // Route A: existing IVF centroid ranking
-        double[] queryUDouble = UnfoldedMath.unfold(query);
-        UnfoldedMath.l2Normalize(queryUDouble);
-        int[] existingProbes = SphericalKMeans.topNearestCentroids(
-                queryUDouble, index.centroids(), index.dim(), adaptiveProbe);
-
-        // Route B: moment-weighted ranking (if moments available)
-        Set<Integer> probeSet = new LinkedHashSet<>();
-        for (int p : existingProbes) probeSet.add(p);
-
-        if (mom != null && mom.isCompatible(K, query.amplitude().length)) {
-            // Route B (moment-weighted) is the weight-aware ranker — give it more probes
-            // than Route A to compensate for L2-based centroid ranking missing weighted matches
-            int momentProbeCount = Math.min(K, (int) Math.ceil(adaptiveProbe * 1.5));
-            int[] momentProbes = mom.topCentroidsByMoment(query, pw, momentProbeCount);
-            for (int p : momentProbes) probeSet.add(p);
+        if (profile.isPhaseFree()) {
+            lastProbeStats = new WeightedProbeStats(K, K, 0, 1, false);
+            return scoredCandidates(query, topK, K);
         }
 
-        // Scan union of probes
+        double[] queryUDouble = UnfoldedMath.unfold(query);
+        UnfoldedMath.l2Normalize(queryUDouble);
+        int[] routeA = SphericalKMeans.topNearestCentroids(
+                queryUDouble, index.centroids(), index.dim(), K);
+
+        int[] routeB = (mom != null && mom.isCompatible(K, query.amplitude().length))
+                ? mom.topCentroidsByMoment(query, pw, K)
+                : routeA;
+
+        if (mom != null && routeB != routeA) {
+            float topScore = mom.scoreCentroid(routeB[0], query, pw);
+            float midScore = mom.scoreCentroid(routeB[K / 2], query, pw);
+            double spread = topScore > 0 ? (topScore - midScore) / topScore : 0;
+            if (spread < MOMENT_SPREAD_THRESHOLD) {
+                lastProbeStats = new WeightedProbeStats(K, K, 0, 0, false);
+                return scoredCandidates(query, topK, K);
+            }
+        }
+
+        int maxProbe = Math.max(baseNProbe, (int) Math.ceil(K * MAX_PROBE_FRACTION));
+        maxProbe = Math.min(maxProbe, K);
+
         float[] queryU = UnfoldedMath.unfoldFloat32(query);
         float queryEnergy = UnfoldedMath.energyFloat32(query);
 
+        Set<Integer> visited = new LinkedHashSet<>();
         List<PostingSidecar.ScoredCandidate> results = new ArrayList<>();
-        for (int partIdx : probeSet) {
-            sidecar.scanPartition(partIdx, queryU, queryEnergy, results);
+        Set<String> scoredIds = new HashSet<>();
+        int roundCount = 0;
+        boolean budgetExhausted = false;
+
+        for (double roundFrac : PROBE_ROUNDS) {
+            int roundTarget = Math.min(maxProbe, Math.max(baseNProbe, (int) Math.ceil(K * roundFrac)));
+            roundCount++;
+
+            int prevVisited = visited.size();
+            int aIdx = 0, bIdx = 0;
+            while (visited.size() < roundTarget) {
+                boolean added = false;
+                while (aIdx < routeA.length && visited.contains(routeA[aIdx])) aIdx++;
+                if (aIdx < routeA.length && visited.size() < roundTarget) {
+                    visited.add(routeA[aIdx++]);
+                    added = true;
+                }
+                while (bIdx < routeB.length && visited.contains(routeB[bIdx])) bIdx++;
+                if (bIdx < routeB.length && visited.size() < roundTarget) {
+                    visited.add(routeB[bIdx++]);
+                    added = true;
+                }
+                if (!added) break;
+            }
+
+            int newCandidates = 0;
+            int idx = 0;
+            for (int partIdx : visited) {
+                if (idx++ < prevVisited) continue;
+                int beforeSize = results.size();
+                sidecar.scanPartition(partIdx, queryU, queryEnergy, results);
+                newCandidates += (results.size() - beforeSize);
+            }
+
+            if (roundCount > 1 && newCandidates < topK && newCandidates < results.size() / 4) {
+                break;
+            }
+
+            if (visited.size() >= maxProbe) {
+                budgetExhausted = true;
+                break;
+            }
         }
 
         results.removeIf(sc -> delta.isDeleted(sc.id()));
-
-        Set<String> scoredIds = new HashSet<>(results.size());
         for (PostingSidecar.ScoredCandidate sc : results) {
             scoredIds.add(sc.id());
         }
 
-        // Vamana graph search on probed partitions
         Map<Integer, VamanaGraph> graphs = vamanaGraphs.get();
         if (!graphs.isEmpty() && readerProvider != null) {
-            for (int partIdx : probeSet) {
+            for (int partIdx : visited) {
                 VamanaGraph graph = graphs.get(partIdx);
                 if (graph == null || graph.nodeCount() == 0) continue;
 
@@ -326,7 +412,6 @@ public final class IvfCandidateSource implements CandidateSource {
             }
         }
 
-        // Delta entries
         Set<String> deltaIds = delta.allIds();
         for (String id : deltaIds) {
             if (!scoredIds.contains(id)) {
@@ -334,22 +419,29 @@ public final class IvfCandidateSource implements CandidateSource {
             }
         }
 
+        lastProbeStats = new WeightedProbeStats(K, visited.size(),
+                scoredIds.size(), roundCount, budgetExhausted);
+
         return new ScoredCandidates(results, false);
     }
 
     /**
      * Computes adaptive nProbe based on weight drift and phase suppression.
      *
-     * <p>Uses quadratic interpolation from baseNProbe to totalCentroids:
-     * {@code probe = base + (K - base) * factor²}. This naturally scales with
-     * index size and produces moderate increases for small deviations but
-     * aggressive expansion for high drift (sparse weights).</p>
+     * <p>Uses square-root interpolation from baseNProbe to totalCentroids:
+     * {@code probe = base + (K - base) * sqrt(factor)}. The square root curve
+     * allocates sufficient probe budget even for small deformations (e.g. dense
+     * mask with 90% active dimensions), while still scaling monotonically with
+     * metric deformation.</p>
+     *
+     * <p>Invariant: more metric deformation → more search budget.</p>
      *
      * <p>Properties:
      * <ul>
      *   <li>all-one weights → returns baseNProbe exactly</li>
-     *   <li>small drift → small increase (factor²)</li>
-     *   <li>large drift → approaches totalCentroids</li>
+     *   <li>small drift (dense) → moderate increase (sqrt(0.1) ≈ 0.32)</li>
+     *   <li>medium drift (continuous/adversarial) → substantial increase (sqrt(0.5) ≈ 0.71)</li>
+     *   <li>large drift (sparse) → near-total coverage (sqrt(0.9) ≈ 0.95)</li>
      *   <li>phase-free → returns totalCentroids</li>
      * </ul>
      */
@@ -360,12 +452,10 @@ public final class IvfCandidateSource implements CandidateSource {
         double drift = profile.weightDrift();
         double suppression = 1.0 - profile.meanParticipation();
 
-        // Combined factor: maximum of drift and suppression, in [0, 1]
         double factor = Math.max(drift, suppression);
 
-        // Quadratic interpolation: baseNProbe → totalCentroids as factor → 1.0
         int adaptiveProbe = (int) Math.ceil(
-                baseNProbe + (double) (totalCentroids - baseNProbe) * factor * factor);
+                baseNProbe + (double) (totalCentroids - baseNProbe) * Math.sqrt(factor));
 
         return Math.min(adaptiveProbe, totalCentroids);
     }

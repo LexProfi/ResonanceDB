@@ -53,6 +53,13 @@ Thumbs.db
 !gradle/wrapper/gradle-wrapper.jar
 !gradle/wrapper/gradle-wrapper.properties
 
+# ─── Packages / Installers ─────────────────────────────────────────────────────
+*.deb
+*.rpm
+
+# ─── Native Library Backups ────────────────────────────────────────────────────
+*.win-backup
+
 # ─── Development Artifacts (Claude Code) ──────────────────────────────────────
 CLAUDE.md
 /dev/

@@ -42,7 +42,6 @@ class WalKillTest {
 
         long seed = System.nanoTime();
 
-        // Build classpath from current test runtime
         String classpath = System.getProperty("java.class.path");
         String javaHome = System.getProperty("java.home");
         String javaBin = javaHome + File.separator + "bin" + File.separator + "java";
@@ -60,12 +59,10 @@ class WalKillTest {
 
         Process proc = pb.start();
 
-        // Read acked LSNs from child stdout
         Set<Long> ackedLsns = new HashSet<>();
         BufferedReader reader = new BufferedReader(
                 new InputStreamReader(proc.getInputStream()));
 
-        // Let the child run for a random duration (50-300ms)
         Random rng = new Random(seed);
         long runTimeMs = 50 + rng.nextInt(250);
         long deadline = System.currentTimeMillis() + runTimeMs;
@@ -82,12 +79,9 @@ class WalKillTest {
             }
         }
 
-        // Kill the child (simulating crash)
         proc.destroyForcibly();
         assertTrue(proc.waitFor(5, TimeUnit.SECONDS), "Child process did not terminate");
 
-        // Drain remaining stdout (some ACKs may have been buffered).
-        // Stream may be closed after destroyForcibly — catch IOException.
         try {
             while ((line = reader.readLine()) != null) {
                 if (line.startsWith("ACK:")) {
@@ -95,15 +89,12 @@ class WalKillTest {
                 }
             }
         } catch (IOException ignored) {
-            // Stream closed after process kill — expected
         }
 
         if (ackedLsns.isEmpty()) {
-            // Child didn't ack anything before kill — nothing to verify
             return;
         }
 
-        // Replay WAL and verify all acked LSNs are present
         List<WalRecord> records = WriteAheadLog.replay(walDir);
         Set<Long> replayedLsns = new HashSet<>();
         for (WalRecord rec : records) {
@@ -127,11 +118,9 @@ class WalKillTest {
             long seed = Long.parseLong(args[1]);
             Random rng = new Random(seed);
 
-            // Use strict mode for kill test: each ACK means fsync completed
             try (WriteAheadLog wal = new WriteAheadLog(walDir,
                     WriteAheadLog.DurabilityMode.STRICT, 1, 1, 4L << 20)) {
 
-                // Write inserts in a tight loop forever (parent will kill us)
                 while (true) {
                     double[] amp = new double[16];
                     double[] phase = new double[16];
@@ -145,10 +134,8 @@ class WalKillTest {
                     WalRecord record = WalRecord.insert(lsn,
                             "hash-" + lsn, Map.of(), pattern);
 
-                    // Blocking: waits for fsync
                     wal.append(record).join();
 
-                    // Print acked LSN — flush to ensure parent sees it before kill
                     System.out.println("ACK:" + lsn);
                     System.out.flush();
                 }

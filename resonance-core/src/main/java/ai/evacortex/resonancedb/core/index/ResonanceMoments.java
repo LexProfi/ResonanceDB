@@ -37,16 +37,16 @@ import java.util.zip.CRC32C;
  */
 public final class ResonanceMoments {
 
-    private static final int MAGIC = 0x524D4F4D; // "RMOM"
+    private static final int MAGIC = 0x524D4F4D;
     private static final int VERSION = 1;
 
     private final int centroidCount;
     private final int dimension;
-    private final float[][] meanAmplitude;    // [centroid][dim]
-    private final float[][] meanRealProj;     // [centroid][dim]
-    private final float[][] meanImagProj;     // [centroid][dim]
-    private final float[] meanEnergy;         // [centroid]
-    private final int[] counts;               // [centroid]
+    private final float[][] meanAmplitude;
+    private final float[][] meanRealProj;
+    private final float[][] meanImagProj;
+    private final float[] meanEnergy;
+    private final int[] counts;
 
     private ResonanceMoments(int centroidCount, int dimension,
                              float[][] meanAmplitude, float[][] meanRealProj,
@@ -94,7 +94,6 @@ public final class ResonanceMoments {
         double queryEnergy = 0.0;
 
         if (weights == null || weights.isDefault()) {
-            // Standard scoring: G = cos(Δφ), use μR and μI
             for (int i = 0; i < D; i++) {
                 double Aq = qA[i];
                 queryEnergy += Aq * Aq;
@@ -103,14 +102,12 @@ public final class ResonanceMoments {
                 cross += Aq * (cosQ * mR[i] + sinQ * mI[i]);
             }
         } else if (weights.isPhaseFree()) {
-            // Amplitude-only: G = 1, cross = Aq * μA
             for (int i = 0; i < D; i++) {
                 double Aq = qA[i];
                 queryEnergy += Aq * Aq;
                 cross += Aq * mA[i];
             }
         } else {
-            // Weighted: G_i = (1 - w_i) + w_i * cos(Δφ_i)
             double[] w = weights.rawWeights();
             for (int i = 0; i < D; i++) {
                 double Aq = qA[i];
@@ -145,7 +142,6 @@ public final class ResonanceMoments {
             scores[c] = scoreCentroid(c, query, weights);
         }
 
-        // Partial selection: find top-K by score descending
         int[] indices = new int[K];
         for (int i = 0; i < K; i++) indices[i] = i;
 
@@ -167,8 +163,6 @@ public final class ResonanceMoments {
         System.arraycopy(indices, 0, result, 0, topK);
         return result;
     }
-
-    // ─── Builder ─────────────────────────────────────────────────────────────
 
     /**
      * Mutable accumulator for building moments incrementally during index construction.
@@ -233,8 +227,6 @@ public final class ResonanceMoments {
             return new ResonanceMoments(centroidCount, dimension, mA, mR, mI, mE, c);
         }
     }
-
-    // ─── Persistence ─────────────────────────────────────────────────────────
 
     public void write(Path path) throws IOException {
         Path tmp = path.resolveSibling(path.getFileName() + ".tmp");

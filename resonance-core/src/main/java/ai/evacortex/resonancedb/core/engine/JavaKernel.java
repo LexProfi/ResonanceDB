@@ -44,7 +44,6 @@ public final class JavaKernel implements ResonanceKernel {
         double eA = 0.0, eB = 0.0, inter = 0.0;
 
         if (options.isEffectivelyPhaseFree()) {
-            // ignorePhase=true OR all-zero weights: cos(Δφ) treated as 1.0
             for (int i = 0; i < len; i++) {
                 double A1 = aA[i], A2 = bA[i];
                 double A1sq = A1 * A1, A2sq = A2 * A2;
@@ -53,7 +52,6 @@ public final class JavaKernel implements ResonanceKernel {
                 inter += (A1 + A2) * (A1 + A2);
             }
         } else if (pw == null || pw.isDefault()) {
-            // Default path: full phase sensitivity, no allocation overhead
             for (int i = 0; i < len; i++) {
                 double A1 = aA[i], A2 = bA[i];
                 double A1sq = A1 * A1, A2sq = A2 * A2;
@@ -63,7 +61,6 @@ public final class JavaKernel implements ResonanceKernel {
                 inter += A1sq + A2sq + 2.0 * A1 * A2 * Math.cos(dphi);
             }
         } else {
-            // Weighted phase participation: G_i = (1 - w_i) + w_i * cos(Δφ_i)
             final double[] w = pw.rawWeights();
             for (int i = 0; i < len; i++) {
                 double A1 = aA[i], A2 = bA[i];
@@ -193,7 +190,6 @@ public final class JavaKernel implements ResonanceKernel {
         double weightSum = 0.0;
 
         if (phaseFree) {
-            // Phase-free: inter = (A1+A2)^2, phaseDelta = 0.0
             for (int i = 0; i < len; i++) {
                 double A1 = aA[i], A2 = bA[i];
                 double A1sq = A1 * A1, A2sq = A2 * A2;
@@ -202,7 +198,6 @@ public final class JavaKernel implements ResonanceKernel {
                 inter += (A1 + A2) * (A1 + A2);
             }
         } else if (!weighted) {
-            // Default path: full phase sensitivity
             for (int i = 0; i < len; i++) {
                 double A1 = aA[i], A2 = bA[i];
                 double A1sq = A1 * A1, A2sq = A2 * A2;
@@ -219,7 +214,6 @@ public final class JavaKernel implements ResonanceKernel {
                 cosSum += Math.cos(dphi);
             }
         } else {
-            // Weighted path: phase delta weighted by participation
             for (int i = 0; i < len; i++) {
                 double A1 = aA[i], A2 = bA[i];
                 double A1sq = A1 * A1, A2sq = A2 * A2;
@@ -255,8 +249,6 @@ public final class JavaKernel implements ResonanceKernel {
         } else if (!weighted) {
             phaseDelta = Math.atan2(sinSum, cosSum);
         } else {
-            // Weighted circular mean: uses weighted sin/cos sums
-            // When sumW == 0, all weights are zero, which is phaseFree (handled above)
             phaseDelta = (weightSum > 0.0) ? Math.atan2(sinSum, cosSum) : 0.0;
         }
 

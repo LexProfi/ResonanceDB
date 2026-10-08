@@ -41,7 +41,6 @@ class CloseAfterRebuildTest {
     @Timeout(value = 35, unit = TimeUnit.SECONDS)
     @DisplayName("close() after background rebuild completes within 35s")
     void closeAfterBackgroundRebuild(@TempDir Path tmpDir) {
-        // Low delta threshold to trigger rebuild quickly
         System.setProperty("resonance.index.enabled", "true");
         System.setProperty("resonance.index.delta.maxSize", "50");
         System.setProperty("resonance.index.l2.enabled", "true");
@@ -55,7 +54,6 @@ class CloseAfterRebuildTest {
 
             Random rng = new Random(SEED);
 
-            // Insert enough patterns to exceed delta threshold and trigger rebuild
             for (int i = 0; i < 200; i++) {
                 double[] amp = new double[DIM];
                 double[] phase = new double[DIM];
@@ -66,14 +64,11 @@ class CloseAfterRebuildTest {
                 try {
                     store.insert(new WavePattern(amp, phase), Map.of());
                 } catch (Exception e) {
-                    // skip duplicates
                 }
             }
 
-            // Give scheduler a moment to pick up the rebuild task
             Thread.sleep(100);
 
-            // close() must return promptly thanks to cooperative cancellation
             long t0 = System.nanoTime();
             store.close();
             long elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0);
@@ -122,17 +117,14 @@ class CloseAfterRebuildTest {
                 try {
                     store.insert(new WavePattern(amp, phase), Map.of());
                 } catch (Exception e) {
-                    // skip
                 }
             }
 
-            // Start rebuild in background, then close immediately
             Thread rebuildThread = new Thread(() -> {
                 try { store.forceIndexRebuild(); } catch (Exception e) { /* expected on close */ }
             });
             rebuildThread.start();
 
-            // Give it a moment to start
             Thread.sleep(200);
 
             long t0 = System.nanoTime();

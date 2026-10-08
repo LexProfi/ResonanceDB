@@ -14,6 +14,5 @@ import ai.evacortex.resonancedb.core.storage.WavePattern;
 public class NoOpTracer implements ResonanceTracer {
     @Override
     public void trace(String id, WavePattern query, WavePattern matched, float score) {
-        // no-op
     }
 }

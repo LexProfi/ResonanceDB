@@ -62,11 +62,6 @@ class MomentsSidecarLifecycleTest {
     void closeRuntime() {
         if (runtime != null) runtime.close();
     }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // 1. MISSING SIDECAR
-    // ═══════════════════════════════════════════════════════════════════════════
-
     @Test
     @Order(1)
     @DisplayName("Missing moments sidecar → weighted query succeeds via fallback")
@@ -77,11 +72,9 @@ class MomentsSidecarLifecycleTest {
             try {
                 store.forceIndexRebuild();
 
-                // Delete moments file
                 Path momentsPath = tmpDir.resolve("missing/index/moments.rmom");
                 Files.deleteIfExists(momentsPath);
 
-                // Weighted query should still work (fallback to IVF-only)
                 CompareOptions sparse = sparseOptions();
                 List<ResonanceMatch> results = store.query(randomQuery(), TOP_K, sparse);
                 assertNotNull(results);
@@ -94,10 +87,6 @@ class MomentsSidecarLifecycleTest {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // 2. CORRUPT SIDECAR
-    // ═══════════════════════════════════════════════════════════════════════════
-
     @Test
     @Order(2)
     @DisplayName("Corrupt moments sidecar → rejected on load, fallback")
@@ -109,22 +98,18 @@ class MomentsSidecarLifecycleTest {
                 store.forceIndexRebuild();
                 store.close();
 
-                // Corrupt the moments file
                 Path momentsPath = tmpDir.resolve("corrupt/index/moments.rmom");
                 assertTrue(Files.exists(momentsPath), "Moments file should exist after build");
 
                 byte[] data = Files.readAllBytes(momentsPath);
-                // Flip bytes in the middle
                 for (int i = data.length / 3; i < data.length * 2 / 3; i++) {
                     data[i] = (byte) ~data[i];
                 }
                 Files.write(momentsPath, data);
 
-                // ResonanceMoments.load should detect CRC mismatch
                 ResonanceMoments loaded = ResonanceMoments.load(momentsPath);
                 assertNull(loaded, "Corrupt moments should return null on load");
 
-                // Re-open store — should still work
                 WavePatternStoreImpl store2 = new WavePatternStoreImpl(
                         tmpDir.resolve("corrupt"), DIM, runtime);
                 try {
@@ -142,10 +127,6 @@ class MomentsSidecarLifecycleTest {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // 3. OLD IVF WITHOUT SIDECAR
-    // ═══════════════════════════════════════════════════════════════════════════
-
     @Test
     @Order(3)
     @DisplayName("Old IVF without moments sidecar → graceful degradation")
@@ -157,19 +138,15 @@ class MomentsSidecarLifecycleTest {
                 store.forceIndexRebuild();
                 store.close();
 
-                // Remove moments file (simulating old IVF format)
                 Path momentsPath = tmpDir.resolve("no-moments/index/moments.rmom");
                 Files.deleteIfExists(momentsPath);
 
-                // Re-open — moments won't load
                 WavePatternStoreImpl store2 = new WavePatternStoreImpl(
                         tmpDir.resolve("no-moments"), DIM, runtime);
                 try {
-                    // Default query should work
                     List<ResonanceMatch> defaultResults = store2.query(randomQuery(), TOP_K);
                     assertFalse(defaultResults.isEmpty());
 
-                    // Weighted query should also work (falls back to IVF-only routing)
                     CompareOptions sparse = sparseOptions();
                     List<ResonanceMatch> weightedResults = store2.query(randomQuery(), TOP_K, sparse);
                     assertNotNull(weightedResults);
@@ -185,15 +162,10 @@ class MomentsSidecarLifecycleTest {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // 4. WRONG GENERATION (INCOMPATIBLE DIMENSIONS)
-    // ═══════════════════════════════════════════════════════════════════════════
-
     @Test
     @Order(4)
     @DisplayName("Moments from wrong generation → rejected by compatibility check")
     void wrongGenerationMoments(@TempDir Path tmpDir) throws IOException {
-        // Build moments with different centroid count
         int wrongK = 5;
         ResonanceMoments.Builder builder = new ResonanceMoments.Builder(wrongK, DIM);
         Random rng = new Random(SEED);
@@ -208,20 +180,14 @@ class MomentsSidecarLifecycleTest {
         ResonanceMoments loaded = ResonanceMoments.load(momentsPath);
         assertNotNull(loaded, "File should load successfully");
 
-        // But compatibility check with different K should fail
         assertFalse(loaded.isCompatible(100, DIM),
                 "Moments with K=5 should not be compatible with K=100");
         assertTrue(loaded.isCompatible(wrongK, DIM),
                 "Moments should be compatible with matching K and D");
 
-        // Also check dimension mismatch
         assertFalse(loaded.isCompatible(wrongK, DIM * 2),
                 "Moments should reject mismatched dimension");
     }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // 5. INDEX REBUILD REGENERATES MOMENTS
-    // ═══════════════════════════════════════════════════════════════════════════
 
     @Test
     @Order(5)
@@ -231,7 +197,6 @@ class MomentsSidecarLifecycleTest {
         try {
             WavePatternStoreImpl store = createAndPopulate(tmpDir.resolve("rebuild"), N);
             try {
-                // First build
                 store.forceIndexRebuild();
 
                 Path momentsPath = tmpDir.resolve("rebuild/index/moments.rmom");
@@ -240,21 +205,17 @@ class MomentsSidecarLifecycleTest {
                 ResonanceMoments moments1 = ResonanceMoments.load(momentsPath);
                 assertNotNull(moments1, "Moments should load after first build");
 
-                // Insert more patterns
                 Random rng = new Random(SEED + 999);
                 for (int i = 0; i < 50; i++) {
                     try { store.insert(randomPattern(rng, DIM), Map.of()); }
                     catch (Exception e) { /* dup */ }
                 }
 
-                // Second rebuild — moments should be regenerated
                 store.forceIndexRebuild();
 
                 ResonanceMoments moments2 = ResonanceMoments.load(momentsPath);
                 assertNotNull(moments2, "Moments should exist after second build");
 
-                // Moments from second build may differ (more patterns, possibly different K)
-                // The important thing is they're fresh and loadable
                 assertTrue(moments2.centroidCount() > 0);
                 assertEquals(DIM, moments2.dimension());
 
@@ -265,10 +226,6 @@ class MomentsSidecarLifecycleTest {
             System.clearProperty("resonance.index.enabled");
         }
     }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // 6. DELETE LIFECYCLE — MOMENTS REFRESH ON REBUILD
-    // ═══════════════════════════════════════════════════════════════════════════
 
     @Test
     @Order(6)
@@ -292,19 +249,16 @@ class MomentsSidecarLifecycleTest {
                 ResonanceMoments beforeDelete = ResonanceMoments.load(momentsPath);
                 assertNotNull(beforeDelete);
 
-                // Count total patterns in moments
                 int totalBefore = 0;
                 for (int c = 0; c < beforeDelete.centroidCount(); c++) {
                     totalBefore += beforeDelete.count(c);
                 }
 
-                // Delete half the patterns
                 int deleteCount = ids.size() / 2;
                 for (int i = 0; i < deleteCount; i++) {
                     store.delete(ids.get(i));
                 }
 
-                // Rebuild
                 store.forceIndexRebuild();
 
                 ResonanceMoments afterDelete = ResonanceMoments.load(momentsPath);
@@ -318,12 +272,10 @@ class MomentsSidecarLifecycleTest {
                 assertTrue(totalAfter < totalBefore,
                         "Moments should reflect fewer patterns after deletion + rebuild");
 
-                // Weighted query should work correctly after delete + rebuild
                 CompareOptions sparse = sparseOptions();
                 List<ResonanceMatch> results = store.query(randomQuery(), TOP_K, sparse);
                 assertNotNull(results);
 
-                // Deleted patterns must not appear in results
                 Set<String> deletedIds = new HashSet<>(ids.subList(0, deleteCount));
                 for (ResonanceMatch r : results) {
                     assertFalse(deletedIds.contains(r.id()),
@@ -337,10 +289,6 @@ class MomentsSidecarLifecycleTest {
             System.clearProperty("resonance.index.enabled");
         }
     }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // 7. MOMENTS PERSISTENCE ROUNDTRIP
-    // ═══════════════════════════════════════════════════════════════════════════
 
     @Test
     @Order(7)
@@ -375,10 +323,6 @@ class MomentsSidecarLifecycleTest {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // 8. TRUNCATED FILE
-    // ═══════════════════════════════════════════════════════════════════════════
-
     @Test
     @Order(8)
     @DisplayName("Truncated moments file → returns null (no crash)")
@@ -393,17 +337,12 @@ class MomentsSidecarLifecycleTest {
         Path path = tmpDir.resolve("truncated.rmom");
         original.write(path);
 
-        // Truncate to half
         byte[] data = Files.readAllBytes(path);
         Files.write(path, Arrays.copyOf(data, data.length / 2));
 
         ResonanceMoments loaded = ResonanceMoments.load(path);
         assertNull(loaded, "Truncated file should return null");
     }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // 9. EMPTY FILE
-    // ═══════════════════════════════════════════════════════════════════════════
 
     @Test
     @Order(9)
@@ -414,27 +353,19 @@ class MomentsSidecarLifecycleTest {
         assertNull(ResonanceMoments.load(path));
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // 10. WRONG MAGIC
-    // ═══════════════════════════════════════════════════════════════════════════
-
     @Test
     @Order(10)
     @DisplayName("File with wrong magic → returns null")
     void wrongMagicMomentsFile(@TempDir Path tmpDir) throws IOException {
         Path path = tmpDir.resolve("wrong-magic.rmom");
         try (DataOutputStream out = new DataOutputStream(new FileOutputStream(path.toFile()))) {
-            out.writeInt(0xDEADBEEF); // wrong magic
+            out.writeInt(0xDEADBEEF);
             out.writeInt(1);
             out.writeInt(2);
             out.writeInt(DIM);
         }
         assertNull(ResonanceMoments.load(path));
     }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // 11. WEIGHTED QUERY CORRECTNESS AFTER RESTART
-    // ═══════════════════════════════════════════════════════════════════════════
 
     @Test
     @Order(11)
@@ -446,7 +377,6 @@ class MomentsSidecarLifecycleTest {
             WavePattern query = randomQuery();
             CompareOptions sparse = sparseOptions();
 
-            // Build store and query
             List<ResonanceMatch> resultsBefore;
             {
                 WavePatternStoreImpl store = createAndPopulate(storePath, N);
@@ -455,7 +385,6 @@ class MomentsSidecarLifecycleTest {
                 store.close();
             }
 
-            // Restart store and query again
             List<ResonanceMatch> resultsAfter;
             {
                 WavePatternStoreImpl store = new WavePatternStoreImpl(storePath, DIM, runtime);
@@ -463,7 +392,6 @@ class MomentsSidecarLifecycleTest {
                 store.close();
             }
 
-            // Results should be identical (deterministic)
             assertEquals(resultsBefore.size(), resultsAfter.size(),
                     "Same number of results before and after restart");
 
@@ -478,15 +406,10 @@ class MomentsSidecarLifecycleTest {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // 12. MEMORY SCALING: O(centroids × dim), NOT O(patterns × dim)
-    // ═══════════════════════════════════════════════════════════════════════════
-
     @Test
     @Order(12)
     @DisplayName("Moments memory scales as O(centroids × dim), not O(patterns × dim)")
     void momentsMemoryScaling(@TempDir Path tmpDir) throws IOException {
-        // Build moments for different pattern counts but same centroid count
         int K = 8;
         int D = 128;
 
@@ -505,7 +428,6 @@ class MomentsSidecarLifecycleTest {
             sizes[trial] = Files.size(path);
         }
 
-        // All files should be approximately the same size (same K, same D)
         for (int i = 1; i < sizes.length; i++) {
             assertEquals(sizes[0], sizes[i],
                     "Moments file size should be identical for same K×D regardless of pattern count: " +
@@ -513,16 +435,10 @@ class MomentsSidecarLifecycleTest {
                     "N=" + patternCounts[i] + " → " + sizes[i] + " bytes");
         }
 
-        // Verify size is O(K × D)
-        // Expected: header(16) + K × (count(4) + energy(4) + 3×D×4) + crc(4)
         long expectedSize = 16 + (long) K * (4 + 4 + 3L * D * 4) + 4;
         assertEquals(expectedSize, sizes[0],
                 "File size should match expected O(K×D) formula");
     }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    //  Helpers
-    // ═══════════════════════════════════════════════════════════════════════════
 
     private WavePatternStoreImpl createAndPopulate(Path dir, int count) {
         WavePatternStoreImpl store = new WavePatternStoreImpl(dir, DIM, runtime);

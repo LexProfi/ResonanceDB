@@ -23,7 +23,6 @@ public final class NativeCompare {
 
     private static final Linker LINKER = Linker.nativeLinker();
 
-    // Default (unweighted) descriptors
     private static final FunctionDescriptor SCALAR_DESC = FunctionDescriptor.of(
             JAVA_FLOAT, ADDRESS, ADDRESS, ADDRESS, ADDRESS, JAVA_INT);
 
@@ -36,7 +35,6 @@ public final class NativeCompare {
     private static final FunctionDescriptor DELTA_DESC = FunctionDescriptor.ofVoid(
             ADDRESS, ADDRESS, ADDRESS, ADDRESS, JAVA_INT, ADDRESS);
 
-    // Weighted descriptors
     private static final FunctionDescriptor SCALAR_W_DESC = FunctionDescriptor.of(
             JAVA_FLOAT, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS, JAVA_INT);
 
@@ -196,8 +194,6 @@ public final class NativeCompare {
         }
     }
 
-    // ── Weighted path ──────────────────────────────────────────────────────────
-
     public static float compareWeighted(float[] amp1, float[] phase1,
                                         float[] amp2, float[] phase2,
                                         float[] weights) throws Throwable {
@@ -251,8 +247,6 @@ public final class NativeCompare {
             return out.toArray(JAVA_FLOAT);
         }
     }
-
-    // ── Phase-free path ────────────────────────────────────────────────────────
 
     public static float comparePhaseFree(float[] amp1, float[] amp2) throws Throwable {
         if (amp1 == null || amp2 == null)

@@ -93,14 +93,12 @@ class StoreBenchmark {
         Random dataRng = new Random(SEED);
 
         try {
-            // ── Insert phase ─────────────────────────────────────────────
             long insertStart = System.nanoTime();
             for (int i = 0; i < n; i++) {
                 WavePattern p = randomPattern(dataRng, DIM);
                 try {
                     store.insert(p, Map.of("idx", String.valueOf(i)));
                 } catch (Exception e) {
-                    // Skip duplicates (extremely unlikely with random data)
                 }
             }
             long insertElapsed = System.nanoTime() - insertStart;
@@ -110,27 +108,23 @@ class StoreBenchmark {
             System.out.printf("  insert: %d patterns in %.0f ms (%.0f inserts/sec)%n",
                     n, insertMs, insertPerSec);
 
-            // Force IVF index build after bulk insert (if enabled)
             long indexStart = System.nanoTime();
             store.forceIndexRebuild();
             long indexElapsed = System.nanoTime() - indexStart;
-            if (indexElapsed > 1_000_000) { // only report if >1ms (means index was built)
+            if (indexElapsed > 1_000_000) {
                 System.out.printf("  index build: %.0f ms%n", indexElapsed / 1_000_000.0);
             }
 
-            // ── Generate query set ───────────────────────────────────────
             Random queryRng = new Random(SEED + 999);
             WavePattern[] queries = new WavePattern[WARMUP_QUERIES + MEASURE_QUERIES];
             for (int i = 0; i < queries.length; i++) {
                 queries[i] = randomPattern(queryRng, DIM);
             }
 
-            // ── Warmup ───────────────────────────────────────────────────
             for (int i = 0; i < WARMUP_QUERIES; i++) {
                 store.query(queries[i], TOP_K);
             }
 
-            // ── Measure query latency ────────────────────────────────────
             long[] latenciesNs = new long[MEASURE_QUERIES];
             for (int i = 0; i < MEASURE_QUERIES; i++) {
                 long t0 = System.nanoTime();
@@ -151,7 +145,6 @@ class StoreBenchmark {
                     TOP_K, p50, p90, p99, mean);
             System.out.printf("  throughput: %.1f QPS%n", qps);
 
-            // ── Measure queryDetailed latency ────────────────────────────
             long[] detLatencies = new long[MEASURE_QUERIES];
             for (int i = 0; i < MEASURE_QUERIES; i++) {
                 long t0 = System.nanoTime();
@@ -178,7 +171,7 @@ class StoreBenchmark {
     @Order(2)
     @DisplayName("Benchmark: concurrent query throughput")
     void benchmarkConcurrentQueries() {
-        int n = SIZES[0]; // use smallest size for concurrency test
+        int n = SIZES[0];
         System.out.println();
         System.out.println("--- Concurrent query benchmark (N=" + n + ") ---");
 
@@ -187,14 +180,12 @@ class StoreBenchmark {
         Random dataRng = new Random(SEED);
 
         try {
-            // Insert data
             for (int i = 0; i < n; i++) {
                 try {
                     store.insert(randomPattern(dataRng, DIM), Map.of());
                 } catch (Exception e) { /* skip dups */ }
             }
 
-            // Prepare queries
             Random queryRng = new Random(SEED + 7777);
             int totalQueries = 500;
             WavePattern[] queries = new WavePattern[totalQueries];
@@ -202,12 +193,10 @@ class StoreBenchmark {
                 queries[i] = randomPattern(queryRng, DIM);
             }
 
-            // Warmup
             for (int i = 0; i < 20; i++) {
                 store.query(queries[i], TOP_K);
             }
 
-            // Measure with varying thread counts
             for (int threads : new int[]{1, 2, 4, 8}) {
                 ExecutorService exec = Executors.newFixedThreadPool(threads);
                 int queriesPerThread = totalQueries / threads;
@@ -254,14 +243,12 @@ class StoreBenchmark {
         System.out.println();
         System.out.println("--- Recall benchmark (N=" + n + ", queries=" + numQueries + ", topK=" + TOP_K + ") ---");
 
-        // Hold-out queries generated BEFORE data, never indexed
         Random queryRng = new Random(SEED + 777);
         WavePattern[] queries = new WavePattern[numQueries];
         for (int i = 0; i < numQueries; i++) {
             queries[i] = randomPattern(queryRng, DIM);
         }
 
-        // ── Phase 1: Brute-force ground truth (no IVF) ─────────────────
         String[][] groundTruth = new String[numQueries][];
         {
             Path gtDir = tempDir.resolve("recall-gt");
@@ -286,7 +273,6 @@ class StoreBenchmark {
             }
         }
 
-        // ── Phase 2: IVF query() recall ─────────────────────────────────
         {
             Path ivfDir = tempDir.resolve("recall-ivf");
             System.setProperty("resonance.index.enabled", "true");
@@ -302,7 +288,6 @@ class StoreBenchmark {
                 System.out.printf("  index build: %.0f ms%n",
                         (System.nanoTime() - buildStart) / 1_000_000.0);
 
-                // Measure recall@K for query()
                 double totalRecall = 0;
                 long queryStart = System.nanoTime();
                 for (int i = 0; i < numQueries; i++) {
@@ -327,8 +312,6 @@ class StoreBenchmark {
         }
     }
 
-    // ─── Helpers ─────────────────────────────────────────────────────────────
-
     private static WavePattern randomPattern(Random rng, int dim) {
         double[] amp = new double[dim];
         double[] phase = new double[dim];
@@ -342,8 +325,6 @@ class StoreBenchmark {
     private static String autoSizes() {
         long maxHeap = Runtime.getRuntime().maxMemory();
         long heapMb = maxHeap / (1024 * 1024);
-        // Each pattern dim=1536: ~25KB (amp+phase+overhead). Safe budget = 60% of heap.
-        // 512MB → ~12K patterns safe; 1GB → ~25K; 2GB → ~50K; 4GB → ~100K
         if (heapMb >= 4096) return "10000,50000,100000";
         if (heapMb >= 2048) return "10000,50000";
         if (heapMb >= 1024) return "5000,10000";

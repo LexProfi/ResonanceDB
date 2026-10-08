@@ -29,14 +29,11 @@ import static org.junit.jupiter.api.Assertions.*;
 class IvfIndexTest {
 
     private static final long SEED = 42L;
-    private static final int DIM = 32; // small dim for speed
+    private static final int DIM = 32;
     private static final int UNFOLDED_DIM = DIM * 2;
 
     @TempDir
     Path tempDir;
-
-    // ─── SphericalKMeans ─────────────────────────────────────────────────────
-
     @Test
     @DisplayName("k-means: K centroids produced, all L2-normalized")
     void kmeansProducesCentroids() {
@@ -83,15 +80,12 @@ class IvfIndexTest {
         assertEquals(5, centroids.length, "K clamped to N");
     }
 
-    // ─── CentroidIndex ───────────────────────────────────────────────────────
-
     @Test
     @DisplayName("CentroidIndex: assigns patterns to nearest centroid(s)")
     void centroidIndexAssignment() {
         double[][] centroids = randomNormalizedVectors(4, UNFOLDED_DIM, SEED);
         CentroidIndex index = new CentroidIndex(centroids, UNFOLDED_DIM, 0.15);
 
-        // Assign 100 patterns
         Random rng = new Random(SEED + 1);
         for (int i = 0; i < 100; i++) {
             WavePattern p = randomPattern(rng, DIM);
@@ -144,8 +138,6 @@ class IvfIndexTest {
         assertEquals(0, index.uniquePatternCount());
     }
 
-    // ─── CentroidPersistence ─────────────────────────────────────────────────
-
     @Test
     @DisplayName("CentroidPersistence: write then read produces identical centroids")
     void persistenceRoundTrip() throws IOException {
@@ -180,8 +172,6 @@ class IvfIndexTest {
     void persistenceMissing() {
         assertNull(CentroidPersistence.read(tempDir.resolve("nonexistent.bin")));
     }
-
-    // ─── DeltaIndex ──────────────────────────────────────────────────────────
 
     @Test
     @DisplayName("DeltaIndex: add and retrieve")
@@ -238,11 +228,9 @@ class IvfIndexTest {
 
         assertTrue(delta.exceedsThreshold(50));
         assertFalse(delta.exceedsThreshold(200));
-        assertTrue(delta.exceedsFraction(1000, 0.05)); // 100 > 50
-        assertFalse(delta.exceedsFraction(10000, 0.05)); // 100 < 500
+        assertTrue(delta.exceedsFraction(1000, 0.05));
+        assertFalse(delta.exceedsFraction(10000, 0.05));
     }
-
-    // ─── IVF Recall Test ─────────────────────────────────────────────────────
 
     @Test
     @DisplayName("IVF recall: ANN candidates contain true top-K with high probability")
@@ -254,13 +242,11 @@ class IvfIndexTest {
         ResonanceKernel kernel = new JavaKernel();
         Random rng = new Random(SEED);
 
-        // Generate patterns
         WavePattern[] patterns = new WavePattern[n];
         for (int i = 0; i < n; i++) {
             patterns[i] = randomPattern(rng, DIM);
         }
 
-        // Build IVF index
         double[][] data = new double[n][];
         for (int i = 0; i < n; i++) {
             data[i] = UnfoldedMath.unfold(patterns[i]);
@@ -273,7 +259,6 @@ class IvfIndexTest {
             index.assignNormalized("id-" + i, data[i]);
         }
 
-        // Run queries and measure recall
         int totalHits = 0;
         int totalExpected = 0;
         int queries = 50;
@@ -282,7 +267,6 @@ class IvfIndexTest {
         for (int q = 0; q < queries; q++) {
             WavePattern query = randomPattern(qRng, DIM);
 
-            // Exact top-K by kernel score
             float[] scores = new float[n];
             for (int i = 0; i < n; i++) {
                 scores[i] = kernel.compare(query, patterns[i]);
@@ -296,10 +280,8 @@ class IvfIndexTest {
                 trueTopK.add("id-" + sortedIndices[i]);
             }
 
-            // ANN candidates
             Set<String> annCandidates = index.queryCandidates(query, nProbe);
 
-            // Count hits
             for (String id : trueTopK) {
                 if (annCandidates.contains(id)) {
                     totalHits++;
@@ -316,8 +298,6 @@ class IvfIndexTest {
         assertTrue(recall >= 0.80,
                 "IVF recall@" + topK + " should be >= 0.80, got " + recall);
     }
-
-    // ─── Helpers ─────────────────────────────────────────────────────────────
 
     private static WavePattern randomPattern(Random rng, int dim) {
         double[] amp = new double[dim];

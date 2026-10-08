@@ -46,7 +46,6 @@ class DeltaSealIntegrationTest {
 
     @BeforeEach
     void setUp() {
-        // Save original values
         for (String key : MANAGED_PROPS) {
             savedProps.put(key, System.getProperty(key));
         }
@@ -65,7 +64,6 @@ class DeltaSealIntegrationTest {
     void tearDown() {
         if (store != null) store.close();
         if (runtime != null) runtime.close();
-        // Restore original values (not just clear)
         for (String key : MANAGED_PROPS) {
             String original = savedProps.get(key);
             if (original == null) {
@@ -84,16 +82,13 @@ class DeltaSealIntegrationTest {
         String id1 = store.insert(p1, Map.of("key", "val1"));
         String id2 = store.insert(p2, Map.of("key", "val2"));
 
-        // Query BEFORE seal — patterns should be found in delta buffer
         List<ResonanceMatch> matches = store.query(p1, 5);
         assertFalse(matches.isEmpty(), "Query should find patterns in delta buffer");
         assertTrue(matches.stream().anyMatch(m -> m.id().equals(id1)),
                 "Self-match should be found in delta");
 
-        // Force seal
         store.sealDelta();
 
-        // Query AFTER seal — patterns should be found in segments
         List<ResonanceMatch> matchesAfter = store.query(p1, 5);
         assertFalse(matchesAfter.isEmpty(), "Query should find patterns after seal");
         assertTrue(matchesAfter.stream().anyMatch(m -> m.id().equals(id1)),
@@ -126,13 +121,10 @@ class DeltaSealIntegrationTest {
         WavePattern p = randomPattern(PATTERN_LEN, 1);
         String id = store.insert(p, Map.of());
 
-        // Verify findable
         assertTrue(store.containsExactPattern(p));
 
-        // Delete from delta (pattern hasn't been sealed yet)
         store.delete(id);
 
-        // Should no longer be queryable
         List<ResonanceMatch> matches = store.query(p, 5);
         assertTrue(matches.stream().noneMatch(m -> m.id().equals(id)),
                 "Deleted delta pattern should not appear in query results");
@@ -143,13 +135,10 @@ class DeltaSealIntegrationTest {
         WavePattern p = randomPattern(PATTERN_LEN, 1);
         String id = store.insert(p, Map.of());
 
-        // Seal to segments
         store.sealDelta();
 
-        // Delete from segments
         store.delete(id);
 
-        // Query — should NOT find the deleted pattern (A2: no resurrections)
         List<ResonanceMatch> matches = store.query(p, 5);
         assertTrue(matches.stream().noneMatch(m -> m.id().equals(id)),
                 "Deleted sealed pattern must not appear (A2)");
@@ -179,11 +168,9 @@ class DeltaSealIntegrationTest {
         WavePattern p1 = randomPattern(PATTERN_LEN, 1);
         String id1 = store.insert(p1, Map.of("k", "v"));
 
-        // Close — should drain delta to segments and close WAL
         store.close();
         store = null;
 
-        // Reopen with same patternLen — patterns should be in manifest (sealed on close)
         StoreRuntimeServices rt2 = StoreRuntimeServices.fromSystemProperties();
         WavePatternStoreImpl store2 = new WavePatternStoreImpl(tempDir, PATTERN_LEN, rt2);
         try {
@@ -204,21 +191,16 @@ class DeltaSealIntegrationTest {
         String id1 = store.insert(p1, Map.of());
         String id2 = store.insert(p2, Map.of());
 
-        // Seal p1 only — seal everything, then insert p2 fresh
         store.sealDelta();
         WavePattern p3 = randomPattern(PATTERN_LEN, 3);
         String id3 = store.insert(p3, Map.of());
 
-        // Simulate crash: close WAL without sealing delta
-        // We can't easily simulate a crash mid-operation, but we can verify
-        // that after normal close+reopen, all data is preserved
         store.close();
         store = null;
 
         StoreRuntimeServices rt2 = StoreRuntimeServices.fromSystemProperties();
         WavePatternStoreImpl store2 = new WavePatternStoreImpl(tempDir, PATTERN_LEN, rt2);
         try {
-            // All three patterns should be findable
             assertTrue(store2.containsExactPattern(p1), "p1 (sealed) should survive");
             assertTrue(store2.containsExactPattern(p3), "p3 (was in delta, drained on close) should survive");
         } finally {
@@ -232,7 +214,6 @@ class DeltaSealIntegrationTest {
         WavePattern p = randomPattern(PATTERN_LEN, 42);
         store.insert(p, Map.of());
 
-        // Same pattern again — should throw DuplicatePatternException
         assertThrows(Exception.class, () -> store.insert(p, Map.of()),
                 "Duplicate insert in delta should be rejected");
     }
@@ -243,12 +224,9 @@ class DeltaSealIntegrationTest {
         store.insert(p, Map.of());
         store.sealDelta();
 
-        // Same pattern after seal — should throw (id is now in manifest)
         assertThrows(Exception.class, () -> store.insert(p, Map.of()),
                 "Duplicate insert after seal should be rejected");
     }
-
-    // ─── Replace via delta ────────────────────────────────────────────
 
     @Test
     void replaceInDelta() {
@@ -257,15 +235,12 @@ class DeltaSealIntegrationTest {
 
         String oldId = store.insert(pOld, Map.of("v", "1"));
 
-        // Replace while old is still in delta buffer
         String newId = store.replace(oldId, pNew, Map.of("v", "2"));
         assertNotEquals(oldId, newId);
 
-        // Old should be gone, new should be findable
         assertFalse(store.containsExactPattern(pOld), "Old pattern should not exist after replace");
         assertTrue(store.containsExactPattern(pNew), "New pattern should exist after replace");
 
-        // Query with new pattern should find it
         List<ResonanceMatch> results = store.query(pNew, 5);
         assertTrue(results.stream().anyMatch(m -> m.id().equals(newId)),
                 "Replaced pattern should be findable via query");
@@ -279,16 +254,13 @@ class DeltaSealIntegrationTest {
         String oldId = store.insert(pOld, Map.of());
         store.sealDelta();
 
-        // Old is now in sealed segments (manifest)
         assertTrue(store.containsExactPattern(pOld));
 
-        // Replace: old in manifest → new in delta
         String newId = store.replace(oldId, pNew, Map.of());
 
         assertFalse(store.containsExactPattern(pOld), "Sealed old pattern removed after replace");
         assertTrue(store.containsExactPattern(pNew), "New pattern in delta after replace");
 
-        // Query
         List<ResonanceMatch> results = store.query(pNew, 5);
         assertTrue(results.stream().anyMatch(m -> m.id().equals(newId)));
     }
@@ -304,7 +276,6 @@ class DeltaSealIntegrationTest {
         store.close();
         store = null;
 
-        // Reopen with same patternLen — replaced pattern should persist
         StoreRuntimeServices rt2 = StoreRuntimeServices.fromSystemProperties();
         WavePatternStoreImpl store2 = new WavePatternStoreImpl(tempDir, PATTERN_LEN, rt2);
         try {
@@ -321,16 +292,13 @@ class DeltaSealIntegrationTest {
         WavePattern p = randomPattern(PATTERN_LEN, 700);
         String id1 = store.insert(p, Map.of());
 
-        // Delete it
         store.delete(id1);
         assertFalse(store.containsExactPattern(p), "Deleted pattern should not be found");
 
-        // Re-insert the same pattern — tombstone must not block the new insert
         String id2 = store.insert(p, Map.of());
         assertEquals(id1, id2, "Content-addressable: same content = same hash");
         assertTrue(store.containsExactPattern(p), "Re-inserted pattern must be visible");
 
-        // Query must find it
         List<ResonanceMatch> results = store.query(p, 5);
         assertTrue(results.stream().anyMatch(m -> m.id().equals(id2)),
                 "Re-inserted pattern must appear in query results");
@@ -338,11 +306,9 @@ class DeltaSealIntegrationTest {
 
     @Test
     void timedSealFlushesDataBelowThreshold() throws Exception {
-        // Close the default store (sealThreshold=100, timer=default 30s)
         store.close();
         runtime.close();
 
-        // Re-create with very high threshold but short timer
         System.setProperty("resonance.delta.sealThreshold", "999999");
         System.setProperty("resonance.delta.sealIntervalSeconds", "2");
 
@@ -351,16 +317,13 @@ class DeltaSealIntegrationTest {
         runtime = StoreRuntimeServices.fromSystemProperties();
         store = new WavePatternStoreImpl(timedDir, PATTERN_LEN, runtime);
 
-        // Insert a few patterns (well below threshold)
         for (int i = 0; i < 5; i++) {
             store.insert(randomPattern(PATTERN_LEN, 1000 + i), Map.of());
         }
 
-        // Segments dir should be empty initially (data in delta buffer only)
         Path segmentsDir = timedDir.resolve("segments");
         long segmentsBefore = countSegmentFiles(segmentsDir);
 
-        // Wait for timed seal to fire (interval = 2s, wait up to 5s)
         long deadline = System.currentTimeMillis() + 5_000;
         long segmentsAfter = 0;
         while (System.currentTimeMillis() < deadline) {
@@ -373,7 +336,6 @@ class DeltaSealIntegrationTest {
                 "Timed seal should create segment files even below threshold. " +
                         "Before=" + segmentsBefore + ", after=" + segmentsAfter);
 
-        // Verify query still works after timed seal
         WavePattern query = randomPattern(PATTERN_LEN, 1000);
         List<ResonanceMatch> results = store.query(query, 5);
         assertFalse(results.isEmpty(), "Query should return results after timed seal");
@@ -428,8 +390,6 @@ class DeltaSealIntegrationTest {
             return 0;
         }
     }
-
-    // ─── Helpers ────────────────────────────────────────────────────────
 
     private static WavePattern randomPattern(int len, long seed) {
         Random rng = new Random(seed);

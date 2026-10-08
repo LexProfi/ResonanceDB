@@ -34,14 +34,11 @@ class UnfoldedMathPropertyTest {
 
     private static final long SEED = 42L;
     private static final int PAIR_COUNT = 10_000;
-    private static final int DIM = 64; // small dim for speed; math is dimension-agnostic
+    private static final int DIM = 64;
     private static final double DOT_TOLERANCE = 1e-9;
     private static final double SCORE_TOLERANCE = 1e-6;
 
     private final ResonanceKernel kernel = new JavaKernel();
-
-    // ─── Identity 1: dotFused ≡ dot(unfold, unfold) ──────────────────────────
-
     @Test
     @DisplayName("Identity 1: dotFused(a,b) == dotUnfolded(unfold(a), unfold(b)) — 10K random pairs")
     void dotFusedEquivalence() {
@@ -88,8 +85,6 @@ class UnfoldedMathPropertyTest {
         }
     }
 
-    // ─── Identity 2: kernel.compare ≡ scoreFromDot ───────────────────────────
-
     @Test
     @DisplayName("Identity 2: kernel.compare(a,b) == scoreFromDot(dotFused(a,b), E(a), E(b)) — 10K pairs")
     void scoreEquivalence() {
@@ -119,8 +114,6 @@ class UnfoldedMathPropertyTest {
                 "kernel.compare vs scoreFromDot: " + failures + " failures out of " + PAIR_COUNT +
                         ", max error = " + maxError);
     }
-
-    // ─── Edge cases ──────────────────────────────────────────────────────────
 
     @Test
     @DisplayName("Zero amplitude patterns: energy=0, dot=0, score=0")
@@ -232,13 +225,11 @@ class UnfoldedMathPropertyTest {
             WavePattern a = randomPattern(rng, prodDim);
             WavePattern b = randomPattern(rng, prodDim);
 
-            // Identity 1
             double fused = UnfoldedMath.dotFused(a, b);
             double unfolded = UnfoldedMath.dotUnfolded(UnfoldedMath.unfold(a), UnfoldedMath.unfold(b));
             assertEquals(fused, unfolded, DOT_TOLERANCE,
                     "dotFused vs dotUnfolded at dim=1536, pair " + i);
 
-            // Identity 2
             float kernelScore = kernel.compare(a, b);
             float uScore = UnfoldedMath.scoreFromDot(fused,
                     UnfoldedMath.energy(a), UnfoldedMath.energy(b));
@@ -246,8 +237,6 @@ class UnfoldedMathPropertyTest {
                     "kernel vs scoreFromDot at dim=1536, pair " + i);
         }
     }
-
-    // ─── Helpers ─────────────────────────────────────────────────────────────
 
     private static WavePattern randomPattern(Random rng, int dim) {
         double[] amp = new double[dim];

@@ -56,7 +56,6 @@ class GraphParamsBenchmark {
     private StoreRuntimeServices runtime;
     private ResonanceKernel kernel;
 
-    // Ground truth (shared across both configurations)
     private WavePattern[] queries;
     private String[][] groundTruthIds;
 
@@ -86,21 +85,17 @@ class GraphParamsBenchmark {
                 Runtime.getRuntime().availableProcessors());
         System.out.println("=".repeat(80));
 
-        // Generate queries
         queries = new WavePattern[NUM_QUERIES];
         Random qRng = new Random(QUERY_SEED);
         for (int i = 0; i < NUM_QUERIES; i++) {
             queries[i] = randomPattern(qRng, DIM);
         }
 
-        // Compute ground truth once (shared)
         computeGroundTruth();
 
-        // Run both configurations
         Result baseline = runConfig("baseline", 48, 128);
         Result candidate = runConfig("candidate", 32, 75);
 
-        // ── Comparison table ────────────────────────────────────────────
         System.out.println();
         System.out.println("┌──────────────────┬─────────────────┬─────────────────┬──────────┐");
         System.out.println("│ Metric           │ R=48/Lb=128     │ R=32/Lb=75      │ Delta    │");
@@ -121,7 +116,6 @@ class GraphParamsBenchmark {
                 baseline.buildMs, candidate.buildMs, candidate.buildMs - baseline.buildMs);
         System.out.println("└──────────────────┴─────────────────┴─────────────────┴──────────┘");
 
-        // ── Decision ────────────────────────────────────────────────────
         double recallDrop = baseline.recall10 - candidate.recall10;
         double buildSpeedup = (baseline.buildMs > 0)
                 ? (double) (baseline.buildMs - candidate.buildMs) / baseline.buildMs * 100
@@ -140,8 +134,6 @@ class GraphParamsBenchmark {
         }
     }
 
-    // ─── Run one configuration ──────────────────────────────────────────────
-
     private Result runConfig(String label, int R, int Lbuild) {
         System.out.printf("%n--- %s: R=%d, Lbuild=%d ---%n", label, R, Lbuild);
 
@@ -154,7 +146,6 @@ class GraphParamsBenchmark {
         WavePatternStoreImpl store = new WavePatternStoreImpl(dir, DIM, runtime);
 
         try {
-            // Insert (same data for both configs)
             long insertStart = System.nanoTime();
             Random dataRng = new Random(DATA_SEED);
             String[] insertedIds = new String[N];
@@ -165,18 +156,15 @@ class GraphParamsBenchmark {
             }
             System.out.printf("  insert: %d ms%n", (System.nanoTime() - insertStart) / 1_000_000);
 
-            // Build index
             long buildStart = System.nanoTime();
             store.forceIndexRebuild();
             long buildMs = (System.nanoTime() - buildStart) / 1_000_000;
             System.out.printf("  build: %d ms%n", buildMs);
 
-            // Warmup
             for (int i = 0; i < WARMUP && i < NUM_QUERIES; i++) {
                 store.query(queries[i], TOP_K);
             }
 
-            // Measure
             double totalRecall1 = 0, totalRecall10 = 0;
             long[] latencies = new long[NUM_QUERIES];
 
@@ -227,12 +215,9 @@ class GraphParamsBenchmark {
         }
     }
 
-    // ─── Ground truth ───────────────────────────────────────────────────────
-
     private void computeGroundTruth() {
         System.out.println("  computing ground truth...");
 
-        // Insert data, keep patterns in memory for brute-force scoring
         Random dataRng = new Random(DATA_SEED);
         WavePattern[] data = new WavePattern[N];
         String[] ids = new String[N];
@@ -263,10 +248,7 @@ class GraphParamsBenchmark {
             for (int i = 0; i < k; i++) groundTruthIds[q][i] = ids[idx[i]];
         }
         System.out.printf("  ground truth: %d ms%n", (System.nanoTime() - t0) / 1_000_000);
-        // Free data patterns
     }
-
-    // ─── Helpers ────────────────────────────────────────────────────────────
 
     private record Result(double recall1, double recall10,
                           double p50, double p90, double p99,

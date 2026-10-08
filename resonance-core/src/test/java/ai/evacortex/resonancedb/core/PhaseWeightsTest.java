@@ -37,9 +37,6 @@ import static org.junit.jupiter.api.Assertions.*;
 class PhaseWeightsTest {
 
     private static final ResonanceKernel kernel = new JavaKernel();
-
-    // ─── PhaseWeights Validation ────────────────────────────────────────────
-
     @Test
     @DisplayName("PhaseWeights: all-one is default")
     void allOneIsDefault() {
@@ -127,8 +124,6 @@ class PhaseWeightsTest {
         assertEquals(0.5, pw.weight(0), "source mutation must not affect PhaseWeights");
     }
 
-    // ─── CompareOptions Backward Compatibility ──────────────────────────────
-
     @Test
     @DisplayName("CompareOptions: 4-arg constructor backward compatible")
     void fourArgConstructor() {
@@ -164,8 +159,6 @@ class PhaseWeightsTest {
         assertSame(pw, opts.phaseWeights());
         assertTrue(opts.hasEffectivePhaseWeights());
     }
-
-    // ─── Weighted Kernel: Mathematical Correctness ──────────────────────────
 
     @Test
     @DisplayName("all-one weights == default compare")
@@ -246,18 +239,16 @@ class PhaseWeightsTest {
     @Test
     @DisplayName("Single dimension masked: w=0 ignores that dimension's phase")
     void singleDimensionMasked() {
-        // 2D patterns where dimension 1 has opposing phases
         double[] ampA = {1.0, 1.0};
         double[] phaseA = {0.0, 0.0};
         double[] ampB = {1.0, 1.0};
-        double[] phaseB = {0.0, Math.PI}; // dimension 1 fully opposite
+        double[] phaseB = {0.0, Math.PI};
 
         WavePattern a = new WavePattern(ampA, phaseA);
         WavePattern b = new WavePattern(ampB, phaseB);
 
         float fullScore = kernel.compare(a, b);
 
-        // Mask dimension 1 (the opposing one)
         var pw = new PhaseWeights(new double[]{1.0, 0.0});
         float maskedScore = kernel.compare(a, b, CompareOptions.withPhaseWeights(pw));
 
@@ -282,7 +273,6 @@ class PhaseWeightsTest {
         var pw = new PhaseWeights(new double[]{1.0, 0.5});
         float halfScore = kernel.compare(a, b, CompareOptions.withPhaseWeights(pw));
 
-        // halfScore should be between fullScore and a more relaxed score
         assertTrue(halfScore > fullScore, "half-weight on opposing dim should improve score");
     }
 
@@ -301,12 +291,10 @@ class PhaseWeightsTest {
     void lengthMismatch() {
         WavePattern a = new WavePattern(new double[]{1.0}, new double[]{0.0});
         WavePattern b = new WavePattern(new double[]{1.0}, new double[]{0.0});
-        var pw = new PhaseWeights(new double[]{0.5, 0.5}); // 2 weights for 1-dim patterns
+        var pw = new PhaseWeights(new double[]{0.5, 0.5});
         var opts = CompareOptions.withPhaseWeights(pw);
         assertThrows(IllegalArgumentException.class, () -> kernel.compare(a, b, opts));
     }
-
-    // ─── compareWithPhaseDelta Weighted ─────────────────────────────────────
 
     @Test
     @DisplayName("compareWithPhaseDelta: default weights match standard behavior")
@@ -389,17 +377,9 @@ class PhaseWeightsTest {
         }
     }
 
-    // ─── 1D/2D Hand-Calculated Examples ─────────────────────────────────────
-
     @Test
     @DisplayName("1D example: w=0.5 with π phase difference")
     void oneDimExample() {
-        // A1=1, A2=1, Δφ=π, w=0.5
-        // G = (1-0.5) + 0.5*cos(π) = 0.5 - 0.5 = 0
-        // inter = 1 + 1 + 2*1*1*0 = 2
-        // base = 0.5 * 2 / 2 = 0.5
-        // ampF = 2*sqrt(1*1)/2 = 1.0
-        // score = 0.5 * 1.0 = 0.5
         WavePattern a = new WavePattern(new double[]{1.0}, new double[]{0.0});
         WavePattern b = new WavePattern(new double[]{1.0}, new double[]{Math.PI});
         var pw = new PhaseWeights(new double[]{0.5});
@@ -410,7 +390,6 @@ class PhaseWeightsTest {
     @Test
     @DisplayName("1D example: w=0 with π phase difference (amplitude-only)")
     void oneDimPhaseIgnored() {
-        // G = 1 (phase ignored), same as ignorePhase
         WavePattern a = new WavePattern(new double[]{1.0}, new double[]{0.0});
         WavePattern b = new WavePattern(new double[]{1.0}, new double[]{Math.PI});
         var pw = new PhaseWeights(new double[]{0.0});
@@ -419,8 +398,6 @@ class PhaseWeightsTest {
         float ignorePhase = kernel.compare(a, b, new CompareOptions(false, true, false, false));
         assertEquals(ignorePhase, score, 0.0f);
     }
-
-    // ─── PhaseRoutingProfile ────────────────────────────────────────────────
 
     @Test
     @DisplayName("PhaseRoutingProfile: default has zero uncertainty")
@@ -457,24 +434,17 @@ class PhaseWeightsTest {
         double[] phase = {0.0, Math.PI / 2, -Math.PI / 2};
         WavePattern query = new WavePattern(new double[]{1.0, 1.0, 1.0}, phase);
 
-        // Uniform weights → arithmetic mean
-        double expectedMean = (0.0 + Math.PI / 2 - Math.PI / 2) / 3;
-
-        var pw = new PhaseWeights(new double[]{1.0, 1.0, 0.0}); // suppress dim 2
+        var pw = new PhaseWeights(new double[]{1.0, 1.0, 0.0});
         var opts = CompareOptions.withPhaseWeights(pw);
         var profile = PhaseRoutingProfile.from(opts);
 
         double center = profile.weightedPhaseCenter(query);
-        // w = {1, 1, 0}, Σw = 2
-        // weighted center = (1*0 + 1*π/2 + 0*(-π/2)) / 2 = π/4
         assertEquals(Math.PI / 4, center, 1e-12);
     }
 
     @Test
     @DisplayName("PhaseRoutingProfile: routing uncertainty bound is conservative")
     void profileRoutingUncertaintyBound() {
-        // Property test: for random patterns and weights,
-        // |fullMean - weightedMean| <= routingUncertainty
         var rng = new Random(42);
         int dim = 128;
 
@@ -496,8 +466,6 @@ class PhaseWeightsTest {
                             + " > bound=" + profile.routingUncertainty());
         }
     }
-
-    // ─── ResonanceMoments ───────────────────────────────────────────────────
 
     @Test
     @DisplayName("ResonanceMoments: persistence roundtrip")
@@ -562,7 +530,6 @@ class PhaseWeightsTest {
         ResonanceMoments moments = builder.build();
         WavePattern query = randomPattern(rng, D);
 
-        // Score each centroid
         for (int c = 0; c < K; c++) {
             float score = moments.scoreCentroid(c, query, null);
             assertTrue(score >= 0.0f, "centroid score should be non-negative");
@@ -594,8 +561,6 @@ class PhaseWeightsTest {
         assertTrue(probe2 >= probe1,
                 "more suppressed weights should not reduce probes");
     }
-
-    // ─── Helpers ────────────────────────────────────────────────────────────
 
     private static WavePattern randomPattern(Random rng, int dim) {
         double[] amp = new double[dim];

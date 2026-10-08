@@ -223,7 +223,6 @@ public class CachedReader implements AutoCloseable {
         int base = recordOffset.intValue();
         int capacity = mmap.capacity();
 
-        // Bounds check: ensure full record fits within mapped region
         int endOfPhase = base + HEADER_SIZE + 4 + expectedLen * 8 * 2;
         if (base < 0 || base + HEADER_SIZE + 4 > capacity || endOfPhase > capacity) return false;
 
