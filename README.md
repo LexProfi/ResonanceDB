@@ -63,7 +63,8 @@ While individual components resemble normalized inner products known in signal p
 | Waveform representation          | Patterns are stored as amplitude and phase, preserving intensity, structure, and contextual relationships beyond static vectors. |
 | Phase-coherent scoring           | Retrieval is driven by interference-style accumulation rather than purely geometric proximity.                                   |
 | Amplitude-balanced normalization | Explicitly penalizes scale dominance, stabilizing relevance under energy imbalance.                                              |
-| Phase-sharded scaling            | Patterns are routed by mean phase, enabling horizontal scaling and parallel search.                                              |
+| Parametric phase participation   | Per-dimension phase weights allow queries to selectively control which dimensions contribute to scoring and routing.             |
+| Phase-sharded scaling            | Patterns are routed by mean phase, with adaptive weighted routing for non-uniform phase participation.                           |
 | Deterministic kernel interface   | Java and native SIMD backends share a strict mathematical contract.                                                              |
 | Zero-copy memory access          | Patterns are read directly from memory-mapped segments without deserialization.                                                  |
 | Crash-safe writes                | Atomic commits with checksums and commit flags support safe recovery.                                                            |
@@ -89,7 +90,7 @@ See also: [Applications of Wave-Based Memory](./docs/whitepapers/Applications-of
 | -------- | -------------------------------------------------------------- |
 | Language | Java 22 with optional native C/SIMD via Panama FFI             |
 | Storage  | Memory-mapped `.segment` files storing amplitude and phase     |
-| Routing  | Phase-based sharding using mean phase φ̄                       |
+| Routing  | Phase-based sharding using mean phase φ̄, with adaptive weighted routing |
 | Build    | Modular Gradle 8 workspace                                     |
 | License  | See **[LICENSE](./LICENSE)** (Prosperity Public License 3.0.0) |
 
@@ -231,9 +232,14 @@ Request:
   "b": {
     "amplitude": [1, 0.5],
     "phase": [0, 0.1]
+  },
+  "phaseWeights": {
+    "weights": [1.0, 0.3]
   }
 }
 ```
+
+`phaseWeights` is optional. When omitted, all dimensions participate equally. Each weight must be in \[0.0, 1.0\]: `1.0` = full phase sensitivity, `0.0` = phase ignored for that dimension.
 
 Response:
 
@@ -255,9 +261,14 @@ Request:
     "amplitude": [1, 0.5],
     "phase": [0, 0.1]
   },
-  "topK": 10
+  "topK": 10,
+  "phaseWeights": {
+    "weights": [1.0, 0.3]
+  }
 }
 ```
+
+`phaseWeights` is optional. When provided, scoring uses parametric phase participation and routing adapts to the effective phase geometry.
 
 Response:
 
@@ -282,9 +293,14 @@ Request:
     "amplitude": [1, 0.5],
     "phase": [0, 0.1]
   },
-  "topK": 10
+  "topK": 10,
+  "phaseWeights": {
+    "weights": [1.0, 0.3]
+  }
 }
 ```
+
+`phaseWeights` is optional. Behavior is identical to `/query` — weighted scoring with adaptive routing.
 
 Response element example:
 

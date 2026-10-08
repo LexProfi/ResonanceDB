@@ -272,7 +272,6 @@ public final class FileSystemCorpusService implements CorpusService, Closeable {
                 try {
                     ids.add(CorpusService.normalizeCorpusId(id));
                 } catch (IllegalArgumentException ignored) {
-                    // ignore foreign/non-corpus directories
                 }
             }
         } catch (IOException e) {
@@ -358,7 +357,6 @@ public final class FileSystemCorpusService implements CorpusService, Closeable {
                         return all.get(0).pattern().amplitude().length;
                     }
                 } catch (RuntimeException ignored) {
-                    // continue probing next segment
                 }
             }
         } catch (IOException e) {
@@ -676,6 +674,35 @@ public final class FileSystemCorpusService implements CorpusService, Closeable {
             return runtime.resonanceKernel().compare(a, b);
         }
 
+        private float compareWithoutMaterialization(WavePattern a, WavePattern b, CompareOptions options) {
+            if (options == null) {
+                return compareWithoutMaterialization(a, b);
+            }
+            WavePatternStoreImpl local = store;
+            if (local != null) {
+                return local.compare(a, b, options);
+            }
+
+            StoredCorpusMeta meta = loadOrRecoverCorpusMeta(corpusId);
+            if (meta != null) {
+                if (a == null || b == null) {
+                    throw new NullPointerException("WavePattern arguments must not be null");
+                }
+
+                int lenA = a.amplitude().length;
+                int lenB = b.amplitude().length;
+                if (lenA != meta.patternLength || lenB != meta.patternLength) {
+                    throw new IllegalArgumentException(
+                            "Pattern length mismatch for corpus '" + corpusId +
+                                    "': expected=" + meta.patternLength +
+                                    ", got a=" + lenA + ", b=" + lenB
+                    );
+                }
+            }
+
+            return runtime.resonanceKernel().compare(a, b, options);
+        }
+
         private void afterInsert() {
             mutateInfoCount(+1L);
         }
@@ -767,6 +794,16 @@ public final class FileSystemCorpusService implements CorpusService, Closeable {
             slot.beginAccess();
             try {
                 return slot.compareWithoutMaterialization(a, b);
+            } finally {
+                slot.endAccess();
+            }
+        }
+
+        @Override
+        public float compare(WavePattern a, WavePattern b, CompareOptions options) {
+            slot.beginAccess();
+            try {
+                return slot.compareWithoutMaterialization(a, b, options);
             } finally {
                 slot.endAccess();
             }

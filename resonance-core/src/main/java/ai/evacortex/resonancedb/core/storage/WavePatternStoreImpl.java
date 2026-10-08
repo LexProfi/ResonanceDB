@@ -932,6 +932,17 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         return resonanceKernel.compare(a, b);
     }
 
+    @Override
+    public float compare(WavePattern a, WavePattern b, CompareOptions options) {
+        ensureOpen();
+        validateWavePatternLen(a);
+        validateWavePatternLen(b);
+        if (options == null) {
+            return resonanceKernel.compare(a, b);
+        }
+        return resonanceKernel.compare(a, b, options);
+    }
+
     public void forceIndexRebuild() {
         if (deltaBuffer != null && !deltaBuffer.isEmpty()) {
             sealDelta();
@@ -1265,9 +1276,6 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         int finalistCount;
         boolean hasWeights = options != null && options.hasEffectivePhaseWeights();
         if (hasWeights) {
-            // Weighted scoring changes rank order: sidecar approx scores are unweighted,
-            // so epsilon cutoff based on them would miss true weighted top-K.
-            // Re-score all IVF candidates with weighted kernel.
             finalistCount = ivfCandidates.size();
         } else {
             finalistCount = epsilonCutoffCount(ivfCandidates, topK,
@@ -1724,7 +1732,6 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
         List<String> shardNames;
         if (profile != null && !profile.isDefault()) {
-            // Adaptive Phase Envelope: use weighted center + routing uncertainty
             shardNames = selector.getRelevantShardsWeighted(query, READ_EPSILON, profile);
         } else {
             double eps = READ_EPSILON;

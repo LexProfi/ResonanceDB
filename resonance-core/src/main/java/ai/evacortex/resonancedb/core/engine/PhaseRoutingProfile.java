@@ -17,6 +17,11 @@ import ai.evacortex.resonancedb.core.storage.WavePattern;
  * and IVF centroid ranking when using parametric phase weights. It carries no semantic meaning —
  * only numerical geometry information.</p>
  *
+ * <p>The {@link #routingUncertainty()} value is computed as {@code π × Σ|w_i/sumW - 1/N|}
+ * and has a theoretical range of {@code [0, 2π]}. In practice it is bounded by the weight
+ * distribution geometry; the upper bound is conservative by design — higher uncertainty
+ * leads to wider shard envelope expansion, preventing missed results.</p>
+ *
  * <p>Instances are immutable and thread-safe.</p>
  */
 public final class PhaseRoutingProfile {
@@ -46,7 +51,7 @@ public final class PhaseRoutingProfile {
             this.sumOfWeights = 0.0;
             this.meanParticipation = 0.0;
             this.weightDrift = 1.0;
-            this.routingUncertainty = Math.PI; // full circle — no phase routing possible
+            this.routingUncertainty = Math.PI;
         } else if (phaseWeights == null || phaseWeights.isDefault()) {
             this.phaseWeights = phaseWeights;
             this.isDefault = true;
@@ -64,8 +69,6 @@ public final class PhaseRoutingProfile {
             this.sumOfWeights = sumW;
             this.meanParticipation = sumW / N;
 
-            // Weight drift: 0.5 * Σ |α_i - u_i| where α_i = w_i/Σw, u_i = 1/N
-            // Measures how much the normalized weight distribution deviates from uniform
             double uniformWeight = 1.0 / N;
             double driftSum = 0.0;
             double[] w = phaseWeights.rawWeights();
@@ -74,16 +77,6 @@ public final class PhaseRoutingProfile {
             }
             this.weightDrift = 0.5 * driftSum;
 
-            // Routing uncertainty: tight conservative bound on maximum possible difference
-            // between a pattern's full phase center and its weighted phase center.
-            //
-            // For a pattern with phases φ_1,...,φ_N ∈ (-π, π]:
-            //   fullMean = (1/N) Σ φ_i
-            //   weightedMean = (Σ w_i φ_i) / (Σ w_i)
-            //   |weightedMean - fullMean| = |Σ (α_i - u_i) φ_i|
-            //
-            // With coefficients summing to 0 and φ_i ∈ [-π, π], the tight bound is:
-            //   δ = π × Σ |α_i - u_i| = π × 2 × weightDrift
             this.routingUncertainty = Math.PI * driftSum;
         }
     }

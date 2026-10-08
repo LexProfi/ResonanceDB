@@ -10,6 +10,8 @@ package ai.evacortex.resonancedb.rest.handlers;
 
 import ai.evacortex.resonancedb.core.ResonanceStore;
 import ai.evacortex.resonancedb.core.corpus.CorpusService;
+import ai.evacortex.resonancedb.core.engine.CompareOptions;
+import ai.evacortex.resonancedb.core.engine.PhaseWeights;
 import ai.evacortex.resonancedb.core.exceptions.InvalidWavePatternException;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
 import ai.evacortex.resonancedb.core.storage.responce.InterferenceEntry;
@@ -17,6 +19,7 @@ import ai.evacortex.resonancedb.core.storage.responce.InterferenceMap;
 import ai.evacortex.resonancedb.core.storage.responce.ResonanceMatch;
 import ai.evacortex.resonancedb.core.storage.responce.ResonanceMatchDetailed;
 import ai.evacortex.resonancedb.rest.dto.*;
+import ai.evacortex.resonancedb.rest.error.BadRequestException;
 import ai.evacortex.resonancedb.rest.http.RestRouter;
 import ai.evacortex.resonancedb.rest.util.TopK;
 import ai.evacortex.resonancedb.rest.validation.WavePatternValidator;
@@ -43,7 +46,10 @@ public final class QueryHandlers {
         ResonanceStore store = resolveStore(ex);
         WavePattern a = validator.toWavePattern(req.a());
         WavePattern b = validator.toWavePattern(req.b());
-        float score = store.compare(a, b);
+        CompareOptions options = toCompareOptions(req.phaseWeights(), a.amplitude().length);
+        float score = (options != null)
+                ? store.compare(a, b, options)
+                : store.compare(a, b);
         return new CompareResponse(score);
     }
 
@@ -51,6 +57,10 @@ public final class QueryHandlers {
         ResonanceStore store = resolveStore(ex);
         WavePattern q = validator.toWavePattern(req.query());
         int k = topK.clamp(req.topK());
+        CompareOptions options = toCompareOptions(req.phaseWeights(), q.amplitude().length);
+        if (options != null) {
+            return store.query(q, k, options);
+        }
         return store.query(q, k);
     }
 
@@ -58,6 +68,10 @@ public final class QueryHandlers {
         ResonanceStore store = resolveStore(ex);
         WavePattern q = validator.toWavePattern(req.query());
         int k = topK.clamp(req.topK());
+        CompareOptions options = toCompareOptions(req.phaseWeights(), q.amplitude().length);
+        if (options != null) {
+            return store.queryDetailed(q, k, options);
+        }
         return store.queryDetailed(q, k);
     }
 
@@ -93,17 +107,46 @@ public final class QueryHandlers {
         return store.queryCompositeDetailed(patterns, req.weights(), k);
     }
 
+    static CompareOptions toCompareOptions(PhaseWeightsDto dto, int expectedDimension) {
+        if (dto == null || dto.weights == null) {
+            return null;
+        }
+        validatePhaseWeights(dto.weights, expectedDimension);
+        return CompareOptions.withPhaseWeights(new PhaseWeights(dto.weights));
+    }
+
+    private static void validatePhaseWeights(double[] weights, int expectedDimension) {
+        if (weights.length == 0) {
+            throw new BadRequestException("phaseWeights.weights must not be empty");
+        }
+        if (weights.length != expectedDimension) {
+            throw new BadRequestException(
+                    "phaseWeights.weights length (" + weights.length
+                            + ") must match pattern dimension (" + expectedDimension + ")");
+        }
+        for (int i = 0; i < weights.length; i++) {
+            double w = weights[i];
+            if (!Double.isFinite(w)) {
+                throw new BadRequestException("phaseWeights.weights[" + i + "] must be a finite number");
+            }
+            if (w < 0.0 || w > 1.0) {
+                throw new BadRequestException(
+                        "phaseWeights.weights[" + i + "] = " + w + " is out of range [0.0, 1.0]");
+            }
+        }
+    }
+
     private static void validateWeights(List<Double> weights, int patternCount) {
         if (weights == null || weights.isEmpty()) {
-            throw new ai.evacortex.resonancedb.rest.error.BadRequestException("'weights' is required");
+            throw new BadRequestException("'weights' is required");
         }
         if (weights.size() != patternCount) {
-            throw new ai.evacortex.resonancedb.rest.error.BadRequestException(
+            throw new BadRequestException(
                     "weights length (" + weights.size() + ") must match patterns length (" + patternCount + ")");
         }
         for (int i = 0; i < weights.size(); i++) {
             if (weights.get(i) == null || !Double.isFinite(weights.get(i))) {
-                throw new ai.evacortex.resonancedb.rest.error.BadRequestException(
+                throw new BadRequestException(
                         "weight at index " + i + " must be a finite number");
             }
         }

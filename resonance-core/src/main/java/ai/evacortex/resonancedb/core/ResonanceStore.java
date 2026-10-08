@@ -87,6 +87,19 @@ public interface ResonanceStore {
     float compare(WavePattern a, WavePattern b);
 
     /**
+     * Compares two wave patterns using the specified comparison options.
+     *
+     * <p>When {@link CompareOptions#phaseWeights()} is set, scoring uses weighted
+     * phase participation via parametric G_i interpolation.</p>
+     *
+     * @param a first pattern
+     * @param b second pattern
+     * @param options comparison configuration including optional phase weights
+     * @return similarity score in [0.0 .. 1.0]
+     */
+    float compare(WavePattern a, WavePattern b, CompareOptions options);
+
+    /**
      * Queries the store for the top-K most resonant matches to the given pattern.
      *
      * <p>Uses default comparison kernel and returns non-detailed match results optimized for ranking.</p>
