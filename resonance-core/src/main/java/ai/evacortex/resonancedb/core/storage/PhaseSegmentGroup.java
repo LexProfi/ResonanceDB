@@ -32,7 +32,8 @@ public class PhaseSegmentGroup {
     private final SegmentCompactor compactor;
     private final ReentrantLock lock = new ReentrantLock();
 
-    private volatile double avgPhase = 0.0;
+    private volatile double sinSum = 0.0;
+    private volatile double cosSum = 0.0;
     private volatile int count = 0;
 
     public PhaseSegmentGroup(String baseName, Path baseDir, SegmentCompactor compactor) {
@@ -168,12 +169,14 @@ public class PhaseSegmentGroup {
     }
 
     public synchronized void updatePhaseStats(double newPhase) {
-        this.avgPhase = (this.avgPhase * this.count + newPhase) / (this.count + 1);
+        this.sinSum += Math.sin(newPhase);
+        this.cosSum += Math.cos(newPhase);
         this.count++;
     }
 
     public double getAvgPhase() {
-        return avgPhase;
+        if (sinSum == 0.0 && cosSum == 0.0) return 0.0;
+        return Math.atan2(sinSum, cosSum);
     }
 
     public boolean containsSegment(String segmentName) {

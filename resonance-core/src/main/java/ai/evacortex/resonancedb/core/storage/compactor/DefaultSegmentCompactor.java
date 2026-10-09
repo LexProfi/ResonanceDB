@@ -68,10 +68,11 @@ public class DefaultSegmentCompactor implements SegmentCompactor {
                         if (!loc.segmentName().equals(writer.getSegmentName())) continue;
                         if (loc.offset() != entry.offset()) continue;
                         long newOff = tmpWriter.write(entry.id(), entry.pattern());
+                        double phaseCenter = circularMeanPhase(entry.pattern().phase());
                         manifest.replace(entry.id(),
                                 writer.getSegmentName(), entry.offset(),
                                 finalName, newOff,
-                                loc.phaseCenter());
+                                phaseCenter);
                     }
                 }
             }
@@ -124,6 +125,16 @@ public class DefaultSegmentCompactor implements SegmentCompactor {
                 delay *= 2;
             }
         }
+    }
+
+    private static double circularMeanPhase(double[] phase) {
+        double sinSum = 0.0, cosSum = 0.0;
+        for (double p : phase) {
+            sinSum += Math.sin(p);
+            cosSum += Math.cos(p);
+        }
+        if (sinSum == 0.0 && cosSum == 0.0) return 0.0;
+        return Math.atan2(sinSum, cosSum);
     }
 
     private void cleanupOldTmpSegments(String baseName) {

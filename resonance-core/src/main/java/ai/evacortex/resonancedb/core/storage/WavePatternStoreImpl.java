@@ -30,6 +30,7 @@ import ai.evacortex.resonancedb.core.storage.compactor.DefaultSegmentCompactor;
 import ai.evacortex.resonancedb.core.storage.compactor.SegmentCompactor;
 import ai.evacortex.resonancedb.core.storage.io.CachedReader;
 import ai.evacortex.resonancedb.core.storage.io.SegmentCache;
+import ai.evacortex.resonancedb.core.storage.io.SegmentReader;
 import ai.evacortex.resonancedb.core.storage.io.SegmentWriter;
 import ai.evacortex.resonancedb.core.storage.responce.ComparisonResult;
 import ai.evacortex.resonancedb.core.storage.responce.InterferenceEntry;
@@ -47,6 +48,7 @@ import ai.evacortex.resonancedb.core.storage.wal.WriteAheadLog;
 import java.io.Closeable;
 import java.io.IOException;
 import java.lang.reflect.Method;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.*;
@@ -64,6 +66,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     private static final int BATCH_SIZE_BASE = Integer.getInteger("resonance.query.batchSize", 1024);
     private static final int OVERFETCH_FACTOR_BASE = Integer.getInteger("resonance.query.overfetch", 4);
     private static final double READ_EPSILON = 0.1;
+    private static final double LOW_COHERENCE_THRESHOLD =
+            Double.parseDouble(System.getProperty("resonance.phase.coherenceThreshold", "0.15"));
 
     private static final int BUCKETS =
             Integer.getInteger("resonance.segment.buckets", 64);
@@ -288,6 +292,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
         loadAllWritersFromManifest();
         verifyPatternLengthOnOpen();
+        migrateManifestIfNeeded();
+        restoreGroupPhaseStats();
         this.shardSelectorRef = new AtomicReference<>(createShardSelector());
 
         this.compactionTask = runtime.scheduler().scheduleAtFixedRate(
@@ -461,7 +467,9 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             PhaseSegmentGroup group = getOrCreateGroup(base);
             double existingCenter = group.getAvgPhase();
 
-            boolean phaseOverflow = Math.abs(phaseCenter - existingCenter) > 0.15;
+            double phaseDist = Math.abs(phaseCenter - existingCenter);
+            if (phaseDist > Math.PI) phaseDist = 2 * Math.PI - phaseDist;
+            boolean phaseOverflow = phaseDist > 0.15;
             SegmentWriter writer = group.getWritable();
             if (writer == null || writer.willOverflow(psi) || phaseOverflow) {
                 writer = group.createAndRegisterNewSegment();
@@ -1730,8 +1738,14 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     private List<SegmentWriter> selectWritersForQuery(WavePattern query, PhaseRoutingProfile profile) {
         PhaseShardSelector selector = shardSelectorRef.get();
 
+        // Compute resultant length R to detect low phase coherence
+        double R = phaseResultantLength(query.phase());
+
         List<String> shardNames;
-        if (profile != null && !profile.isDefault()) {
+        if (R < LOW_COHERENCE_THRESHOLD) {
+            // Low coherence: circular mean is unreliable — use wider probing
+            shardNames = selector.allShards();
+        } else if (profile != null && !profile.isDefault()) {
             shardNames = selector.getRelevantShardsWeighted(query, READ_EPSILON, profile);
         } else {
             double eps = READ_EPSILON;
@@ -1823,18 +1837,94 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         }
     }
 
+    private static final String PHASE_VERSION_FILE = ".circular-phase-v1";
+
+    /**
+     * Rebuilds all phaseCenter values in the manifest from stored WavePatterns.
+     * Idempotent: applying circular mean to already-correct values is a no-op.
+     *
+     * @return number of entries that were updated
+     */
+    int rebuildManifestPhaseCenters() {
+        int rebuilt = 0;
+        Path segDir = rootDir.resolve("segments");
+        for (String segName : manifest.getAllSegmentNames()) {
+            Path segPath = segDir.resolve(segName);
+            if (!Files.exists(segPath)) continue;
+            try (SegmentReader reader = new SegmentReader(segPath)) {
+                for (SegmentReader.PatternWithId entry : reader.readAllWithId()) {
+                    ManifestIndex.PatternLocation loc = manifest.get(entry.id());
+                    if (loc == null) continue;
+                    if (!loc.segmentName().equals(segName)) continue;
+
+                    double newCenter = meanPhase(entry.pattern().phase());
+                    if (Math.abs(newCenter - loc.phaseCenter()) > 1e-12) {
+                        manifest.add(entry.id(), loc.segmentName(), loc.offset(), newCenter);
+                        rebuilt++;
+                    }
+                }
+            } catch (Exception e) {
+                System.err.println("WARN phaseCenter rebuild: " + segName + ": " + e.getMessage());
+            }
+        }
+        if (rebuilt > 0) {
+            manifest.flush();
+        }
+        return rebuilt;
+    }
+
+    private void migrateManifestIfNeeded() {
+        Path versionFile = rootDir.resolve("index").resolve(PHASE_VERSION_FILE);
+        if (Files.exists(versionFile)) return;
+
+        int rebuilt = rebuildManifestPhaseCenters();
+        if (rebuilt > 0) {
+            System.out.println("Migrated " + rebuilt + " manifest phaseCenters to circular mean");
+        }
+
+        try {
+            Files.createDirectories(versionFile.getParent());
+            Files.writeString(versionFile, "circular-phase-mean");
+        } catch (IOException e) {
+            System.err.println("WARN failed to write phase version marker: " + e.getMessage());
+        }
+    }
+
+    private void restoreGroupPhaseStats() {
+        for (ManifestIndex.PatternLocation loc : manifest.getAllLocations()) {
+            String baseName = base(loc.segmentName());
+            PhaseSegmentGroup group = segmentGroups.get(baseName);
+            if (group != null) {
+                group.updatePhaseStats(loc.phaseCenter());
+            }
+        }
+    }
+
     private Stream<SegmentWriter> getAllWritersStream() {
         return segmentGroups.values().stream()
                 .flatMap(group -> group.getAll().stream())
                 .distinct();
     }
 
-    private static double meanPhase(double[] phase) {
-        double sum = 0.0;
+    static double phaseResultantLength(double[] phase) {
+        double sinSum = 0.0, cosSum = 0.0;
         for (double v : phase) {
-            sum += v;
+            sinSum += Math.sin(v);
+            cosSum += Math.cos(v);
         }
-        return sum / phase.length;
+        return Math.sqrt(sinSum * sinSum + cosSum * cosSum) / phase.length;
+    }
+
+    private static double meanPhase(double[] phase) {
+        double sinSum = 0.0, cosSum = 0.0;
+        for (double v : phase) {
+            sinSum += Math.sin(v);
+            cosSum += Math.cos(v);
+        }
+        if (sinSum == 0.0 && cosSum == 0.0) {
+            return 0.0;
+        }
+        return Math.atan2(sinSum, cosSum);
     }
 
     private int computePhaseBucket(double phaseCenter) {
