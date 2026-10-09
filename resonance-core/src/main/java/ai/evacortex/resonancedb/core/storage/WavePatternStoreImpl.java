@@ -53,6 +53,7 @@ import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -102,6 +103,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
     private final ScheduledFuture<?> compactionTask;
     private final AtomicBoolean closed = new AtomicBoolean(false);
+    private final AtomicLong segmentsSkippedCacheMiss = new AtomicLong();
 
     private final boolean indexEnabled;
     private boolean exactEquivalence;
@@ -971,6 +973,9 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     public void compactPhase(String baseName) {
         PhaseSegmentGroup group = segmentGroups.get(baseName);
         if (group != null && group.maybeCompact()) {
+            for (SegmentWriter w : group.getAll()) {
+                readerCache.updateVersion(w.getSegmentName(), w.getWriteOffset());
+            }
             rebuildShardSelector();
         }
     }
@@ -981,6 +986,10 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         String hash = HashingUtil.computeContentHash(pattern);
         if (manifest.contains(hash)) return true;
         return deltaBuffer != null && deltaBuffer.contains(hash);
+    }
+
+    public long getSegmentsSkippedCacheMiss() {
+        return segmentsSkippedCacheMiss.get();
     }
 
     @Override
@@ -1094,15 +1103,25 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         }
 
         final Comparator<HeapItem> cmp = HEAP_ORDER;
-        final CachedReader reader = readerCache.get(writer.getSegmentName());
+        CachedReader reader = readerCache.getOrLoad(writer.getSegmentName());
         if (reader == null) {
+            segmentsSkippedCacheMiss.incrementAndGet();
             return List.of();
         }
 
         try {
             reader.acquire();
         } catch (IllegalStateException e) {
-            return List.of();
+            reader = readerCache.getOrLoad(writer.getSegmentName());
+            if (reader == null) {
+                segmentsSkippedCacheMiss.incrementAndGet();
+                return List.of();
+            }
+            try {
+                reader.acquire();
+            } catch (IllegalStateException e2) {
+                return List.of();
+            }
         }
         try {
             final int len = query.amplitude().length;
@@ -1321,7 +1340,9 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         try {
             reader.acquire();
         } catch (IllegalStateException e) {
-            return;
+            reader = readerCache.getOrLoad(loc.segmentName());
+            if (reader == null) return;
+            try { reader.acquire(); } catch (IllegalStateException e2) { return; }
         }
         try {
             if (!reader.readPatternFlat(id, fb.ampFlat, 0, fb.phaseFlat, 0, len)) return;
@@ -1389,7 +1410,9 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             try {
                 reader.acquire();
             } catch (IllegalStateException e) {
-                continue;
+                reader = readerCache.getOrLoad(entry.getKey());
+                if (reader == null) continue;
+                try { reader.acquire(); } catch (IllegalStateException e2) { continue; }
             }
             try {
                 int inBatch = 0;
@@ -2051,16 +2074,23 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             WavePattern pattern = null;
             ManifestIndex.PatternLocation loc = manifest.get(id);
             if (loc != null) {
-                CachedReader reader = readerCache.get(loc.segmentName());
+                CachedReader reader = readerCache.getOrLoad(loc.segmentName());
                 if (reader != null) {
                     try {
                         reader.acquire();
+                    } catch (IllegalStateException e) {
+                        reader = readerCache.getOrLoad(loc.segmentName());
+                        if (reader != null) {
+                            try { reader.acquire(); } catch (IllegalStateException e2) { reader = null; }
+                        }
+                    }
+                    if (reader != null) {
                         try {
                             pattern = readNoSemaphore(reader, id);
                         } finally {
                             reader.release();
                         }
-                    } catch (IllegalStateException ignored) {}
+                    }
                 }
             }
 
@@ -2126,23 +2156,32 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         }
 
         for (String seg : segments) {
-            CachedReader reader = readerCache.get(seg);
+            CachedReader reader = readerCache.getOrLoad(seg);
             if (reader == null) {
                 continue;
             }
 
-            OptionalInt sample = samplePatternLength(reader);
-            if (sample.isEmpty()) {
+            try {
+                reader.acquire();
+            } catch (IllegalStateException e) {
                 continue;
             }
+            try {
+                OptionalInt sample = samplePatternLength(reader);
+                if (sample.isEmpty()) {
+                    continue;
+                }
 
-            int len = sample.getAsInt();
-            if (len != patternLen) {
-                throw new InvalidWavePatternException(
-                        "DB pattern length mismatch on open: expected=" + patternLen +
-                                ", got=" + len + " in segment=" + seg +
-                                ". Set -Dresonance.pattern.len=" + len + " to open this DB, or rebuild the DB."
-                );
+                int len = sample.getAsInt();
+                if (len != patternLen) {
+                    throw new InvalidWavePatternException(
+                            "DB pattern length mismatch on open: expected=" + patternLen +
+                                    ", got=" + len + " in segment=" + seg +
+                                    ". Set -Dresonance.pattern.len=" + len + " to open this DB, or rebuild the DB."
+                    );
+                }
+            } finally {
+                reader.release();
             }
         }
     }
