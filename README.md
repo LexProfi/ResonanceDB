@@ -23,7 +23,7 @@ This repository and its contents are provided and made available solely under th
 
 ResonanceDB exhibits **amplitude-amplification-like behavior in a classical, deterministic execution environment**, adapted to semantic and cognitive search spaces.
 
-ResonanceDB combines **phase-aware resonance scoring** with adaptive retrieval and indexing mechanisms, including approximate nearest-neighbor (ANN) techniques. These mechanisms serve as retrieval accelerators, while the waveform representation and resonance contracts define how patterns are compared and how query-time phase participation is handled. The resonance kernel selectively enhances the effective contribution of semantically aligned patterns through **single-pass, phase-coherent accumulation and interference-style aggregation**.
+Unlike traditional vector databases that rely on linear scans, approximate nearest-neighbor heuristics, or purely geometric proximity, ResonanceDB employs a **phase-aware resonance kernel**. This kernel selectively enhances the effective contribution of semantically aligned patterns through **single-pass, phase-coherent accumulation and interference-style aggregation**.
 
 The resulting behavior is **functionally analogous** to amplitude amplification: coherent matches gain relative prominence, while incoherent or weakly aligned patterns are suppressed — without requiring quantum hardware, probabilistic measurement, or stochastic sampling.
 
@@ -527,5 +527,4 @@ Any rights to use, reproduce, implement, or prepare derivative works from the te
 
 ## 📫 Contact
 
-**Author:** Aleksandr Listopad
-**Licensing & Security:** [license@evacortex.ai](mailto:license@evacortex.ai)
+For questions, licensing, and partnership inquiries: [hello@evacortex.ai](mailto:hello@evacortex.ai)
