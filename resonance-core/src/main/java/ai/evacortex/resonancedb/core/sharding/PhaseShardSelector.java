@@ -24,6 +24,7 @@ public class PhaseShardSelector {
     private final double epsilon;
     private final int totalShards;
     private final boolean useExplicitRanges;
+    private volatile List<String> cachedAllShards;
 
     public PhaseShardSelector(Map<Double, String> phaseShardMap, double epsilon) {
         if (phaseShardMap == null || phaseShardMap.isEmpty())
@@ -56,7 +57,7 @@ public class PhaseShardSelector {
         if (useExplicitRanges) {
             return routeToShard(pattern);
         } else {
-            double meanPhase = circularMeanPhase(pattern.phase());
+            double meanPhase = normalizePhase(circularMeanPhase(pattern.phase()));
             int shardIndex = Math.floorMod(Double.hashCode(meanPhase), totalShards);
             return "phase-" + shardIndex + ".segment";
         }
@@ -82,15 +83,24 @@ public class PhaseShardSelector {
         }
     }
 
+    public int shardCount() {
+        return useExplicitRanges ? phaseShardMap.size() : totalShards;
+    }
+
     public List<String> allShards() {
+        List<String> cached = cachedAllShards;
+        if (cached != null) return cached;
         if (!useExplicitRanges) {
             List<String> result = new ArrayList<>(totalShards);
             for (int i = 0; i < totalShards; i++) {
                 result.add("phase-" + i + ".segment");
             }
-            return Collections.unmodifiableList(result);
+            cached = Collections.unmodifiableList(result);
+        } else {
+            cached = Collections.unmodifiableList(new ArrayList<>(phaseShardMap.values()));
         }
-        return Collections.unmodifiableList(new ArrayList<>(phaseShardMap.values()));
+        cachedAllShards = cached;
+        return cached;
     }
 
     public static PhaseShardSelector fromManifest(Collection<ManifestIndex.PatternLocation> locations, double epsilon) {
@@ -120,12 +130,7 @@ public class PhaseShardSelector {
 
 
     public List<String> orderedShardList() {
-        if (!useExplicitRanges) {
-            List<String> list = new ArrayList<>(totalShards);
-            for (int i = 0; i < totalShards; i++) list.add("phase-" + i + ".segment");
-            return Collections.unmodifiableList(list);
-        }
-        return Collections.unmodifiableList(new ArrayList<>(phaseShardMap.values()));
+        return allShards();
     }
 
     public int indexOf(String segmentName) {
@@ -167,12 +172,17 @@ public class PhaseShardSelector {
     }
 
     public List<String> getRelevantShards(WavePattern query, double customEps) {
+        return getRelevantShardsByCenter(circularMeanPhase(query.phase()), customEps);
+    }
+
+    public List<String> getRelevantShardsByCenter(double phaseCenter, double customEps) {
         if (!useExplicitRanges) {
-            return List.of(selectShard(query));
+            int shardIndex = Math.floorMod(Double.hashCode(normalizePhase(phaseCenter)), totalShards);
+            return List.of("phase-" + shardIndex + ".segment");
         }
         if (phaseShardMap.isEmpty()) return List.of();
 
-        double avg = normalizePhase(circularMeanPhase(query.phase()));
+        double avg = normalizePhase(phaseCenter);
         double eps = Math.max(0.0, customEps);
 
         return findShardsInRange(avg, eps);

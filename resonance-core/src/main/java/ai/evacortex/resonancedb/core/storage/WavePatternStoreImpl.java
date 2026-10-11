@@ -69,6 +69,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     private static final double READ_EPSILON = 0.1;
     private static final double LOW_COHERENCE_THRESHOLD =
             Double.parseDouble(System.getProperty("resonance.phase.coherenceThreshold", "0.15"));
+    private static final double PHASE_GROUP_EPSILON = 0.15;
+    private static final String PHASE_VERSION_FILE = ".circular-phase-v1";
 
     private static final int BUCKETS =
             Integer.getInteger("resonance.segment.buckets", 64);
@@ -106,7 +108,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     private final AtomicLong segmentsSkippedCacheMiss = new AtomicLong();
 
     private final boolean indexEnabled;
-    private boolean exactEquivalence;
+    private final boolean exactEquivalence;
     private final IvfCandidateSource ivfSource;
     private final DeltaIndex deltaIndex;
     private final Path centroidsPath;
@@ -283,7 +285,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 manifest,
                 metaStore,
                 this.rootDir.resolve("segments"),
-                globalLock
+                globalLock,
+                readerCache
         );
         this.segmentGroups = new ConcurrentHashMap<>();
         this.tracer = new NoOpTracer();
@@ -418,22 +421,23 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                                    WavePattern psi, Map<String, String> metadata) {
         double phaseCenter = meanPhase(psi.phase());
 
-        if (deltaBuffer.size() >= deltaMaxEntries) {
+        if (deltaBuffer.activeSize() >= deltaMaxEntries) {
             awaitSealCompletion();
-            if (deltaBuffer.size() >= deltaMaxEntries) {
+            if (deltaBuffer.activeSize() >= deltaMaxEntries) {
                 throw new RuntimeException("DeltaBuffer full after backpressure timeout (" +
                         deltaMaxEntries + " entries). Increase delta.maxEntries or reduce insert rate.");
             }
         }
 
-        long lsn = wal.nextLsn();
-        WalRecord walRecord = WalRecord.insert(lsn, idKey, metadata, psi);
-        CompletableFuture<Long> durabilityFuture = wal.append(walRecord);
-
+        CompletableFuture<Long> durabilityFuture;
         try (AutoLock ignored = AutoLock.write(globalLock)) {
+            ensureOpen();
             if (manifest.contains(idKey) || deltaBuffer.contains(idKey)) {
                 throw new DuplicatePatternException(idKey);
             }
+            long lsn = wal.nextLsn();
+            WalRecord walRecord = WalRecord.insert(lsn, idKey, metadata, psi);
+            durabilityFuture = wal.append(walRecord);
             deltaBuffer.add(idKey, psi, metadata, phaseCenter, idBytes, lsn);
         }
 
@@ -457,21 +461,18 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
     private String insertLegacy(String idKey, byte[] idBytes,
                                 WavePattern psi, Map<String, String> metadata) {
+        double phaseCenter = meanPhase(psi.phase());
         try (AutoLock ignored = AutoLock.write(globalLock)) {
             if (manifest.contains(idKey)) {
                 throw new DuplicatePatternException(idKey);
             }
 
-            double phaseCenter = meanPhase(psi.phase());
             int bucket = computePhaseBucket(phaseCenter);
             String base = "phase-" + bucket;
 
             PhaseSegmentGroup group = getOrCreateGroup(base);
-            double existingCenter = group.getAvgPhase();
 
-            double phaseDist = Math.abs(phaseCenter - existingCenter);
-            if (phaseDist > Math.PI) phaseDist = 2 * Math.PI - phaseDist;
-            boolean phaseOverflow = phaseDist > 0.15;
+            boolean phaseOverflow = checkPhaseOverflow(group, phaseCenter);
             SegmentWriter writer = group.getWritable();
             if (writer == null || writer.willOverflow(psi) || phaseOverflow) {
                 writer = group.createAndRegisterNewSegment();
@@ -537,15 +538,20 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         HashingUtil.parseAndValidateMd5(idKey);
 
         if (deltaBuffer != null) {
-            long lsn = wal.nextLsn();
-            WalRecord walRecord = WalRecord.delete(lsn, idKey);
-            CompletableFuture<Long> durFuture = wal.append(walRecord);
-
+            CompletableFuture<Long> durFuture;
             try (AutoLock ignored = AutoLock.write(globalLock)) {
-                DeltaBuffer.Entry deltaEntry = deltaBuffer.remove(idKey, lsn);
-                if (deltaEntry == null && !manifest.contains(idKey)) {
+                ensureOpen();
+                boolean inDelta = deltaBuffer.contains(idKey);
+                boolean inManifest = manifest.contains(idKey);
+                if (!inDelta && !inManifest) {
                     throw new PatternNotFoundException(idKey);
                 }
+
+                long lsn = wal.nextLsn();
+                WalRecord walRecord = WalRecord.delete(lsn, idKey);
+                durFuture = wal.append(walRecord);
+
+                DeltaBuffer.Entry deltaEntry = deltaBuffer.remove(idKey, lsn);
 
                 if (deltaEntry == null) {
                     ManifestIndex.PatternLocation loc = manifest.get(idKey);
@@ -554,6 +560,12 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                     long newVersion = writer.flush();
                     writer.sync();
                     readerCache.updateVersion(writer.getSegmentName(), newVersion);
+
+                    int delBucket = computePhaseBucket(loc.phaseCenter());
+                    PhaseSegmentGroup delGroup = segmentGroups.get("phase-" + delBucket);
+                    if (delGroup != null) {
+                        delGroup.removePhaseStats(loc.phaseCenter());
+                    }
 
                     manifest.remove(idKey);
                     metaStore.remove(idKey);
@@ -595,6 +607,12 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             writer.sync();
             readerCache.updateVersion(writer.getSegmentName(), newVersion);
 
+            int delBucket = computePhaseBucket(loc.phaseCenter());
+            PhaseSegmentGroup delGroup = segmentGroups.get("phase-" + delBucket);
+            if (delGroup != null) {
+                delGroup.removePhaseStats(loc.phaseCenter());
+            }
+
             manifest.remove(idKey);
             metaStore.remove(idKey);
             manifest.flush();
@@ -634,11 +652,9 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                                     WavePattern newPattern, Map<String, String> metadata) {
         double phaseCenter = meanPhase(newPattern.phase());
 
-        long lsn = wal.nextLsn();
-        WalRecord walRecord = WalRecord.replace(lsn, oldId, newId, metadata, newPattern);
-        CompletableFuture<Long> durFuture = wal.append(walRecord);
-
+        CompletableFuture<Long> durFuture;
         try (AutoLock ignored = AutoLock.write(globalLock)) {
+            ensureOpen();
             boolean oldInDelta = deltaBuffer.contains(oldId);
             boolean oldInManifest = manifest.contains(oldId);
             if (!oldInDelta && !oldInManifest) {
@@ -651,6 +667,10 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 }
             }
 
+            long lsn = wal.nextLsn();
+            WalRecord walRecord = WalRecord.replace(lsn, oldId, newId, metadata, newPattern);
+            durFuture = wal.append(walRecord);
+
             deltaBuffer.remove(oldId, lsn);
 
             if (oldInManifest) {
@@ -661,6 +681,13 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                     long oldVersion = oldWriter.flush();
                     oldWriter.sync();
                     readerCache.updateVersion(oldWriter.getSegmentName(), oldVersion);
+
+                    int oldBucket = computePhaseBucket(oldLoc.phaseCenter());
+                    PhaseSegmentGroup oldGroup = segmentGroups.get("phase-" + oldBucket);
+                    if (oldGroup != null) {
+                        oldGroup.removePhaseStats(oldLoc.phaseCenter());
+                    }
+
                     manifest.remove(oldId);
                     manifest.flush();
                 }
@@ -699,6 +726,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
     private String replaceLegacy(String oldId, String newId, byte[] newIdBytes,
                                   WavePattern newPattern, Map<String, String> safeMetadata) {
+        double phaseCenter = meanPhase(newPattern.phase());
         try (AutoLock ignored = AutoLock.write(globalLock)) {
             ManifestIndex.PatternLocation oldLoc = manifest.get(oldId);
             if (oldLoc == null) {
@@ -709,13 +737,13 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 throw new DuplicatePatternException("Replacement would collide: " + newId);
             }
 
-            double phaseCenter = meanPhase(newPattern.phase());
             int bucket = computePhaseBucket(phaseCenter);
             String base = "phase-" + bucket;
             PhaseSegmentGroup group = getOrCreateGroup(base);
 
+            boolean phaseOverflow = checkPhaseOverflow(group, phaseCenter);
             SegmentWriter replaceWriter = group.getWritable();
-            if (replaceWriter == null || replaceWriter.willOverflow(newPattern)) {
+            if (replaceWriter == null || replaceWriter.willOverflow(newPattern) || phaseOverflow) {
                 replaceWriter = group.createAndRegisterNewSegment();
             }
             group.registerIfAbsent(replaceWriter);
@@ -764,6 +792,11 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 manifest.flush();
                 metaStore.flush();
 
+                int oldBucket = computePhaseBucket(oldLoc.phaseCenter());
+                PhaseSegmentGroup oldGroup = segmentGroups.get("phase-" + oldBucket);
+                if (oldGroup != null) {
+                    oldGroup.removePhaseStats(oldLoc.phaseCenter());
+                }
                 group.updatePhaseStats(phaseCenter);
                 readerCache.updateVersion(result.writer().getSegmentName(), result.version());
 
@@ -971,12 +1004,13 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     }
 
     public void compactPhase(String baseName) {
-        PhaseSegmentGroup group = segmentGroups.get(baseName);
-        if (group != null && group.maybeCompact()) {
-            for (SegmentWriter w : group.getAll()) {
-                readerCache.updateVersion(w.getSegmentName(), w.getWriteOffset());
+        synchronized (sealMutex) {
+            PhaseSegmentGroup group = segmentGroups.get(baseName);
+            if (group != null && group.maybeCompact()) {
+                try (AutoLock ignored = AutoLock.write(globalLock)) {
+                    rebuildShardSelector();
+                }
             }
-            rebuildShardSelector();
         }
     }
 
@@ -985,11 +1019,31 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         validateWavePatternLen(pattern);
         String hash = HashingUtil.computeContentHash(pattern);
         if (manifest.contains(hash)) return true;
-        return deltaBuffer != null && deltaBuffer.contains(hash);
+        if (deltaBuffer != null && deltaBuffer.contains(hash)) return true;
+        return manifest.contains(hash);
     }
 
     public long getSegmentsSkippedCacheMiss() {
         return segmentsSkippedCacheMiss.get();
+    }
+
+    private CachedReader acquireReader(String segmentName) {
+        CachedReader reader = readerCache.getOrLoad(segmentName);
+        if (reader == null) return null;
+        try {
+            reader.acquire();
+            return reader;
+        } catch (IllegalStateException e) {
+            reader = readerCache.getOrLoad(segmentName);
+            if (reader == null) return null;
+            try {
+                reader.acquire();
+                return reader;
+            } catch (IllegalStateException e2) {
+                System.err.println("WARN acquireReader retry exhausted: " + segmentName);
+                return null;
+            }
+        }
     }
 
     @Override
@@ -1014,14 +1068,6 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 sealDelta();
             } catch (Exception e) {
                 System.err.println("Failed to drain delta buffer on close: " + e.getMessage());
-            }
-        }
-
-        if (wal != null) {
-            try {
-                wal.close();
-            } catch (Exception e) {
-                System.err.println("Failed to close WAL: " + e.getMessage());
             }
         }
 
@@ -1054,10 +1100,24 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 }
             }
 
-            readerCache.close();
+            if (wal != null) {
+                try {
+                    wal.close();
+                } catch (Exception e) {
+                    System.err.println("Failed to close WAL: " + e.getMessage());
+                }
+            }
+
+            try { readerCache.close(); }
+            catch (Exception e) { System.err.println("Failed to close reader cache: " + e.getMessage()); }
+
             segmentGroups.values().forEach(group -> group.getAll().forEach(this::safeClose));
-            manifest.flush();
-            metaStore.flush();
+
+            try { manifest.flush(); }
+            catch (Exception e) { System.err.println("Failed to flush manifest on close: " + e.getMessage()); }
+
+            try { metaStore.flush(); }
+            catch (Exception e) { System.err.println("Failed to flush metaStore on close: " + e.getMessage()); }
         } finally {
             if (ownRuntime) {
                 runtime.close();
@@ -1103,25 +1163,10 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         }
 
         final Comparator<HeapItem> cmp = HEAP_ORDER;
-        CachedReader reader = readerCache.getOrLoad(writer.getSegmentName());
+        CachedReader reader = acquireReader(writer.getSegmentName());
         if (reader == null) {
             segmentsSkippedCacheMiss.incrementAndGet();
             return List.of();
-        }
-
-        try {
-            reader.acquire();
-        } catch (IllegalStateException e) {
-            reader = readerCache.getOrLoad(writer.getSegmentName());
-            if (reader == null) {
-                segmentsSkippedCacheMiss.incrementAndGet();
-                return List.of();
-            }
-            try {
-                reader.acquire();
-            } catch (IllegalStateException e2) {
-                return List.of();
-            }
         }
         try {
             final int len = query.amplitude().length;
@@ -1334,16 +1379,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         ManifestIndex.PatternLocation loc = manifest.get(id);
         if (loc == null) return;
 
-        CachedReader reader = readerCache.getOrLoad(loc.segmentName());
+        CachedReader reader = acquireReader(loc.segmentName());
         if (reader == null) return;
-
-        try {
-            reader.acquire();
-        } catch (IllegalStateException e) {
-            reader = readerCache.getOrLoad(loc.segmentName());
-            if (reader == null) return;
-            try { reader.acquire(); } catch (IllegalStateException e2) { return; }
-        }
         try {
             if (!reader.readPatternFlat(id, fb.ampFlat, 0, fb.phaseFlat, 0, len)) return;
         } finally {
@@ -1404,16 +1441,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         fb.ensure(len, batchSize);
 
         for (var entry : candidatesBySegment.entrySet()) {
-            CachedReader reader = readerCache.getOrLoad(entry.getKey());
+            CachedReader reader = acquireReader(entry.getKey());
             if (reader == null) continue;
-
-            try {
-                reader.acquire();
-            } catch (IllegalStateException e) {
-                reader = readerCache.getOrLoad(entry.getKey());
-                if (reader == null) continue;
-                try { reader.acquire(); } catch (IllegalStateException e2) { continue; }
-            }
             try {
                 int inBatch = 0;
                 for (String id : entry.getValue()) {
@@ -1460,11 +1489,11 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 System.err.println("Delta seal failed: " + t.getMessage());
                 t.printStackTrace(System.err);
             } finally {
-                sealScheduled.set(false);
                 sealFuture.set(null);
+                sealScheduled.set(false);
             }
         }, 100, TimeUnit.MILLISECONDS);
-        sealFuture.set(future);
+        sealFuture.compareAndSet(null, future);
     }
 
     public void sealDelta() {
@@ -1478,7 +1507,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             Map<String, DeltaBuffer.Entry> frozenEntries;
             long frozenMaxLsn = 0;
             try (AutoLock ignored = AutoLock.write(globalLock)) {
-                frozenEntries = deltaBuffer.freeze();
+                frozenEntries = new HashMap<>(deltaBuffer.freeze());
             }
             if (frozenEntries.isEmpty()) {
                 deltaBuffer.clearFrozen();
@@ -1505,8 +1534,9 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 String base = "phase-" + bucket;
                 PhaseSegmentGroup group = getOrCreateGroup(base);
 
+                boolean phaseOverflow = checkPhaseOverflow(group, phaseCenter);
                 SegmentWriter writer = group.getWritable();
-                if (writer == null || writer.willOverflow(entry.pattern())) {
+                if (writer == null || writer.willOverflow(entry.pattern()) || phaseOverflow) {
                     writer = group.createAndRegisterNewSegment();
                 }
                 group.registerIfAbsent(writer);
@@ -1524,18 +1554,39 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 }
             }
 
+            Set<String> failedSegments = new HashSet<>();
             for (SegmentWriter w : touchedWriters) {
                 try {
-                    long ver = w.flush();
+                    w.flush();
                     w.sync();
-                    registerSegment(w);
                 } catch (Exception e) {
+                    failedSegments.add(w.getSegmentName());
                     System.err.println("Seal flush failed for " + w.getSegmentName() + ": " + e.getMessage());
                 }
             }
 
+            if (!failedSegments.isEmpty()) {
+                Iterator<PendingManifestEntry> it = pendingManifest.iterator();
+                while (it.hasNext()) {
+                    PendingManifestEntry pme = it.next();
+                    if (failedSegments.contains(pme.segmentName)) {
+                        it.remove();
+                        DeltaBuffer.Entry orig = frozenEntries.get(pme.id);
+                        if (orig != null) {
+                            failedEntries.add(orig);
+                        }
+                    }
+                }
+            }
+
             try (AutoLock ignored = AutoLock.write(globalLock)) {
+                for (SegmentWriter w : touchedWriters) {
+                    registerSegment(w);
+                }
+                Map<String, Long> finalTombstones = deltaBuffer.tombstones();
                 for (PendingManifestEntry pme : pendingManifest) {
+                    Long deleteLsn = finalTombstones.get(pme.id);
+                    if (deleteLsn != null) continue;
                     if (!manifest.contains(pme.id)) {
                         manifest.add(pme.id, pme.segmentName, pme.offset, pme.phaseCenter);
                     }
@@ -1545,20 +1596,27 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                     if (deltaIndex != null) {
                         deltaIndex.add(pme.id, pme.segmentName);
                     }
+                    int bucket = computePhaseBucket(pme.phaseCenter);
+                    PhaseSegmentGroup group = segmentGroups.get("phase-" + bucket);
+                    if (group != null) {
+                        group.updatePhaseStats(pme.phaseCenter);
+                    }
                 }
                 manifest.flush();
                 metaStore.flush();
-                deltaBuffer.clearFrozen();
                 for (DeltaBuffer.Entry failed : failedEntries) {
-                    deltaBuffer.add(failed.id(), failed.pattern(), failed.metadata(),
-                            failed.phaseCenter(), failed.idBytes(), failed.lsn());
+                    if (!deltaBuffer.tombstones().containsKey(failed.id())) {
+                        deltaBuffer.add(failed.id(), failed.pattern(), failed.metadata(),
+                                failed.phaseCenter(), failed.idBytes(), failed.lsn());
+                    }
                 }
+                deltaBuffer.clearFrozen();
                 rebuildShardSelector();
             }
 
             if (!failedEntries.isEmpty()) {
                 System.err.println("Seal: " + failedEntries.size() +
-                        " entries returned to delta buffer after write failures");
+                        " entries returned to delta buffer after write/flush failures");
             }
 
             if (wal != null && frozenMaxLsn > 0) {
@@ -1586,15 +1644,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     }
 
     private void awaitSealCompletion() {
-        scheduleSeal();
-
-        long deadline = System.currentTimeMillis() + backpressureTimeoutMs;
-        synchronized (sealMutex) {
-        }
-        if (deltaBuffer.size() >= deltaMaxEntries &&
-                System.currentTimeMillis() < deadline) {
-            sealDelta();
-        }
+        sealDelta();
     }
 
     private void replayWalRecord(WalRecord record) {
@@ -1643,11 +1693,11 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             } catch (Throwable t) {
                 System.err.println("IVF index rebuild failed: " + t.getMessage());
             } finally {
-                indexRebuildScheduled.set(false);
                 rebuildFuture.set(null);
+                indexRebuildScheduled.set(false);
             }
         }, 500, TimeUnit.MILLISECONDS);
-        rebuildFuture.set(future);
+        rebuildFuture.compareAndSet(null, future);
     }
 
     private void rebuildIvfIndex() {
@@ -1761,23 +1811,32 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     private List<SegmentWriter> selectWritersForQuery(WavePattern query, PhaseRoutingProfile profile) {
         PhaseShardSelector selector = shardSelectorRef.get();
 
-        // Compute resultant length R to detect low phase coherence
-        double R = phaseResultantLength(query.phase());
+        if (selector.shardCount() <= 1) {
+            return getAllWritersStream().toList();
+        }
+
+        double[] phase = query.phase();
+        double sinSum = 0.0, cosSum = 0.0;
+        for (double v : phase) {
+            sinSum += Math.sin(v);
+            cosSum += Math.cos(v);
+        }
+        double coherence = Math.sqrt(sinSum * sinSum + cosSum * cosSum) / phase.length;
 
         List<String> shardNames;
-        if (R < LOW_COHERENCE_THRESHOLD) {
-            // Low coherence: circular mean is unreliable — use wider probing
+        if (coherence < LOW_COHERENCE_THRESHOLD) {
             shardNames = selector.allShards();
         } else if (profile != null && !profile.isDefault()) {
             shardNames = selector.getRelevantShardsWeighted(query, READ_EPSILON, profile);
         } else {
+            double meanPhase = (sinSum == 0.0 && cosSum == 0.0) ? 0.0 : Math.atan2(sinSum, cosSum);
             double eps = READ_EPSILON;
-            shardNames = selector.getRelevantShards(query, eps);
+            shardNames = selector.getRelevantShardsByCenter(meanPhase, eps);
 
             int tries = 0;
             while (shardNames.isEmpty() && tries < PHASE_NEIGHBORS_MAX) {
                 eps += BUCKET_WIDTH_RAD;
-                shardNames = selector.getRelevantShards(query, eps);
+                shardNames = selector.getRelevantShardsByCenter(meanPhase, eps);
                 tries++;
             }
         }
@@ -1826,14 +1885,18 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     }
 
     private String base(String segmentName) {
+        if (segmentName.startsWith("phase-")) {
+            int i = 6;
+            int len = segmentName.length();
+            while (i < len && segmentName.charAt(i) >= '0' && segmentName.charAt(i) <= '9') {
+                i++;
+            }
+            if (i > 6) return segmentName.substring(0, i);
+        }
         int dot = segmentName.indexOf(".segment");
         String raw = dot >= 0 ? segmentName.substring(0, dot) : segmentName;
-
         int lastDash = raw.lastIndexOf('-');
-        if (lastDash > 0) {
-            return raw.substring(0, lastDash);
-        }
-        return raw;
+        return lastDash > 0 ? raw.substring(0, lastDash) : raw;
     }
 
     private PhaseSegmentGroup getOrCreateGroup(String baseName) {
@@ -1860,15 +1923,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         }
     }
 
-    private static final String PHASE_VERSION_FILE = ".circular-phase-v1";
-
-    /**
-     * Rebuilds all phaseCenter values in the manifest from stored WavePatterns.
-     * Idempotent: applying circular mean to already-correct values is a no-op.
-     *
-     * @return number of entries that were updated
-     */
-    int rebuildManifestPhaseCenters() {
+    private int rebuildManifestPhaseCenters() {
         int rebuilt = 0;
         Path segDir = rootDir.resolve("segments");
         for (String segName : manifest.getAllSegmentNames()) {
@@ -1902,7 +1957,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
         int rebuilt = rebuildManifestPhaseCenters();
         if (rebuilt > 0) {
-            System.out.println("Migrated " + rebuilt + " manifest phaseCenters to circular mean");
+            System.err.println("Migrated " + rebuilt + " manifest phaseCenters to circular mean");
         }
 
         try {
@@ -1927,15 +1982,6 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         return segmentGroups.values().stream()
                 .flatMap(group -> group.getAll().stream())
                 .distinct();
-    }
-
-    static double phaseResultantLength(double[] phase) {
-        double sinSum = 0.0, cosSum = 0.0;
-        for (double v : phase) {
-            sinSum += Math.sin(v);
-            cosSum += Math.cos(v);
-        }
-        return Math.sqrt(sinSum * sinSum + cosSum * cosSum) / phase.length;
     }
 
     private static double meanPhase(double[] phase) {
@@ -1967,6 +2013,14 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
     private int maxBucketIndex() {
         return (int) Math.ceil((2 * Math.PI) / BUCKET_WIDTH_RAD) - 1;
+    }
+
+    private static boolean checkPhaseOverflow(PhaseSegmentGroup group, double phaseCenter) {
+        OptionalDouble existing = group.getAvgPhaseIfPresent();
+        if (existing.isEmpty()) return false;
+        double phaseDist = Math.abs(phaseCenter - existing.getAsDouble());
+        if (phaseDist > Math.PI) phaseDist = 2 * Math.PI - phaseDist;
+        return phaseDist > PHASE_GROUP_EPSILON;
     }
 
     private SegmentWriteResult writeToSegment(byte[] idBytes, WavePattern psi,
@@ -2074,22 +2128,12 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             WavePattern pattern = null;
             ManifestIndex.PatternLocation loc = manifest.get(id);
             if (loc != null) {
-                CachedReader reader = readerCache.getOrLoad(loc.segmentName());
+                CachedReader reader = acquireReader(loc.segmentName());
                 if (reader != null) {
                     try {
-                        reader.acquire();
-                    } catch (IllegalStateException e) {
-                        reader = readerCache.getOrLoad(loc.segmentName());
-                        if (reader != null) {
-                            try { reader.acquire(); } catch (IllegalStateException e2) { reader = null; }
-                        }
-                    }
-                    if (reader != null) {
-                        try {
-                            pattern = readNoSemaphore(reader, id);
-                        } finally {
-                            reader.release();
-                        }
+                        pattern = readNoSemaphore(reader, id);
+                    } finally {
+                        reader.release();
                     }
                 }
             }

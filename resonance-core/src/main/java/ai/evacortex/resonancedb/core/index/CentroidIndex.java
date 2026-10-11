@@ -110,7 +110,7 @@ public final class CentroidIndex {
     }
 
     public double[][] centroids() {
-        return centroids;
+        return centroids.clone();
     }
 
     public int dim() {

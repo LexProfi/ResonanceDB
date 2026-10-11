@@ -11,6 +11,7 @@ package ai.evacortex.resonancedb.core.storage.compactor;
 import ai.evacortex.resonancedb.core.metadata.PatternMetaStore;
 import ai.evacortex.resonancedb.core.storage.ManifestIndex;
 import ai.evacortex.resonancedb.core.storage.PhaseSegmentGroup;
+import ai.evacortex.resonancedb.core.storage.io.SegmentCache;
 import ai.evacortex.resonancedb.core.storage.io.SegmentReader;
 import ai.evacortex.resonancedb.core.storage.io.SegmentWriter;
 
@@ -19,7 +20,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.stream.Stream;
 
@@ -27,39 +30,52 @@ public class DefaultSegmentCompactor implements SegmentCompactor {
 
     private static final int MAX_MOVE_ATTEMPTS = 10;
 
+    private record PendingEntry(String id, String oldSegment, long oldOffset,
+                                long newOffset, double phaseCenter) {}
+
     private final ManifestIndex manifest;
     private final PatternMetaStore metaStore;
     private final Path segmentDir;
     private final ReadWriteLock globalLock;
+    private final SegmentCache readerCache;
 
     public DefaultSegmentCompactor(ManifestIndex manifest,
                                    PatternMetaStore metaStore,
                                    Path segmentDir,
-                                   ReadWriteLock globalLock) {
+                                   ReadWriteLock globalLock,
+                                   SegmentCache readerCache) {
         this.manifest = manifest;
         this.metaStore = metaStore;
         this.segmentDir = segmentDir;
         this.globalLock = globalLock;
+        this.readerCache = readerCache;
     }
 
     @Override
     public void compact(PhaseSegmentGroup group) {
+        List<SegmentWriter> oldWriters;
+        String finalName;
+        Path tmpPath;
+        Path finalPath;
+        List<PendingEntry> pendingEntries;
+
         globalLock.writeLock().lock();
         try {
-            List<SegmentWriter> oldWriters = new ArrayList<>(group.getAll());
+            oldWriters = new ArrayList<>(group.getAll());
             if (oldWriters.size() <= 1) return;
 
             String base = group.getBaseName();
             long timestamp = System.currentTimeMillis();
             String tmpName = base + "-tmp-merged-" + timestamp + ".segment";
-            String finalName = base + "-merged-" + timestamp + ".segment";
-            Path tmpPath = segmentDir.resolve(tmpName);
-            Path finalPath = segmentDir.resolve(finalName);
+            finalName = base + "-merged-" + timestamp + ".segment";
+            tmpPath = segmentDir.resolve(tmpName);
+            finalPath = segmentDir.resolve(finalName);
 
             cleanupOldTmpSegments(base);
             Files.createDirectories(segmentDir);
             SegmentWriter tmpWriter = new SegmentWriter(tmpPath);
 
+            pendingEntries = new ArrayList<>();
             for (SegmentWriter writer : oldWriters) {
                 try (SegmentReader reader = new SegmentReader(writer.getPath())) {
                     for (SegmentReader.PatternWithId entry : reader.readAllWithId()) {
@@ -69,35 +85,81 @@ public class DefaultSegmentCompactor implements SegmentCompactor {
                         if (loc.offset() != entry.offset()) continue;
                         long newOff = tmpWriter.write(entry.id(), entry.pattern());
                         double phaseCenter = circularMeanPhase(entry.pattern().phase());
-                        manifest.replace(entry.id(),
-                                writer.getSegmentName(), entry.offset(),
-                                finalName, newOff,
-                                phaseCenter);
+                        pendingEntries.add(new PendingEntry(entry.id(),
+                                writer.getSegmentName(), entry.offset(), newOff, phaseCenter));
                     }
                 }
             }
 
             tmpWriter.flush();
             tmpWriter.close();
+
+            group.createAndRegisterNewSegment();
+        } catch (IOException e) {
+            throw new RuntimeException("Compaction failed: merge phase", e);
+        } finally {
+            globalLock.writeLock().unlock();
+        }
+
+        try {
             safeMoveWithRetry(tmpPath, finalPath);
+        } catch (IOException e) {
+            try { Files.deleteIfExists(tmpPath); } catch (IOException ignored) {}
+            throw new RuntimeException("Compaction failed: file move", e);
+        }
+
+        globalLock.writeLock().lock();
+        try {
             SegmentWriter mergedWriter = new SegmentWriter(finalPath);
             mergedWriter.sync();
+
+            List<Double> phaseCenters = new ArrayList<>();
+            for (PendingEntry pe : pendingEntries) {
+                ManifestIndex.PatternLocation loc = manifest.get(pe.id);
+                if (loc == null) continue;
+                if (!loc.segmentName().equals(pe.oldSegment)) continue;
+                if (loc.offset() != pe.oldOffset) continue;
+
+                manifest.replace(pe.id, pe.oldSegment, pe.oldOffset,
+                        finalName, pe.newOffset, pe.phaseCenter);
+                phaseCenters.add(pe.phaseCenter);
+            }
+
+            Set<String> oldWriterNames = new HashSet<>();
+            for (SegmentWriter w : oldWriters) {
+                oldWriterNames.add(w.getSegmentName());
+            }
+            List<SegmentWriter> currentWriters = new ArrayList<>(group.getAll());
+
             group.registerIfAbsent(mergedWriter);
             group.resetTo(mergedWriter);
+
+            for (SegmentWriter w : currentWriters) {
+                if (!oldWriterNames.contains(w.getSegmentName())) {
+                    group.registerIfAbsent(w);
+                }
+            }
+
+            for (double pc : phaseCenters) {
+                group.updatePhaseStats(pc);
+            }
+            readerCache.updateVersion(mergedWriter.getSegmentName(), mergedWriter.getWriteOffset());
             manifest.flush();
             metaStore.flush();
 
             for (SegmentWriter w : oldWriters) {
+                String oldSegName = w.getSegmentName();
+                readerCache.removeSegment(oldSegName);
                 try {
                     w.close();
                     Files.deleteIfExists(w.getPath());
                 } catch (Exception e) {
-                    System.err.println("WARN compaction cleanup: " + w.getSegmentName() + ": " + e.getMessage());
+                    System.err.println("WARN compaction cleanup: " + oldSegName + ": " + e.getMessage());
                 }
             }
 
-        } catch (IOException e) {
-            throw new RuntimeException("Compaction failed", e);
+        } catch (Exception e) {
+            throw new RuntimeException("Compaction failed: metadata update", e);
         } finally {
             globalLock.writeLock().unlock();
         }

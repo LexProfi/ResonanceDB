@@ -31,11 +31,19 @@ public final class FullScanCandidateSource implements CandidateSource {
         Map<String, Collection<String>> result = new LinkedHashMap<>();
         for (String segName : segmentNamesSupplier.get()) {
             CachedReader reader = readerProvider.apply(segName);
-            if (reader != null) {
+            if (reader == null) continue;
+            try {
+                reader.acquire();
+            } catch (IllegalStateException e) {
+                continue;
+            }
+            try {
                 Collection<String> ids = reader.allIds();
                 if (!ids.isEmpty()) {
                     result.put(segName, ids);
                 }
+            } finally {
+                reader.release();
             }
         }
         return result;

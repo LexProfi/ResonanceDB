@@ -32,16 +32,16 @@ public class SegmentCache implements Closeable {
 
     public SegmentCache(Path dir) {
         this(dir, Long.getLong("resonance.cache.maxBytes",
-                Runtime.getRuntime().maxMemory() - (64L << 20)));
+                Math.max(1L << 20, Runtime.getRuntime().maxMemory() - (64L << 20))));
     }
 
     public SegmentCache(Path dir, long maxWeightBytes) {
         this.versions = new ConcurrentHashMap<>();
         this.cache = Caffeine.newBuilder()
-                .maximumWeight(maxWeightBytes)
+                .maximumWeight(Math.max(1L << 20, maxWeightBytes))
                 .weigher((Key k, CachedReader r) -> (int) Math.min(r.getWeightInBytes(), Integer.MAX_VALUE))
                 .removalListener((Key k, CachedReader r, RemovalCause c) -> {
-                    evictionCount.incrementAndGet();
+                    if (c.wasEvicted()) evictionCount.incrementAndGet();
                     if (r != null) r.close();
                 })
                 .build(k -> {
@@ -60,7 +60,8 @@ public class SegmentCache implements Closeable {
         cache.invalidate(key);
         try {
             cache.get(key);
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            System.err.println("WARN cache preload failed for " + seg + ": " + e.getMessage());
         }
     }
 
@@ -73,6 +74,13 @@ public class SegmentCache implements Closeable {
             return cache.get(key);
         } catch (Exception e) {
             return null;
+        }
+    }
+
+    public void removeSegment(String segName) {
+        Long ver = versions.remove(segName);
+        if (ver != null) {
+            cache.invalidate(new Key(segName, ver));
         }
     }
 

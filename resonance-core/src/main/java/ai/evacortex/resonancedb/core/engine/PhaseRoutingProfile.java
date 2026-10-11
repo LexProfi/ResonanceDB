@@ -109,7 +109,7 @@ public final class PhaseRoutingProfile {
     /**
      * Computes the weighted phase center of a query pattern using this profile's weights.
      *
-     * <p>For default weights, returns the standard arithmetic mean.
+     * <p>For default weights, returns the circular mean (atan2-based).
      * For phase-free, returns 0.0 (no meaningful center).</p>
      *
      * @param query the query pattern

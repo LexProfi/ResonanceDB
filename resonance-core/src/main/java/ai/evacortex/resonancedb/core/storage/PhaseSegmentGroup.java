@@ -14,8 +14,8 @@ import ai.evacortex.resonancedb.core.storage.io.SegmentWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Collections;
 import java.util.List;
+import java.util.OptionalDouble;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
@@ -24,6 +24,7 @@ import java.util.stream.Collectors;
 public class PhaseSegmentGroup {
 
     private static final long MAX_SEG_BYTES = Long.parseLong(System.getProperty("resonance.segment.maxBytes", "" + (64L << 20)));
+    private static final double PHASE_STATS_EPSILON = 1e-10;
     private final AtomicInteger seq = new AtomicInteger();
     private volatile SegmentWriter current;
     private final String baseName;
@@ -32,9 +33,8 @@ public class PhaseSegmentGroup {
     private final SegmentCompactor compactor;
     private final ReentrantLock lock = new ReentrantLock();
 
-    private volatile double sinSum = 0.0;
-    private volatile double cosSum = 0.0;
-    private volatile int count = 0;
+    private double sinSum = 0.0;
+    private double cosSum = 0.0;
 
     public PhaseSegmentGroup(String baseName, Path baseDir, SegmentCompactor compactor) {
         this.baseName = baseName;
@@ -117,7 +117,7 @@ public class PhaseSegmentGroup {
     }
 
     public List<SegmentWriter> getAll() {
-        return Collections.unmodifiableList(writers);
+        return List.copyOf(writers);
     }
 
     public List<Path> getPaths() {
@@ -134,6 +134,10 @@ public class PhaseSegmentGroup {
             writers.clear();
             writers.add(writer);
             current = writer;
+            synchronized (this) {
+                sinSum = 0.0;
+                cosSum = 0.0;
+            }
             String name = writer.getSegmentName();
             int idx = 0;
             try {
@@ -171,12 +175,29 @@ public class PhaseSegmentGroup {
     public synchronized void updatePhaseStats(double newPhase) {
         this.sinSum += Math.sin(newPhase);
         this.cosSum += Math.cos(newPhase);
-        this.count++;
     }
 
-    public double getAvgPhase() {
-        if (sinSum == 0.0 && cosSum == 0.0) return 0.0;
+    public synchronized void removePhaseStats(double oldPhase) {
+        this.sinSum -= Math.sin(oldPhase);
+        this.cosSum -= Math.cos(oldPhase);
+    }
+
+    public synchronized double getAvgPhase() {
+        if (!hasPhaseStatsInternal()) return 0.0;
         return Math.atan2(sinSum, cosSum);
+    }
+
+    public synchronized boolean hasPhaseStats() {
+        return hasPhaseStatsInternal();
+    }
+
+    public synchronized OptionalDouble getAvgPhaseIfPresent() {
+        if (!hasPhaseStatsInternal()) return OptionalDouble.empty();
+        return OptionalDouble.of(Math.atan2(sinSum, cosSum));
+    }
+
+    private boolean hasPhaseStatsInternal() {
+        return Math.abs(sinSum) > PHASE_STATS_EPSILON || Math.abs(cosSum) > PHASE_STATS_EPSILON;
     }
 
     public boolean containsSegment(String segmentName) {

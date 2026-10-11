@@ -103,7 +103,9 @@ public final class DeltaBuffer {
         Map<String, Entry> f = frozen;
         if (f != null) {
             for (String id : f.keySet()) {
-                tombstones.remove(id);
+                if (!active.containsKey(id)) {
+                    tombstones.remove(id);
+                }
             }
         }
         frozen = null;
@@ -153,20 +155,16 @@ public final class DeltaBuffer {
     }
 
     private List<Entry> collectAllEntries() {
-        List<Entry> entries = new ArrayList<>();
-        for (Entry e : active.values()) {
-            if (!tombstones.containsKey(e.id())) {
-                entries.add(e);
-            }
-        }
+        Map<String, Entry> combined = new HashMap<>();
         Map<String, Entry> f = frozen;
         if (f != null) {
             for (Entry e : f.values()) {
-                if (!tombstones.containsKey(e.id()) && !active.containsKey(e.id())) {
-                    entries.add(e);
-                }
+                if (!tombstones.containsKey(e.id())) combined.put(e.id(), e);
             }
         }
-        return entries;
+        for (Entry e : active.values()) {
+            if (!tombstones.containsKey(e.id())) combined.put(e.id(), e);
+        }
+        return new ArrayList<>(combined.values());
     }
 }
