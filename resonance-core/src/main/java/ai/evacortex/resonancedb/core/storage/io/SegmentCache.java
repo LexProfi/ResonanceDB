@@ -17,6 +17,7 @@ import java.nio.file.Path;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class SegmentCache implements Closeable {
 
@@ -26,13 +27,27 @@ public class SegmentCache implements Closeable {
 
     private final AtomicBoolean isClosed = new AtomicBoolean(false);
 
+    private final AtomicLong loadCount = new AtomicLong();
+    private final AtomicLong evictionCount = new AtomicLong();
+
     public SegmentCache(Path dir) {
+        this(dir, Long.getLong("resonance.cache.maxBytes",
+                Math.max(1L << 20, Runtime.getRuntime().maxMemory() - (64L << 20))));
+    }
+
+    public SegmentCache(Path dir, long maxWeightBytes) {
         this.versions = new ConcurrentHashMap<>();
         this.cache = Caffeine.newBuilder()
-                .maximumWeight(Runtime.getRuntime().maxMemory() - (64L << 20))
-                .weigher((Key k, CachedReader r) -> (int)Math.min(r.getWeightInBytes(), Integer.MAX_VALUE))
-                .removalListener((Key k, CachedReader r, RemovalCause c) -> { if (r != null) r.close(); })
-                .build(k -> CachedReader.open(dir.resolve(k.name)));
+                .maximumWeight(Math.max(1L << 20, maxWeightBytes))
+                .weigher((Key k, CachedReader r) -> (int) Math.min(r.getWeightInBytes(), Integer.MAX_VALUE))
+                .removalListener((Key k, CachedReader r, RemovalCause c) -> {
+                    if (c.wasEvicted()) evictionCount.incrementAndGet();
+                    if (r != null) r.close();
+                })
+                .build(k -> {
+                    loadCount.incrementAndGet();
+                    return CachedReader.open(dir.resolve(k.name));
+                });
     }
 
     public void updateVersion(String seg, long lastOffset) {
@@ -45,17 +60,9 @@ public class SegmentCache implements Closeable {
         cache.invalidate(key);
         try {
             cache.get(key);
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            System.err.println("WARN cache preload failed for " + seg + ": " + e.getMessage());
         }
-    }
-
-
-    public CachedReader get(String seg) {
-        if (isClosed.get()) return null;
-        long v = versions.getOrDefault(seg, -1L);
-        if (v < 0) return null;
-        Key key = new Key(seg, v);
-        return cache.getIfPresent(key);
     }
 
     public CachedReader getOrLoad(String seg) {
@@ -69,6 +76,17 @@ public class SegmentCache implements Closeable {
             return null;
         }
     }
+
+    public void removeSegment(String segName) {
+        Long ver = versions.remove(segName);
+        if (ver != null) {
+            cache.invalidate(new Key(segName, ver));
+        }
+    }
+
+    public long getLoadCount() { return loadCount.get(); }
+    public long getEvictionCount() { return evictionCount.get(); }
+    public long estimatedSize() { return cache.estimatedSize(); }
 
     @Override
     public void close() {

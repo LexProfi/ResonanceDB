@@ -142,7 +142,7 @@ public final class IvfCandidateSource implements CandidateSource {
                     if (loc == null) return null;
                     try {
                         CachedReader reader = readerProvider.apply(loc.segmentName());
-                        return (reader != null) ? reader.readById(patId) : null;
+                        return safeReadById(reader, patId);
                     } catch (RuntimeException e) {
                         return null;
                     }
@@ -210,7 +210,7 @@ public final class IvfCandidateSource implements CandidateSource {
                     if (loc == null) return null;
                     try {
                         CachedReader reader = readerProvider.apply(loc.segmentName());
-                        return (reader != null) ? reader.readById(patId) : null;
+                        return safeReadById(reader, patId);
                     } catch (RuntimeException e) {
                         return null;
                     }
@@ -397,7 +397,7 @@ public final class IvfCandidateSource implements CandidateSource {
                     if (loc == null) return null;
                     try {
                         CachedReader reader = readerProvider.apply(loc.segmentName());
-                        return (reader != null) ? reader.readById(patId) : null;
+                        return safeReadById(reader, patId);
                     } catch (RuntimeException e) {
                         return null;
                     }
@@ -594,6 +594,17 @@ public final class IvfCandidateSource implements CandidateSource {
         catch (RuntimeException e) { return null; }
     }
 
+    private static WavePattern safeReadById(CachedReader reader, String id) {
+        if (reader == null) return null;
+        try { reader.acquire(); }
+        catch (IllegalStateException e) { return null; }
+        try {
+            return reader.readById(id);
+        } finally {
+            reader.release();
+        }
+    }
+
     private Set<String> safeGetIds(CachedReader reader) {
         try { return reader.allIds(); }
         catch (RuntimeException e) { return Set.of(); }
@@ -610,11 +621,8 @@ public final class IvfCandidateSource implements CandidateSource {
     private WavePattern safeReadPattern(Function<String, CachedReader> provider,
                                         String segName, String id, int patternLen) {
         CachedReader reader = safeGetReader(provider, segName);
-        if (reader == null) return null;
-        try {
-            WavePattern p = reader.readById(id);
-            return (p != null && p.amplitude().length == patternLen) ? p : null;
-        } catch (RuntimeException e) { return null; }
+        WavePattern p = safeReadById(reader, id);
+        return (p != null && p.amplitude().length == patternLen) ? p : null;
     }
 
     public void buildIndexWithVamana(Function<String, CachedReader> readerProvider,
@@ -693,10 +701,8 @@ public final class IvfCandidateSource implements CandidateSource {
                     if (loc == null) continue;
                     try {
                         CachedReader reader = readerProvider.apply(loc.segmentName());
-                        if (reader != null) {
-                            patArr[i] = reader.readById(idArr[i]);
-                            if (patArr[i] != null) valid++;
-                        }
+                        patArr[i] = safeReadById(reader, idArr[i]);
+                        if (patArr[i] != null) valid++;
                     } catch (RuntimeException e) {
                         System.err.println("Failed to read pattern " + idArr[i] + ": " + e.getMessage());
                     }

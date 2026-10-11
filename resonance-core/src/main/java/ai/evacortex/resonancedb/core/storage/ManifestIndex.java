@@ -143,7 +143,6 @@ public class ManifestIndex implements Closeable {
     }
 
     private void persistToFile() {
-        lock.readLock().lock();
         try {
             Files.createDirectories(indexFile.getParent());
             Path tmp = indexFile.resolveSibling(indexFile.getFileName().toString() + ".tmp");
@@ -178,8 +177,6 @@ public class ManifestIndex implements Closeable {
                 System.err.println("Manifest tmp cleanup: " + ce.getMessage());
             }
             throw new RuntimeException("Failed to write manifest index", e);
-        } finally {
-            lock.readLock().unlock();
         }
     }
 
@@ -217,8 +214,15 @@ public class ManifestIndex implements Closeable {
 
     public void replace(String oldId, String newId,
                         String newSegment, long newOffset, double newPhaseCenter) {
-        this.remove(oldId);
-        this.add(newId, newSegment, newOffset, newPhaseCenter);
+        lock.writeLock().lock();
+        try {
+            if (!map.containsKey(oldId)) throw new PatternNotFoundException(oldId);
+            map.remove(oldId);
+            map.put(newId, new PatternLocation(newSegment, newOffset, newPhaseCenter));
+            knownSegments.add(newSegment);
+        } finally {
+            lock.writeLock().unlock();
+        }
     }
 
     public record PatternLocation(String segmentName, long offset, double phaseCenter) {}

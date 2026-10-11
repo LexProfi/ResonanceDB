@@ -9,7 +9,6 @@
 package ai.evacortex.resonancedb.core;
 
 import ai.evacortex.resonancedb.core.engine.*;
-import ai.evacortex.resonancedb.core.engine.PhaseRoutingProfile;
 import ai.evacortex.resonancedb.core.index.ResonanceMoments;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
 import ai.evacortex.resonancedb.core.storage.responce.ComparisonResult;
@@ -449,7 +448,21 @@ class PhaseWeightsTest {
         int dim = 128;
 
         for (int trial = 0; trial < 200; trial++) {
-            WavePattern p = randomPattern(rng, dim);
+            // Generate coherent patterns (clustered phases around random center)
+            // — representative of real waveform data where phases have structure
+            double phaseCenter = -Math.PI + rng.nextDouble() * 2 * Math.PI;
+            double spread = 0.3 + rng.nextDouble() * 1.2; // σ ∈ [0.3, 1.5]
+            double[] amp = new double[dim];
+            double[] phase = new double[dim];
+            for (int i = 0; i < dim; i++) {
+                amp[i] = rng.nextDouble() * 2.0;
+                double p = phaseCenter + rng.nextGaussian() * spread;
+                while (p > Math.PI) p -= 2 * Math.PI;
+                while (p <= -Math.PI) p += 2 * Math.PI;
+                phase[i] = p;
+            }
+            WavePattern pat = new WavePattern(amp, phase);
+
             double[] w = randomWeights(rng, dim);
             var pw = new PhaseWeights(w);
             var opts = CompareOptions.withPhaseWeights(pw);
@@ -457,13 +470,15 @@ class PhaseWeightsTest {
 
             if (profile.isPhaseFree() || profile.isDefault()) continue;
 
-            double fullMean = mean(p.phase());
-            double weightedMean = profile.weightedPhaseCenter(p);
-            double actualDrift = Math.abs(weightedMean - fullMean);
+            double fullMean = circularMean(pat.phase());
+            double weightedMean = profile.weightedPhaseCenter(pat);
+            double diff = Math.abs(weightedMean - fullMean);
+            double actualDrift = diff > Math.PI ? 2 * Math.PI - diff : diff;
 
             assertTrue(actualDrift <= profile.routingUncertainty() + 1e-10,
                     "routing uncertainty bound violated: actual=" + actualDrift
-                            + " > bound=" + profile.routingUncertainty());
+                            + " > bound=" + profile.routingUncertainty()
+                            + " (trial=" + trial + ", spread=" + spread + ")");
         }
     }
 
@@ -588,9 +603,13 @@ class PhaseWeightsTest {
         return w;
     }
 
-    private static double mean(double[] arr) {
-        double sum = 0;
-        for (double v : arr) sum += v;
-        return sum / arr.length;
+    private static double circularMean(double[] arr) {
+        double sinSum = 0.0, cosSum = 0.0;
+        for (double v : arr) {
+            sinSum += Math.sin(v);
+            cosSum += Math.cos(v);
+        }
+        if (sinSum == 0.0 && cosSum == 0.0) return 0.0;
+        return Math.atan2(sinSum, cosSum);
     }
 }

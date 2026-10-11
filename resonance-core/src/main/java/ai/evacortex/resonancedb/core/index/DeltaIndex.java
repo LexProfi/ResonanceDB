@@ -34,7 +34,12 @@ public final class DeltaIndex {
     }
 
     public void markDeleted(String patternId) {
-        deletedIds.add(patternId);
+        drainLock.readLock().lock();
+        try {
+            deletedIds.add(patternId);
+        } finally {
+            drainLock.readLock().unlock();
+        }
     }
 
     public Map<String, Collection<String>> candidatesBySegment() {

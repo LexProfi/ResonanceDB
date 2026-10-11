@@ -18,9 +18,11 @@ import ai.evacortex.resonancedb.core.storage.WavePattern;
  * only numerical geometry information.</p>
  *
  * <p>The {@link #routingUncertainty()} value is computed as {@code π × Σ|w_i/sumW - 1/N|}
- * and has a theoretical range of {@code [0, 2π]}. In practice it is bounded by the weight
- * distribution geometry; the upper bound is conservative by design — higher uncertainty
- * leads to wider shard envelope expansion, preventing missed results.</p>
+ * and has a theoretical range of {@code [0, 2π]}. For low-coherence queries (resultant
+ * R &lt; threshold), shard selection falls back to all-shards scan, so the bound only
+ * needs to hold for coherent phase distributions. The upper bound is conservative by
+ * design — higher uncertainty leads to wider shard envelope expansion, preventing
+ * missed results.</p>
  *
  * <p>Instances are immutable and thread-safe.</p>
  */
@@ -107,7 +109,7 @@ public final class PhaseRoutingProfile {
     /**
      * Computes the weighted phase center of a query pattern using this profile's weights.
      *
-     * <p>For default weights, returns the standard arithmetic mean.
+     * <p>For default weights, returns the circular mean (atan2-based).
      * For phase-free, returns 0.0 (no meaningful center).</p>
      *
      * @param query the query pattern
@@ -120,9 +122,13 @@ public final class PhaseRoutingProfile {
         int N = phase.length;
 
         if (isDefault || phaseWeights == null) {
-            double sum = 0.0;
-            for (double p : phase) sum += p;
-            return sum / N;
+            double sinSum = 0.0, cosSum = 0.0;
+            for (double p : phase) {
+                sinSum += Math.sin(p);
+                cosSum += Math.cos(p);
+            }
+            if (sinSum == 0.0 && cosSum == 0.0) return 0.0;
+            return Math.atan2(sinSum, cosSum);
         }
 
         double[] w = phaseWeights.rawWeights();
@@ -130,12 +136,13 @@ public final class PhaseRoutingProfile {
             throw new IllegalArgumentException(
                     "PhaseWeights dimension mismatch: expected " + N + ", got " + w.length);
         }
-        double wSum = 0.0, phaseSum = 0.0;
+        double sinSum = 0.0, cosSum = 0.0;
         for (int i = 0; i < N; i++) {
-            wSum += w[i];
-            phaseSum += w[i] * phase[i];
+            sinSum += w[i] * Math.sin(phase[i]);
+            cosSum += w[i] * Math.cos(phase[i]);
         }
-        return wSum > 0.0 ? phaseSum / wSum : 0.0;
+        if (sinSum == 0.0 && cosSum == 0.0) return 0.0;
+        return Math.atan2(sinSum, cosSum);
     }
 
     @Override

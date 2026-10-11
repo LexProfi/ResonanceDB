@@ -527,5 +527,4 @@ Any rights to use, reproduce, implement, or prepare derivative works from the te
 
 ## 📫 Contact
 
-**Author:** Aleksandr Listopad
-**Licensing & Security:** [license@evacortex.ai](mailto:license@evacortex.ai)
+For questions, licensing, and partnership inquiries: [hello@evacortex.ai](mailto:hello@evacortex.ai)
