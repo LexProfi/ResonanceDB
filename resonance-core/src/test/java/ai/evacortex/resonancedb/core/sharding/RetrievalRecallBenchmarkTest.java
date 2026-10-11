@@ -15,6 +15,8 @@ import ai.evacortex.resonancedb.core.storage.StoreRuntimeServices;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
 import ai.evacortex.resonancedb.core.storage.WavePatternStoreImpl;
 import ai.evacortex.resonancedb.core.storage.responce.ResonanceMatch;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -27,7 +29,7 @@ import java.util.stream.IntStream;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Gap 3: Retrieval benchmark against exact ground truth.
+ * Retrieval benchmark against exact ground truth.
  *
  * <p>Measures Recall@1 and Recall@10 for:
  * <ul>
@@ -38,6 +40,22 @@ import static org.junit.jupiter.api.Assertions.*;
  * With query modes: default, sparse, continuous, all-zero, low-coherence.
  */
 class RetrievalRecallBenchmarkTest {
+
+    private String savedIndexEnabled;
+
+    @BeforeEach
+    void saveProperties() {
+        savedIndexEnabled = System.getProperty("resonance.index.enabled");
+    }
+
+    @AfterEach
+    void restoreProperties() {
+        if (savedIndexEnabled == null) {
+            System.clearProperty("resonance.index.enabled");
+        } else {
+            System.setProperty("resonance.index.enabled", savedIndexEnabled);
+        }
+    }
 
     private static final double PI = Math.PI;
 
@@ -160,6 +178,7 @@ class RetrievalRecallBenchmarkTest {
     // ─── tests ───
 
     @Test
+    @Tag("benchmark")
     @DisplayName("Recall benchmark: structured synthetic corpus, D=64")
     void benchmark_structured_D64(@TempDir Path tmpDir) {
         int D = 64, N = 2000, Q = 50;
@@ -215,6 +234,7 @@ class RetrievalRecallBenchmarkTest {
     }
 
     @Test
+    @Tag("benchmark")
     @DisplayName("Recall benchmark: ±π boundary corpus, D=64")
     void benchmark_boundary_D64(@TempDir Path tmpDir) {
         int D = 64, N = 2000, Q = 50;
@@ -235,9 +255,15 @@ class RetrievalRecallBenchmarkTest {
 
         System.out.printf("%nRecall Benchmark — ±π Boundary D=%d:%n", D);
         results.forEach(r -> System.out.println(r));
+
+        for (BenchmarkResult r : results) {
+            assertTrue(r.recall10 > 0,
+                    "±π boundary corpus R@10 should be > 0 for " + r.queryMode);
+        }
     }
 
     @Test
+    @Tag("benchmark")
     @DisplayName("Recall benchmark: random phases (negative control), D=64")
     void benchmark_random_D64(@TempDir Path tmpDir) {
         int D = 64, N = 2000, Q = 50;
@@ -247,13 +273,11 @@ class RetrievalRecallBenchmarkTest {
         java.util.function.BiFunction<Random, Integer, WavePattern> randomCorpus =
                 (rng, i) -> randomUniformPattern(rng, D);
 
-        // Default (low-coherence fallback should kick in)
         results.add(runBenchmark("random", "default", N, D, Q,
                 randomCorpus,
                 rng -> randomUniformPattern(rng, D),
                 null, tmpDir));
 
-        // Low-coherence query
         results.add(runBenchmark("random", "low-coherence", N, D, Q,
                 randomCorpus,
                 rng -> randomUniformPattern(rng, D),
@@ -261,10 +285,12 @@ class RetrievalRecallBenchmarkTest {
 
         System.out.printf("%nRecall Benchmark — Random (negative control) D=%d:%n", D);
         results.forEach(r -> System.out.println(r));
-        System.out.println("  (Random corpus is negative control — IVF not expected to be effective)");
+
+        assertFalse(results.isEmpty(), "benchmark should produce results");
     }
 
     @Test
+    @Tag("benchmark")
     @DisplayName("Recall benchmark: structured synthetic, D=256")
     void benchmark_structured_D256(@TempDir Path tmpDir) {
         int D = 256, N = 2000, Q = 30;
@@ -291,5 +317,12 @@ class RetrievalRecallBenchmarkTest {
 
         System.out.printf("%nRecall Benchmark — Structured D=%d:%n", D);
         results.forEach(r -> System.out.println(r));
+
+        for (BenchmarkResult r : results) {
+            if (!r.queryMode.equals("all-zero-weights")) {
+                assertTrue(r.recall10 >= 0.5,
+                        r.queryMode + " Recall@10 should be ≥0.5, got " + r.recall10);
+            }
+        }
     }
 }

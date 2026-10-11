@@ -12,6 +12,7 @@ import ai.evacortex.resonancedb.core.storage.ManifestIndex;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
 
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.util.*;
@@ -19,7 +20,7 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Phase 4: Benchmark — routing correctness of circular mean vs arithmetic mean.
+ * Routing correctness of circular mean vs arithmetic mean.
  *
  * <p>Measures routing divergence: how often the two strategies select different shards,
  * and whether circular routing correctly groups ±π-boundary patterns.</p>
@@ -57,6 +58,7 @@ class CircularRoutingBenchmarkTest {
     }
 
     @Test
+    @Tag("benchmark")
     @DisplayName("Routing divergence: arithmetic vs circular on random corpus (16 shards)")
     void routingDivergence_randomCorpus() {
         int numShards = 16;
@@ -91,6 +93,9 @@ class CircularRoutingBenchmarkTest {
         System.out.printf("  Divergent routing: %d/%d (%.1f%%)%n", divergeCount, corpusSize, divergeRate);
         System.out.printf("  Boundary patterns (|φ̄| > π-0.3): %d/%d (%.1f%%)%n",
                 boundaryCount, corpusSize, 100.0 * boundaryCount / corpusSize);
+
+        assertTrue(divergeCount > 0,
+                "random corpus should produce at least some routing divergence");
     }
 
     @Test
@@ -142,13 +147,13 @@ class CircularRoutingBenchmarkTest {
     }
 
     @Test
+    @Tag("benchmark")
     @DisplayName("Phase overflow false positive rate: linear vs circular distance")
     void phaseOverflow_falsePositiveRate() {
         int corpusSize = 10000;
         Random rng = new Random(123);
 
         int linearFP = 0;
-        int circularFP = 0;
         int trueOverflow = 0;
 
         for (int i = 0; i < corpusSize; i++) {

@@ -17,7 +17,7 @@ import java.util.Random;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Gap 2: Resultant length R computation and low-coherence detection.
+ * Resultant length R computation and low-coherence detection.
  *
  * <p>Verifies R values for the required scenarios:
  * all equal, clustered, uniform/random, symmetric cancellation,

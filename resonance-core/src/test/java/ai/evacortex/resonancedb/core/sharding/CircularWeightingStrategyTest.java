@@ -19,7 +19,7 @@ import java.util.Random;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Phase 1 analysis: compares circular mean weighting strategies for phase routing.
+ * Compares circular mean weighting strategies for phase routing.
  *
  * <p>Strategies compared:
  * <ol>
@@ -146,6 +146,10 @@ class CircularWeightingStrategyTest {
         System.out.printf("  Max divergence (unit vs |A_i|) = %.4f rad%n", circularDistance(unit, absAmp));
         System.out.printf("  Max divergence (unit vs A_i²)  = %.4f rad%n", circularDistance(unit, energy));
         System.out.printf("  Phase resultant R = %.4f%n", resultantLength(phases));
+
+        double maxDiv = Math.max(circularDistance(unit, absAmp), circularDistance(unit, energy));
+        assertTrue(maxDiv > 0.01,
+                "sparse amplitudes near ±π should cause strategy divergence, got " + maxDiv + " rad");
     }
 
     @Test
@@ -237,6 +241,9 @@ class CircularWeightingStrategyTest {
             if (bucketDivUnit_vs_Energy[d] > 0)
                 System.out.printf("    %d buckets apart: %d trials%n", d, bucketDivUnit_vs_Energy[d]);
         }
+
+        assertTrue(bucketDivUnit_vs_Abs[0] > 200,
+                "at least 20% of trials should have zero bucket divergence for unit vs |A_i|, got " + bucketDivUnit_vs_Abs[0]);
     }
 
     @Test

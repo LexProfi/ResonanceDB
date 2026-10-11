@@ -15,6 +15,8 @@ import ai.evacortex.resonancedb.core.storage.StoreRuntimeServices;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
 import ai.evacortex.resonancedb.core.storage.WavePatternStoreImpl;
 import ai.evacortex.resonancedb.core.storage.responce.ResonanceMatch;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -42,6 +44,22 @@ import static org.junit.jupiter.api.Assertions.*;
  * separate from routing loss.
  */
 class ProductionRecallBenchmarkTest {
+
+    private String savedIndexEnabled;
+
+    @BeforeEach
+    void saveProperties() {
+        savedIndexEnabled = System.getProperty("resonance.index.enabled");
+    }
+
+    @AfterEach
+    void restoreProperties() {
+        if (savedIndexEnabled == null) {
+            System.clearProperty("resonance.index.enabled");
+        } else {
+            System.setProperty("resonance.index.enabled", savedIndexEnabled);
+        }
+    }
 
     private static final double PI = Math.PI;
     private static final double TWO_PI = 2 * PI;
@@ -474,8 +492,6 @@ class ProductionRecallBenchmarkTest {
                     latencies[3][q] = System.nanoTime() - t0;
                     recall1[3] += recallAtKFromMatches(gtStore, storeResults, 1);
                     recall10[3] += recallAtKFromMatches(gtStore, storeResults, TOP_K);
-                    visitedShards[3] += 0;
-                    candidates[3] += 0;
                     if (fallback) fallbackCount[3]++;
                 }
             }
@@ -530,6 +546,11 @@ class ProductionRecallBenchmarkTest {
         System.out.println("  Variant    Corpus           QueryProfile       N        D     R@1   R@10  "
                 + "p50        p95        shards cands    fbRate  CV      q");
         results.forEach(VariantResult::print);
+
+        assertFalse(results.isEmpty(), "benchmark should produce results");
+        for (VariantResult r : results) {
+            assertTrue(r.recall10 > 0, "structured corpus R@10 should be > 0 for " + r.variant);
+        }
     }
 
     @Test
@@ -548,6 +569,11 @@ class ProductionRecallBenchmarkTest {
         System.out.println("  Variant    Corpus           QueryProfile       N        D     R@1   R@10  "
                 + "p50        p95        shards cands    fbRate  CV      q");
         results.forEach(VariantResult::print);
+
+        assertFalse(results.isEmpty(), "benchmark should produce results");
+        for (VariantResult r : results) {
+            assertTrue(r.recall10 > 0, "boundary corpus R@10 should be > 0 for " + r.variant);
+        }
     }
 
     @Test
@@ -566,6 +592,7 @@ class ProductionRecallBenchmarkTest {
         System.out.println("  Variant    Corpus           QueryProfile       N        D     R@1   R@10  "
                 + "p50        p95        shards cands    fbRate  CV      q");
         results.forEach(VariantResult::print);
-        System.out.println("  (Random corpus: negative control — IVF/shard routing not expected to be effective)");
+
+        assertFalse(results.isEmpty(), "benchmark should produce results");
     }
 }

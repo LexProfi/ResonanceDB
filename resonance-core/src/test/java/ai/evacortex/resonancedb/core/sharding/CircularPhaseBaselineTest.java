@@ -22,7 +22,7 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Phase 0 baseline: reproduces boundary cases where arithmetic mean
+ * Reproduces boundary cases where arithmetic mean
  * diverges from circular mean, and measures impact on shard selection.
  */
 class CircularPhaseBaselineTest {
@@ -119,6 +119,9 @@ class CircularPhaseBaselineTest {
 
         double circDist = circularDistance(arith, circ);
         System.out.printf("  Divergence      = %.4f rad (%.1f°)%n", circDist, Math.toDegrees(circDist));
+
+        assertTrue(circDist > 0.1,
+                "359°/1° boundary should produce significant divergence, got " + circDist + " rad");
     }
 
     @Test
@@ -224,12 +227,19 @@ class CircularPhaseBaselineTest {
         double arith = arithmeticMeanPhase(phases);
         double circ = circularMeanPhase(phases);
 
+        double sinSum = 0.0, cosSum = 0.0;
+        for (double p : phases) {
+            sinSum += Math.sin(p);
+            cosSum += Math.cos(p);
+        }
+        double R = Math.sqrt(sinSum * sinSum + cosSum * cosSum) / DIM;
+
         System.out.printf("Full cancellation:%n");
         System.out.printf("  Arithmetic = %.4f%n", arith);
         System.out.printf("  Circular   = %.4f%n", circ);
-        System.out.printf("  Resultant  = %.6f%n",
-                Math.sqrt(Math.pow(Arrays.stream(phases).mapToObj(Math::cos).mapToDouble(d -> d).sum(), 2)
-                        + Math.pow(Arrays.stream(phases).mapToObj(Math::sin).mapToDouble(d -> d).sum(), 2)) / DIM);
+        System.out.printf("  Resultant  = %.6f%n", R);
+
+        assertTrue(R < 0.01, "resultant length should be ≈0 for full cancellation, got " + R);
     }
 
     @Test
@@ -283,8 +293,11 @@ class CircularPhaseBaselineTest {
         );
 
         System.out.printf("Weighted phase center (sparse, ±π boundary):%n");
-        System.out.printf("  Current (arithmetic) = %.4f%n", weighted);
-        System.out.printf("  Expected (circular)  = %.4f%n", expectedCirc);
-        System.out.printf("  Divergence           = %.4f rad%n", circularDistance(weighted, expectedCirc));
+        System.out.printf("  Weighted center = %.4f%n", weighted);
+        System.out.printf("  Expected        = %.4f%n", expectedCirc);
+        System.out.printf("  Divergence      = %.4f rad%n", circularDistance(weighted, expectedCirc));
+
+        assertEquals(expectedCirc, weighted, 1e-10,
+                "weighted phase center should match manual circular computation");
     }
 }

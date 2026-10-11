@@ -8,6 +8,7 @@
  */
 package ai.evacortex.resonancedb.core.storage;
 
+import ai.evacortex.resonancedb.core.storage.PhaseSegmentGroup;
 import ai.evacortex.resonancedb.core.storage.io.CachedReader;
 import ai.evacortex.resonancedb.core.storage.io.SegmentCache;
 import ai.evacortex.resonancedb.core.storage.responce.ResonanceMatch;
@@ -21,7 +22,6 @@ import java.lang.reflect.Field;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -84,9 +84,6 @@ class SegmentCacheEvictionTest {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    // Section A-G: Deterministic correctness tests
-    // ═══════════════════════════════════════════════════════════════════
 
     @Test
     void testA_selfMatchAfterSeal() {
@@ -206,6 +203,16 @@ class SegmentCacheEvictionTest {
             assertFalse(results.isEmpty(), "Surviving pattern " + i + " found after compaction");
             assertEquals(ids.get(i), results.get(0).id());
         }
+
+        // Insert after compaction must not create unnecessary segments —
+        // group phase stats should be restored so phaseOverflow is not falsely triggered
+        int segmentCountBefore = countTotalSegmentWriters();
+        WavePattern postCompact = randomPattern(PATTERN_LEN, 99_000);
+        store.insert(postCompact, Map.of("after", "compaction"));
+        store.sealDelta();
+        int segmentCountAfter = countTotalSegmentWriters();
+        assertTrue(segmentCountAfter <= segmentCountBefore + 1,
+                "insert after compaction should reuse existing segment, not create excess segments");
     }
 
     @Test
@@ -227,9 +234,6 @@ class SegmentCacheEvictionTest {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    // Section 2: Eviction race — reader pinned during active use
-    // ═══════════════════════════════════════════════════════════════════
 
     @Test
     void testEvictionRace_readerPinnedDuringActiveUse() throws Exception {
@@ -327,9 +331,6 @@ class SegmentCacheEvictionTest {
         assertTrue(readComplete.await(1, TimeUnit.SECONDS), "Read must complete");
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    // Section 3: Acquire-after-close race
-    // ═══════════════════════════════════════════════════════════════════
 
     @Test
     void testAcquireAfterClose_throwsISE_callerHandles() throws Exception {
@@ -343,8 +344,10 @@ class SegmentCacheEvictionTest {
         CachedReader reader = segmentCache.getOrLoad(segName);
         assertNotNull(reader);
 
-        // Evict → close the reader
+        // Evict from cache and explicitly close the reader
+        // (removalListener is async, so close explicitly for deterministic test)
         evictAllCachedReaders();
+        reader.close();
 
         // acquire() on closed reader must throw ISE
         assertThrows(IllegalStateException.class, reader::acquire,
@@ -355,14 +358,11 @@ class SegmentCacheEvictionTest {
         assertFalse(results.isEmpty(), "Query must find patterns via reloaded reader");
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    // Section 4: Version lifecycle
-    // ═══════════════════════════════════════════════════════════════════
 
     @Test
     void testVersionLifecycle_appendFlush() throws Exception {
         WavePattern p1 = randomPattern(PATTERN_LEN, 9300);
-        store.insert(p1, Map.of());
+        String id1 = store.insert(p1, Map.of());
         store.sealDelta();
 
         SegmentCache cache = getReaderCache();
@@ -370,7 +370,7 @@ class SegmentCacheEvictionTest {
 
         // Insert more patterns → new version
         WavePattern p2 = randomPattern(PATTERN_LEN, 9301);
-        store.insert(p2, Map.of());
+        String id2 = store.insert(p2, Map.of());
         store.sealDelta();
 
         // Query should find BOTH patterns — new version reader loaded
@@ -378,6 +378,8 @@ class SegmentCacheEvictionTest {
         List<ResonanceMatch> r2 = store.query(p2, 5);
         assertFalse(r1.isEmpty(), "p1 found after append");
         assertFalse(r2.isEmpty(), "p2 found after append");
+        assertEquals(id1, r1.get(0).id(), "top match for p1 should be itself");
+        assertEquals(id2, r2.get(0).id(), "top match for p2 should be itself");
     }
 
     @Test
@@ -441,9 +443,6 @@ class SegmentCacheEvictionTest {
         pinnedReader.release();
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    // Section 9: Determinism under eviction — extended with scores
-    // ═══════════════════════════════════════════════════════════════════
 
     @Test
     void testDeterminism_evictAndQueryWithScores() throws Exception {
@@ -469,9 +468,6 @@ class SegmentCacheEvictionTest {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    // Section 11: Load failure semantics
-    // ═══════════════════════════════════════════════════════════════════
 
     @Test
     void testLoadFailure_missingSegmentFile() throws Exception {
@@ -495,9 +491,6 @@ class SegmentCacheEvictionTest {
         assertNull(reader, "getOrLoad() must return null for missing segment file");
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    // Concurrent stress tests
-    // ═══════════════════════════════════════════════════════════════════
 
     @Test
     void testH_concurrentInsertQueryWithEviction() throws Exception {
@@ -608,9 +601,6 @@ class SegmentCacheEvictionTest {
         } finally { pool.shutdown(); }
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    // Helpers
-    // ═══════════════════════════════════════════════════════════════════
 
     private List<String> insertAndSeal(int count, long seedBase) {
         List<String> ids = new ArrayList<>(count);
@@ -658,6 +648,19 @@ class SegmentCacheEvictionTest {
             f.setAccessible(true);
             ConcurrentMap<String, ?> map = (ConcurrentMap<String, ?>) f.get(store);
             return new HashSet<>(map.keySet());
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private int countTotalSegmentWriters() {
+        try {
+            Field f = WavePatternStoreImpl.class.getDeclaredField("segmentGroups");
+            f.setAccessible(true);
+            ConcurrentMap<String, PhaseSegmentGroup> map =
+                    (ConcurrentMap<String, PhaseSegmentGroup>) f.get(store);
+            return map.values().stream().mapToInt(g -> g.getAll().size()).sum();
         } catch (Exception e) {
             throw new RuntimeException(e);
         }

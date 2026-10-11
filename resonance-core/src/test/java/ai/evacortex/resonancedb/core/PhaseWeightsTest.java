@@ -9,7 +9,6 @@
 package ai.evacortex.resonancedb.core;
 
 import ai.evacortex.resonancedb.core.engine.*;
-import ai.evacortex.resonancedb.core.engine.PhaseRoutingProfile;
 import ai.evacortex.resonancedb.core.index.ResonanceMoments;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
 import ai.evacortex.resonancedb.core.storage.responce.ComparisonResult;
@@ -602,12 +601,6 @@ class PhaseWeightsTest {
         double[] w = new double[dim];
         for (int i = 0; i < dim; i++) w[i] = rng.nextDouble();
         return w;
-    }
-
-    private static double mean(double[] arr) {
-        double sum = 0;
-        for (double v : arr) sum += v;
-        return sum / arr.length;
     }
 
     private static double circularMean(double[] arr) {

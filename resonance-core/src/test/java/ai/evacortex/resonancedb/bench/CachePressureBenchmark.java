@@ -162,10 +162,6 @@ class CachePressureBenchmark {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    // Section 5: Cache-pressure correctness — BLOCKING
-    // ═══════════════════════════════════════════════════════════════════
-
     @Test
     @Order(1)
     @DisplayName("Section 5: Self-match recall under cache pressure (N=10000, sample=100)")
@@ -178,17 +174,18 @@ class CachePressureBenchmark {
 
         int found = 0;
         int missed = 0;
-        int checked = sampledPatterns.length;
-        long[] latencies = new long[checked];
+        int checked = 0;
+        long[] latencies = new long[sampledPatterns.length];
 
-        for (int s = 0; s < checked; s++) {
+        for (int s = 0; s < sampledPatterns.length; s++) {
             int idx = sampledIndices[s];
             String expectedId = insertedIds.get(idx);
-            if (expectedId == null) { checked--; continue; }
+            if (expectedId == null) continue;
 
             long t0 = System.nanoTime();
             List<ResonanceMatch> results = store.query(sampledPatterns[s], 1);
-            latencies[s] = System.nanoTime() - t0;
+            latencies[checked] = System.nanoTime() - t0;
+            checked++;
 
             if (!results.isEmpty() && results.get(0).id().equals(expectedId)) {
                 found++;
@@ -233,10 +230,6 @@ class CachePressureBenchmark {
         // cross-match can exceed self-match with random amplitudes and phases.
         // The key invariant is: segmentsSkippedCacheMiss == 0.
     }
-
-    // ═══════════════════════════════════════════════════════════════════
-    // Section 6+8: Hot-cache vs cold-cache comparison
-    // ═══════════════════════════════════════════════════════════════════
 
     @Test
     @Order(2)
@@ -316,10 +309,6 @@ class CachePressureBenchmark {
         assertEquals(0, skipCount, "segmentsSkippedCacheMiss must be 0");
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    // Section 7: Thrashing analysis
-    // ═══════════════════════════════════════════════════════════════════
-
     @Test
     @Order(3)
     @DisplayName("Section 7: Cache thrashing analysis")
@@ -355,10 +344,6 @@ class CachePressureBenchmark {
         assertEquals(0, store.getSegmentsSkippedCacheMiss());
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    // Section 9+10: Determinism under eviction pressure + zero-skip
-    // ═══════════════════════════════════════════════════════════════════
-
     @Test
     @Order(4)
     @DisplayName("Section 9+10: Determinism + zero-skip under pressure")
@@ -367,7 +352,7 @@ class CachePressureBenchmark {
 
         WavePattern query = sampledPatterns[0];
 
-        // Phase 1: baseline determinism WITHOUT eviction
+        // Baseline determinism WITHOUT eviction
         List<ResonanceMatch> ref = store.query(query, TOP_K);
         List<String> refIds = ref.stream().map(ResonanceMatch::id).toList();
         assertFalse(refIds.isEmpty());
@@ -381,7 +366,7 @@ class CachePressureBenchmark {
         System.out.printf("  baseline (no eviction): %d rounds, %d mismatches%n",
                 DETERMINISM_ROUNDS, baselineMismatches);
 
-        // Phase 2: determinism WITH eviction between each query
+        // Determinism WITH eviction between each query
         int evictionMismatches = 0;
         for (int round = 0; round < DETERMINISM_ROUNDS; round++) {
             evictAllCachedReaders();
@@ -404,10 +389,6 @@ class CachePressureBenchmark {
                         "baseline=" + baselineMismatches + ", withEviction=" + evictionMismatches);
         assertEquals(0, store.getSegmentsSkippedCacheMiss(), "Zero segments skipped");
     }
-
-    // ═══════════════════════════════════════════════════════════════════
-    // Helpers
-    // ═══════════════════════════════════════════════════════════════════
 
     private SegmentCache getReaderCache() throws Exception {
         Field f = WavePatternStoreImpl.class.getDeclaredField("readerCache");

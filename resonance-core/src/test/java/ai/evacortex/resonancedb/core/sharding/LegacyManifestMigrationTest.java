@@ -12,6 +12,8 @@ import ai.evacortex.resonancedb.core.storage.StoreRuntimeServices;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
 import ai.evacortex.resonancedb.core.storage.WavePatternStoreImpl;
 import ai.evacortex.resonancedb.core.storage.responce.ResonanceMatch;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -24,7 +26,7 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Gap 1+4: Legacy manifest migration and group stats restoration on reopen.
+ * Legacy manifest migration and group stats restoration on reopen.
  *
  * <p>Verifies that:
  * <ul>
@@ -38,6 +40,22 @@ import static org.junit.jupiter.api.Assertions.*;
 class LegacyManifestMigrationTest {
 
     private static final double PI = Math.PI;
+
+    private String savedIndexEnabled;
+
+    @BeforeEach
+    void saveProperties() {
+        savedIndexEnabled = System.getProperty("resonance.index.enabled");
+    }
+
+    @AfterEach
+    void restoreProperties() {
+        if (savedIndexEnabled == null) {
+            System.clearProperty("resonance.index.enabled");
+        } else {
+            System.setProperty("resonance.index.enabled", savedIndexEnabled);
+        }
+    }
 
     private static WavePattern boundaryPattern(Random rng, int dim) {
         double[] amp = new double[dim];
@@ -70,47 +88,45 @@ class LegacyManifestMigrationTest {
         int D = 64, N = 50;
         System.setProperty("resonance.index.enabled", "false");
         StoreRuntimeServices runtime = StoreRuntimeServices.fromSystemProperties();
-        Path storeDir = tmpDir.resolve("legacy");
-
-        // Phase 1: create store and insert ±π boundary patterns
-        List<String> insertedIds = new ArrayList<>();
-        WavePatternStoreImpl store1 = new WavePatternStoreImpl(storeDir, D, runtime);
         try {
-            Random rng = new Random(42);
-            for (int i = 0; i < N; i++) {
-                WavePattern p = boundaryPattern(rng, D);
-                String id = store1.insert(p, Map.of());
-                insertedIds.add(id);
+            Path storeDir = tmpDir.resolve("legacy");
+
+            List<String> insertedIds = new ArrayList<>();
+            WavePatternStoreImpl store1 = new WavePatternStoreImpl(storeDir, D, runtime);
+            try {
+                Random rng = new Random(42);
+                for (int i = 0; i < N; i++) {
+                    WavePattern p = boundaryPattern(rng, D);
+                    String id = store1.insert(p, Map.of());
+                    insertedIds.add(id);
+                }
+            } finally {
+                store1.close();
+            }
+
+            Path versionFile = storeDir.resolve("index").resolve(".circular-phase-v1");
+            assertTrue(Files.exists(versionFile), "Version marker should exist after first open");
+            Files.delete(versionFile);
+            assertFalse(Files.exists(versionFile), "Version marker should be deleted");
+
+            WavePatternStoreImpl store2 = new WavePatternStoreImpl(storeDir, D, runtime);
+            try {
+                assertTrue(Files.exists(versionFile),
+                        "Version marker should be recreated after migration");
+
+                Random queryRng = new Random(99);
+                WavePattern query = boundaryPattern(queryRng, D);
+                List<ResonanceMatch> results = store2.query(query, 10);
+
+                assertFalse(results.isEmpty(),
+                        "Query should return results after migration");
+
+                System.out.printf("Legacy migration test: %d patterns inserted, %d results returned%n",
+                        N, results.size());
+            } finally {
+                store2.close();
             }
         } finally {
-            store1.close();
-        }
-
-        // Phase 2: delete the version marker to simulate legacy store
-        Path versionFile = storeDir.resolve("index").resolve(".circular-phase-v1");
-        assertTrue(Files.exists(versionFile), "Version marker should exist after first open");
-        Files.delete(versionFile);
-        assertFalse(Files.exists(versionFile), "Version marker should be deleted");
-
-        // Phase 3: reopen — migration should run
-        WavePatternStoreImpl store2 = new WavePatternStoreImpl(storeDir, D, runtime);
-        try {
-            // Version marker should be recreated
-            assertTrue(Files.exists(versionFile),
-                    "Version marker should be recreated after migration");
-
-            // Query with a ±π pattern should find results
-            Random queryRng = new Random(99);
-            WavePattern query = boundaryPattern(queryRng, D);
-            List<ResonanceMatch> results = store2.query(query, 10);
-
-            assertFalse(results.isEmpty(),
-                    "Query should return results after migration");
-
-            System.out.printf("Legacy migration test: %d patterns inserted, %d results returned%n",
-                    N, results.size());
-        } finally {
-            store2.close();
             runtime.close();
         }
     }
@@ -121,55 +137,54 @@ class LegacyManifestMigrationTest {
         int D = 64, N = 100;
         System.setProperty("resonance.index.enabled", "false");
         StoreRuntimeServices runtime = StoreRuntimeServices.fromSystemProperties();
-        Path storeDir = tmpDir.resolve("reopen-stats");
-
-        // Phase 1: create, insert, close
-        WavePatternStoreImpl store1 = new WavePatternStoreImpl(storeDir, D, runtime);
-        List<ResonanceMatch> resultsBeforeClose;
-        WavePattern query;
         try {
-            Random rng = new Random(42);
-            for (int i = 0; i < N; i++) {
-                double center = (i % 4 == 0) ? 1.0 : (i % 4 == 1) ? -1.0 :
-                        (i % 4 == 2) ? 0.5 : -0.5;
-                WavePattern p = clusteredPattern(rng, D, center);
-                store1.insert(p, Map.of());
+            Path storeDir = tmpDir.resolve("reopen-stats");
+
+            WavePatternStoreImpl store1 = new WavePatternStoreImpl(storeDir, D, runtime);
+            List<ResonanceMatch> resultsBeforeClose;
+            WavePattern query;
+            try {
+                Random rng = new Random(42);
+                for (int i = 0; i < N; i++) {
+                    double center = (i % 4 == 0) ? 1.0 : (i % 4 == 1) ? -1.0 :
+                            (i % 4 == 2) ? 0.5 : -0.5;
+                    WavePattern p = clusteredPattern(rng, D, center);
+                    store1.insert(p, Map.of());
+                }
+                query = clusteredPattern(new Random(77), D, 1.0);
+                resultsBeforeClose = store1.query(query, 10);
+            } finally {
+                store1.close();
             }
-            query = clusteredPattern(new Random(77), D, 1.0);
-            resultsBeforeClose = store1.query(query, 10);
-        } finally {
-            store1.close();
-        }
 
-        // Phase 2: reopen and verify same query returns same results
-        WavePatternStoreImpl store2 = new WavePatternStoreImpl(storeDir, D, runtime);
-        try {
-            List<ResonanceMatch> resultsAfterReopen = store2.query(query, 10);
+            WavePatternStoreImpl store2 = new WavePatternStoreImpl(storeDir, D, runtime);
+            try {
+                List<ResonanceMatch> resultsAfterReopen = store2.query(query, 10);
 
-            assertFalse(resultsAfterReopen.isEmpty(),
-                    "Query should return results after reopen");
+                assertFalse(resultsAfterReopen.isEmpty(),
+                        "Query should return results after reopen");
 
-            // Top result should be the same
-            assertEquals(resultsBeforeClose.get(0).id(), resultsAfterReopen.get(0).id(),
-                    "Top-1 result should be identical before close and after reopen");
+                assertEquals(resultsBeforeClose.get(0).id(), resultsAfterReopen.get(0).id(),
+                        "Top-1 result should be identical before close and after reopen");
 
-            // Check that results overlap significantly
-            Set<String> beforeIds = new HashSet<>();
-            resultsBeforeClose.forEach(r -> beforeIds.add(r.id()));
-            int overlap = 0;
-            for (ResonanceMatch r : resultsAfterReopen) {
-                if (beforeIds.contains(r.id())) overlap++;
+                Set<String> beforeIds = new HashSet<>();
+                resultsBeforeClose.forEach(r -> beforeIds.add(r.id()));
+                int overlap = 0;
+                for (ResonanceMatch r : resultsAfterReopen) {
+                    if (beforeIds.contains(r.id())) overlap++;
+                }
+                double overlapRatio = (double) overlap / Math.min(resultsBeforeClose.size(),
+                        resultsAfterReopen.size());
+
+                System.out.printf("Reopen test: before=%d results, after=%d results, overlap=%.1f%%%n",
+                        resultsBeforeClose.size(), resultsAfterReopen.size(), overlapRatio * 100);
+
+                assertTrue(overlapRatio >= 0.8,
+                        "At least 80% overlap expected, got " + (overlapRatio * 100) + "%");
+            } finally {
+                store2.close();
             }
-            double overlapRatio = (double) overlap / Math.min(resultsBeforeClose.size(),
-                    resultsAfterReopen.size());
-
-            System.out.printf("Reopen test: before=%d results, after=%d results, overlap=%.1f%%%n",
-                    resultsBeforeClose.size(), resultsAfterReopen.size(), overlapRatio * 100);
-
-            assertTrue(overlapRatio >= 0.8,
-                    "At least 80% overlap expected, got " + (overlapRatio * 100) + "%");
         } finally {
-            store2.close();
             runtime.close();
         }
     }
@@ -180,38 +195,36 @@ class LegacyManifestMigrationTest {
         int D = 64;
         System.setProperty("resonance.index.enabled", "false");
         StoreRuntimeServices runtime = StoreRuntimeServices.fromSystemProperties();
-        Path storeDir = tmpDir.resolve("marker-test");
-
-        // Phase 1: create store
-        WavePatternStoreImpl store1 = new WavePatternStoreImpl(storeDir, D, runtime);
         try {
-            Random rng = new Random(42);
-            for (int i = 0; i < 20; i++) {
-                store1.insert(boundaryPattern(rng, D), Map.of());
+            Path storeDir = tmpDir.resolve("marker-test");
+
+            WavePatternStoreImpl store1 = new WavePatternStoreImpl(storeDir, D, runtime);
+            try {
+                Random rng = new Random(42);
+                for (int i = 0; i < 20; i++) {
+                    store1.insert(boundaryPattern(rng, D), Map.of());
+                }
+            } finally {
+                store1.close();
+            }
+
+            Path versionFile = storeDir.resolve("index").resolve(".circular-phase-v1");
+            assertTrue(Files.exists(versionFile), "Version marker should exist");
+
+            WavePatternStoreImpl store2 = new WavePatternStoreImpl(storeDir, D, runtime);
+            try {
+                assertTrue(Files.exists(versionFile));
+
+                WavePattern query = boundaryPattern(new Random(99), D);
+                List<ResonanceMatch> results = store2.query(query, 5);
+                assertFalse(results.isEmpty(), "Query should return results on normal reopen");
+
+                System.out.printf("Version marker test: store reopened normally, %d results%n",
+                        results.size());
+            } finally {
+                store2.close();
             }
         } finally {
-            store1.close();
-        }
-
-        Path versionFile = storeDir.resolve("index").resolve(".circular-phase-v1");
-        assertTrue(Files.exists(versionFile), "Version marker should exist");
-
-        // Phase 2: reopen without deleting marker — migration should NOT run
-        // (no output about "Migrated N manifest phaseCenters")
-        WavePatternStoreImpl store2 = new WavePatternStoreImpl(storeDir, D, runtime);
-        try {
-            // Marker still exists
-            assertTrue(Files.exists(versionFile));
-
-            // Store should function normally
-            WavePattern query = boundaryPattern(new Random(99), D);
-            List<ResonanceMatch> results = store2.query(query, 5);
-            assertFalse(results.isEmpty(), "Query should return results on normal reopen");
-
-            System.out.printf("Version marker test: store reopened normally, %d results%n",
-                    results.size());
-        } finally {
-            store2.close();
             runtime.close();
         }
     }
