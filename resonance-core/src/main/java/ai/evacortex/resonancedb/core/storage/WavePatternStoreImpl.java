@@ -343,6 +343,11 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 if (!walRecords.isEmpty()) {
                     System.err.println("WAL replay: applied " + walRecords.size() +
                             " records, deltaBuffer size=" + deltaBuffer.size());
+                    long maxReplayedLsn = walRecords.stream()
+                            .mapToLong(WalRecord::lsn).max().orElse(0);
+                    if (maxReplayedLsn > 0) {
+                        wal.checkpoint(maxReplayedLsn);
+                    }
                 }
             } catch (WalCorruptionException e) {
                 throw new RuntimeException("WAL replay failed — non-tail corruption: " +

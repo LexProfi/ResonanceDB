@@ -190,8 +190,6 @@ public final class PostingSidecar {
     }
 
     public static Loaded load(Path path) {
-        if (!Files.exists(path)) return null;
-
         try {
             FileChannel channel = FileChannel.open(path, StandardOpenOption.READ);
             long fileSize = channel.size();
@@ -226,6 +224,8 @@ public final class PostingSidecar {
             }
 
             return new Loaded(mmap, channel, partitionCount, unfoldedDim, directory);
+        } catch (java.nio.file.NoSuchFileException e) {
+            return null;
         } catch (IOException e) {
             System.err.println("Failed to load posting sidecar: " + path + ": " + e.getMessage());
             return null;

@@ -10,6 +10,7 @@ package ai.evacortex.resonancedb.core.index;
 
 import ai.evacortex.resonancedb.core.engine.PhaseRoutingProfile;
 import ai.evacortex.resonancedb.core.engine.PhaseWeights;
+import ai.evacortex.resonancedb.core.exceptions.PatternNotFoundException;
 import ai.evacortex.resonancedb.core.math.UnfoldedMath;
 import ai.evacortex.resonancedb.core.storage.ManifestIndex;
 import ai.evacortex.resonancedb.core.storage.WavePattern;
@@ -600,6 +601,8 @@ public final class IvfCandidateSource implements CandidateSource {
         catch (IllegalStateException e) { return null; }
         try {
             return reader.readById(id);
+        } catch (PatternNotFoundException e) {
+            return null;
         } finally {
             reader.release();
         }

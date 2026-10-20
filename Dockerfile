@@ -52,7 +52,7 @@ ENV JAVA_TOOL_OPTIONS="\
 -XX:G1HeapRegionSize=16m \
 -XX:MaxGCPauseMillis=200 \
 -XX:+AlwaysPreTouch \
--Xms1g -Xmx1g \
+-Xms2g -Xmx2g \
 -Dresonance.pattern.len=1536 \
 -Dresonance.kernel.native=false \
 -Dresonance.wal.enabled=true \
