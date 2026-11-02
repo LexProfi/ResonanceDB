@@ -187,3 +187,42 @@ tasks.register("generateThirdPartyNotices") {
 tasks.matching { it.name == "check" }.configureEach {
     dependsOn("generateThirdPartyNotices")
 }
+
+tasks.register("updateTestBadge") {
+    group = "documentation"
+    description = "Parse test reports and update the test count badge in README.md"
+
+    dependsOn subprojects.collect { it.tasks.matching { t -> t.name == "test" } }
+
+    doLast {
+        def total = 0
+        subprojects.each { prj ->
+            def reportFile = prj.file("build/reports/tests/test/index.html")
+            if (reportFile.exists()) {
+                def html = reportFile.text
+                def m = (html =~ /id="tests">\s*<div class="counter">(\d+)</)
+                if (m.find()) {
+                    total += m.group(1) as int
+                }
+            }
+        }
+
+        if (total == 0) {
+            logger.warn("No test counts found — skipping badge update")
+            return
+        }
+
+        def readme = rootProject.file("README.md")
+        def text = readme.text
+        def updated = text.replaceAll(
+                /tests-\d+_passing-brightgreen/,
+                "tests-${total}_passing-brightgreen"
+        )
+        if (updated != text) {
+            readme.text = updated
+            logger.lifecycle("Updated test badge: ${total} passing")
+        } else {
+            logger.lifecycle("Test badge already shows ${total}")
+        }
+    }
+}
