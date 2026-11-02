@@ -187,7 +187,6 @@ public final class JavaKernel implements ResonanceKernel {
 
         double eA = 0.0, eB = 0.0, inter = 0.0;
         double sinSum = 0.0, cosSum = 0.0;
-        double weightSum = 0.0;
 
         if (phaseFree) {
             for (int i = 0; i < len; i++) {
@@ -205,13 +204,13 @@ public final class JavaKernel implements ResonanceKernel {
                 eB += A2sq;
 
                 double dphi = bP[i] - aP[i];
-                inter += A1sq + A2sq + 2.0 * A1 * A2 * Math.cos(dphi);
+                double cosDphi = Math.cos(dphi);
+                double sinDphi = Math.sin(dphi);
+                inter += A1sq + A2sq + 2.0 * A1 * A2 * cosDphi;
 
-                while (dphi <= -Math.PI) dphi += 2 * Math.PI;
-                while (dphi > Math.PI) dphi -= 2 * Math.PI;
-
-                sinSum += Math.sin(dphi);
-                cosSum += Math.cos(dphi);
+                double ampProduct = A1 * A2;
+                sinSum += ampProduct * sinDphi;
+                cosSum += ampProduct * cosDphi;
             }
         } else {
             for (int i = 0; i < len; i++) {
@@ -221,15 +220,14 @@ public final class JavaKernel implements ResonanceKernel {
                 eB += A2sq;
 
                 double dphi = bP[i] - aP[i];
-                double G = (1.0 - w[i]) + w[i] * Math.cos(dphi);
+                double cosDphi = Math.cos(dphi);
+                double sinDphi = Math.sin(dphi);
+                double G = (1.0 - w[i]) + w[i] * cosDphi;
                 inter += A1sq + A2sq + 2.0 * A1 * A2 * G;
 
-                while (dphi <= -Math.PI) dphi += 2 * Math.PI;
-                while (dphi > Math.PI) dphi -= 2 * Math.PI;
-
-                sinSum += w[i] * Math.sin(dphi);
-                cosSum += w[i] * Math.cos(dphi);
-                weightSum += w[i];
+                double ampProduct = w[i] * A1 * A2;
+                sinSum += ampProduct * sinDphi;
+                cosSum += ampProduct * cosDphi;
             }
         }
 
@@ -246,10 +244,8 @@ public final class JavaKernel implements ResonanceKernel {
         double phaseDelta;
         if (phaseFree) {
             phaseDelta = 0.0;
-        } else if (!weighted) {
-            phaseDelta = Math.atan2(sinSum, cosSum);
         } else {
-            phaseDelta = (weightSum > 0.0) ? Math.atan2(sinSum, cosSum) : 0.0;
+            phaseDelta = (sinSum == 0.0 && cosSum == 0.0) ? 0.0 : Math.atan2(sinSum, cosSum);
         }
 
         return new ComparisonResult(energy, phaseDelta);

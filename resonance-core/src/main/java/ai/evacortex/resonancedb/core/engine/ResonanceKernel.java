@@ -139,34 +139,49 @@ public interface ResonanceKernel {
     float[] compareMany(WavePattern query, List<WavePattern> candidates, CompareOptions options);
 
     /**
-     * Computes the raw resonance energy and signed average phase difference (Δφ) between two wave patterns.
+     * Computes the resonance energy and the amplitude-weighted resultant phase angle (Δφ)
+     * between two wave patterns.
      *
-     * <p>Amplitude compensation is <strong>not</strong> applied. This method is intended for
-     * diagnostic and zone classification purposes where phase alignment matters independently
-     * of normalization.</p>
+     * <p>The energy value is identical to {@link #compare(WavePattern, WavePattern)} —
+     * the full normalized interference energy with amplitude compensation applied.</p>
+     *
+     * <p>The phase delta is the angle of the complex cross-correlation resultant,
+     * weighted by the amplitude product at each dimension:</p>
+     * <pre>
+     *     Δφ = atan2(Σ A₁ᵢ·A₂ᵢ·sin(φ₂ᵢ−φ₁ᵢ), Σ A₁ᵢ·A₂ᵢ·cos(φ₂ᵢ−φ₁ᵢ))
+     * </pre>
+     *
+     * <p>Dimensions with negligible amplitude contribute proportionally less to the
+     * resultant angle, preventing phase noise in low-energy coordinates from distorting
+     * the diagnostic. When the resultant is zero (complete cancellation or zero-energy
+     * inputs), phaseDelta is defined as 0.0.</p>
      *
      * <p>The result includes:</p>
      * <ul>
-     *     <li>{@link ComparisonResult#energy()} — normalized energy without amplitude factor</li>
-     *     <li>{@link ComparisonResult#phaseDelta()} — signed average phase shift in radians ∈ [–π, +π]</li>
+     *     <li>{@link ComparisonResult#energy()} — normalized energy with amplitude compensation</li>
+     *     <li>{@link ComparisonResult#phaseDelta()} — amplitude-weighted resultant phase angle ∈ [–π, +π]</li>
      * </ul>
-     *
-     * <p>Note: Use {@code Math.abs(result.phaseDelta())} when only magnitude is relevant (e.g., zone thresholds).</p>
      *
      * @param a the first wave pattern
      * @param b the second wave pattern
-     * @return {@code ComparisonResult} with raw energy and Δφ
+     * @return {@code ComparisonResult} with energy and Δφ
      * @throws IllegalArgumentException if lengths differ
      * @throws NullPointerException if inputs are {@code null}
      */
     ComparisonResult compareWithPhaseDelta(WavePattern a, WavePattern b);
 
     /**
-     * Computes resonance energy and weighted average phase difference using specified options.
+     * Computes resonance energy and amplitude-weighted resultant phase angle using specified options.
      *
-     * <p>When phase weights are active, only dimensions with non-zero weight contribute
-     * to the phase delta calculation. The energy score uses the weighted phase formula:
-     * {@code G_i = (1 - w_i) + w_i * cos(Δφ_i)}.</p>
+     * <p>When phase weights are active, both the energy and the phase delta incorporate
+     * the per-dimension weights. The energy uses the weighted phase formula:
+     * {@code G_i = (1 - w_i) + w_i * cos(Δφ_i)}. The phase delta is:</p>
+     * <pre>
+     *     Δφ = atan2(Σ wᵢ·A₁ᵢ·A₂ᵢ·sin(Δφᵢ), Σ wᵢ·A₁ᵢ·A₂ᵢ·cos(Δφᵢ))
+     * </pre>
+     *
+     * <p>When {@code ignorePhase=true} or all phase weights are zero, energy uses
+     * the phase-free formula and phaseDelta is defined as 0.0.</p>
      *
      * @param a the first wave pattern
      * @param b the second wave pattern

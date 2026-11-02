@@ -1351,8 +1351,9 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 .thenComparing(PostingSidecar.ScoredCandidate::id));
 
         int finalistCount;
-        boolean hasWeights = options != null && options.hasEffectivePhaseWeights();
-        if (hasWeights) {
+        boolean approxUnreliable = options != null
+                && (options.hasEffectivePhaseWeights() || options.isEffectivelyPhaseFree());
+        if (approxUnreliable) {
             finalistCount = ivfCandidates.size();
         } else {
             finalistCount = epsilonCutoffCount(ivfCandidates, topK,

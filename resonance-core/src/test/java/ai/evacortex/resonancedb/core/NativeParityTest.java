@@ -339,6 +339,50 @@ class NativeParityTest {
 
     @ParameterizedTest(name = "D={0}")
     @ValueSource(ints = {1, 7, 17, 127, 513})
+    @DisplayName("Parity: compareWithPhaseDelta — ignorePhase=true")
+    void phaseDeltaIgnorePhase(int dim) {
+        requireNative();
+        Random rng = new Random(SEED);
+        CompareOptions opts = new CompareOptions(false, true, false, false);
+
+        for (int trial = 0; trial < 100; trial++) {
+            WavePattern a = randomPattern(rng, dim);
+            WavePattern b = randomPattern(rng, dim);
+
+            ComparisonResult j = JAVA.compareWithPhaseDelta(a, b, opts);
+            ComparisonResult n = NATIVE.compareWithPhaseDelta(a, b, opts);
+
+            float eErr = Math.abs(j.energy() - n.energy());
+            assertTrue(eErr <= EPSILON,
+                    "ignorePhase phaseDelta energy trial=" + trial + " java=" + j.energy() + " native=" + n.energy());
+            assertEquals(0.0, j.phaseDelta(), 0.0, "Java ignorePhase phaseDelta must be 0.0");
+            assertEquals(0.0, n.phaseDelta(), 0.0, "Native ignorePhase phaseDelta must be 0.0");
+        }
+    }
+
+    @ParameterizedTest(name = "D={0}")
+    @ValueSource(ints = {1, 7, 17, 127, 513})
+    @DisplayName("Parity: compare — ignorePhase=true")
+    void compareIgnorePhase(int dim) {
+        requireNative();
+        Random rng = new Random(SEED);
+        CompareOptions opts = new CompareOptions(false, true, false, false);
+
+        for (int trial = 0; trial < 100; trial++) {
+            WavePattern a = randomPattern(rng, dim);
+            WavePattern b = randomPattern(rng, dim);
+
+            float jScore = JAVA.compare(a, b, opts);
+            float nScore = NATIVE.compare(a, b, opts);
+            float err = Math.abs(jScore - nScore);
+
+            assertTrue(err <= EPSILON,
+                    "ignorePhase compare trial=" + trial + " java=" + jScore + " native=" + nScore + " err=" + err);
+        }
+    }
+
+    @ParameterizedTest(name = "D={0}")
+    @ValueSource(ints = {1, 7, 17, 127, 513})
     @DisplayName("Parity: self-compare = 1.0 on both kernels, all paths")
     void selfCompare(int dim) {
         requireNative();

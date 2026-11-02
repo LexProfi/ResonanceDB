@@ -90,14 +90,19 @@ static float compare_scalar_cosdelta(const float *a1, const float *p1,
 static void compare_with_delta_scalar(const float *A1, const float *P1,
                                       const float *A2, const float *P2,
                                       int len, float out[2]) {
-    float EA = 0.0f, EB = 0.0f, cross = 0.0f, dsum = 0.0f;
+    float EA = 0.0f, EB = 0.0f, cross = 0.0f;
+    float sinSum = 0.0f, cosSum = 0.0f;
     for (int i = 0; i < len; ++i) {
         const float a = A1[i], b = A2[i];
         const float d = P2[i] - P1[i];
+        const float cd = cosf(d);
+        const float sd = sinf(d);
         EA += a * a;
         EB += b * b;
-        cross += a * b * cosf(d);
-        dsum += wrap_pi(d);
+        cross += a * b * cd;
+        const float ap = a * b;
+        sinSum += ap * sd;
+        cosSum += ap * cd;
     }
     const float denom = EA + EB;
     if (denom <= MIN_ENERGY) {
@@ -107,7 +112,7 @@ static void compare_with_delta_scalar(const float *A1, const float *P1,
     const float ampF = (EA > MIN_ENERGY && EB > MIN_ENERGY)
                      ? 2.0f * sqrtf(EA * EB) / denom : 0.0f;
     out[0] = 0.5f * (IF / denom) * ampF;
-    out[1] = dsum / (float)len;
+    out[1] = (sinSum == 0.0f && cosSum == 0.0f) ? 0.0f : atan2f(sinSum, cosSum);
 }
 
 EXPORT float compare_wave_patterns(const float *a1, const float *p1,
@@ -452,12 +457,8 @@ EXPORT void compare_with_phase_delta(const float* restrict A1, const float* rest
     __m256 EA0=_mm256_setzero_ps(), EA1=_mm256_setzero_ps();
     __m256 EB0=_mm256_setzero_ps(), EB1=_mm256_setzero_ps();
     __m256 CR0=_mm256_setzero_ps(), CR1=_mm256_setzero_ps();
-
-    const __m256 twoPi = _mm256_set1_ps(2.0f * (float)M_PI);
-    const __m256  pi   = _mm256_set1_ps((float)M_PI);
-    const __m256 npi   = _mm256_set1_ps(-(float)M_PI);
-
-    float dsum = 0.0f;
+    __m256 SIN0=_mm256_setzero_ps(), SIN1=_mm256_setzero_ps();
+    __m256 COS0=_mm256_setzero_ps(), COS1=_mm256_setzero_ps();
 
     for (; i <= len - 2*step; i += 2*step) {
         __m256 a1_0 = _mm256_loadu_ps(A1 + i);
@@ -468,16 +469,14 @@ EXPORT void compare_with_phase_delta(const float* restrict A1, const float* rest
         EA0 = _mm256_fmadd_ps(a1_0, a1_0, EA0);
         EB0 = _mm256_fmadd_ps(a2_0, a2_0, EB0);
 
-        __m256 d0  = _mm256_sub_ps(p2_0, p1_0);
-        __m256 dc0 = Sleef_cosf8_u10avx2(d0);
+        __m256 d0 = _mm256_sub_ps(p2_0, p1_0);
+        Sleef___m256_2 sc0 = Sleef_sincosf8_u10avx2(d0);
+        __m256 sin_d0 = sc0.x;
+        __m256 cos_d0 = sc0.y;
         __m256 a1a2_0 = _mm256_mul_ps(a1_0, a2_0);
-        CR0 = _mm256_fmadd_ps(a1a2_0, dc0, CR0);
-
-        __m256 gt0 = _mm256_cmp_ps(d0, pi , _CMP_GT_OS);
-        __m256 lt0 = _mm256_cmp_ps(d0, npi, _CMP_LT_OS);
-        d0 = _mm256_sub_ps(d0, _mm256_and_ps(gt0, twoPi));
-        d0 = _mm256_add_ps(d0, _mm256_and_ps(lt0, twoPi));
-        dsum += hsum256_ps(d0);
+        CR0  = _mm256_fmadd_ps(a1a2_0, cos_d0, CR0);
+        SIN0 = _mm256_fmadd_ps(a1a2_0, sin_d0, SIN0);
+        COS0 = _mm256_fmadd_ps(a1a2_0, cos_d0, COS0);
 
         __m256 a1_1 = _mm256_loadu_ps(A1 + i + step);
         __m256 a2_1 = _mm256_loadu_ps(A2 + i + step);
@@ -487,34 +486,40 @@ EXPORT void compare_with_phase_delta(const float* restrict A1, const float* rest
         EA1 = _mm256_fmadd_ps(a1_1, a1_1, EA1);
         EB1 = _mm256_fmadd_ps(a2_1, a2_1, EB1);
 
-        __m256 d1  = _mm256_sub_ps(p2_1, p1_1);
-        __m256 dc1 = Sleef_cosf8_u10avx2(d1);
+        __m256 d1 = _mm256_sub_ps(p2_1, p1_1);
+        Sleef___m256_2 sc1 = Sleef_sincosf8_u10avx2(d1);
+        __m256 sin_d1 = sc1.x;
+        __m256 cos_d1 = sc1.y;
         __m256 a1a2_1 = _mm256_mul_ps(a1_1, a2_1);
-        CR1 = _mm256_fmadd_ps(a1a2_1, dc1, CR1);
-
-        __m256 gt1 = _mm256_cmp_ps(d1, pi , _CMP_GT_OS);
-        __m256 lt1 = _mm256_cmp_ps(d1, npi, _CMP_LT_OS);
-        d1 = _mm256_sub_ps(d1, _mm256_and_ps(gt1, twoPi));
-        d1 = _mm256_add_ps(d1, _mm256_and_ps(lt1, twoPi));
-        dsum += hsum256_ps(d1);
+        CR1  = _mm256_fmadd_ps(a1a2_1, cos_d1, CR1);
+        SIN1 = _mm256_fmadd_ps(a1a2_1, sin_d1, SIN1);
+        COS1 = _mm256_fmadd_ps(a1a2_1, cos_d1, COS1);
     }
 
     __m256 EA_v = _mm256_add_ps(EA0, EA1);
     __m256 EB_v = _mm256_add_ps(EB0, EB1);
     __m256 CR_v = _mm256_add_ps(CR0, CR1);
+    __m256 SIN_v = _mm256_add_ps(SIN0, SIN1);
+    __m256 COS_v = _mm256_add_ps(COS0, COS1);
 
     for (; i < len; ++i) {
         const float a = A1[i], b = A2[i];
         const float d = P2[i] - P1[i];
-        EA_v = _mm256_add_ps(EA_v, _mm256_set1_ps(a*a));
-        EB_v = _mm256_add_ps(EB_v, _mm256_set1_ps(b*b));
-        CR_v = _mm256_add_ps(CR_v, _mm256_set1_ps(a * b * cosf(d)));
-        dsum += wrap_pi(d);
+        const float cd = cosf(d);
+        const float sd = sinf(d);
+        const float ap = a * b;
+        EA_v  = _mm256_add_ps(EA_v, _mm256_set1_ps(a*a));
+        EB_v  = _mm256_add_ps(EB_v, _mm256_set1_ps(b*b));
+        CR_v  = _mm256_add_ps(CR_v, _mm256_set1_ps(ap * cd));
+        SIN_v = _mm256_add_ps(SIN_v, _mm256_set1_ps(ap * sd));
+        COS_v = _mm256_add_ps(COS_v, _mm256_set1_ps(ap * cd));
     }
 
     float EA = hsum256_ps(EA_v);
     float EB = hsum256_ps(EB_v);
     float cross = hsum256_ps(CR_v);
+    float sinSum = hsum256_ps(SIN_v);
+    float cosSum = hsum256_ps(COS_v);
 
     const float denom = EA + EB;
     if (denom > MIN_ENERGY) {
@@ -522,7 +527,7 @@ EXPORT void compare_with_phase_delta(const float* restrict A1, const float* rest
         const float ampF = (EA > MIN_ENERGY && EB > MIN_ENERGY)
                          ? 2.0f * sqrtf(EA * EB) / denom : 0.0f;
         out[0] = 0.5f * (IF / denom) * ampF;
-        out[1] = dsum / (float)len;
+        out[1] = (sinSum == 0.0f && cosSum == 0.0f) ? 0.0f : atan2f(sinSum, cosSum);
     } else {
         out[0] = 0.0f;
         out[1] = 0.0f;
@@ -941,7 +946,6 @@ EXPORT void compare_with_phase_delta_weighted(
     __m256 CR_v = _mm256_setzero_ps();
     __m256 SIN_v = _mm256_setzero_ps();
     __m256 COS_v = _mm256_setzero_ps();
-    __m256 WS_v  = _mm256_setzero_ps();
 
     for (; i <= len - step; i += step) {
         __m256 a1_v = _mm256_loadu_ps(A1 + i);
@@ -963,10 +967,10 @@ EXPORT void compare_with_phase_delta_weighted(
         __m256 vA1A2 = _mm256_mul_ps(a1_v, a2_v);
         CR_v = _mm256_fmadd_ps(vA1A2, G, CR_v);
 
-        /* weighted circular mean accumulators: w*sin, w*cos, sum(w) */
-        SIN_v = _mm256_fmadd_ps(vw, sin_d, SIN_v);
-        COS_v = _mm256_fmadd_ps(vw, cos_d, COS_v);
-        WS_v  = _mm256_add_ps(WS_v, vw);
+        /* amplitude-and-weight-weighted circular mean: w*a1*a2*sin, w*a1*a2*cos */
+        __m256 wA1A2 = _mm256_mul_ps(vw, vA1A2);
+        SIN_v = _mm256_fmadd_ps(wA1A2, sin_d, SIN_v);
+        COS_v = _mm256_fmadd_ps(wA1A2, cos_d, COS_v);
     }
 
     float EA       = hsum256_ps(EA_v);
@@ -974,7 +978,6 @@ EXPORT void compare_with_phase_delta_weighted(
     float cross    = hsum256_ps(CR_v);
     float sinSum   = hsum256_ps(SIN_v);
     float cosSum   = hsum256_ps(COS_v);
-    float weightSum = hsum256_ps(WS_v);
 
     /* scalar tail */
     for (; i < len; ++i) {
@@ -986,9 +989,9 @@ EXPORT void compare_with_phase_delta_weighted(
         const float sd = sinf(dphi);
         const float G = (1.0f - weights[i]) + weights[i] * cd;
         cross   += a * b * G;
-        sinSum  += weights[i] * sd;
-        cosSum  += weights[i] * cd;
-        weightSum += weights[i];
+        const float wap = weights[i] * a * b;
+        sinSum  += wap * sd;
+        cosSum  += wap * cd;
     }
 
     const float denom = EA + EB;
@@ -997,13 +1000,13 @@ EXPORT void compare_with_phase_delta_weighted(
         const float ampF = (EA > MIN_ENERGY && EB > MIN_ENERGY)
                          ? 2.0f * sqrtf(EA * EB) / denom : 0.0f;
         out[0] = 0.5f * (IF / denom) * ampF;
-        out[1] = (weightSum > 0.0f) ? atan2f(sinSum, cosSum) : 0.0f;
+        out[1] = (sinSum == 0.0f && cosSum == 0.0f) ? 0.0f : atan2f(sinSum, cosSum);
     }
 
     _mm256_zeroupper();
 #else
     float EA = 0.0f, EB = 0.0f, cross = 0.0f;
-    float sinSum = 0.0f, cosSum = 0.0f, weightSum = 0.0f;
+    float sinSum = 0.0f, cosSum = 0.0f;
     for (int i = 0; i < len; ++i) {
         const float a = A1[i], b = A2[i];
         EA += a * a;
@@ -1013,9 +1016,9 @@ EXPORT void compare_with_phase_delta_weighted(
         const float sd = sinf(dphi);
         const float G = (1.0f - weights[i]) + weights[i] * cd;
         cross += a * b * G;
-        sinSum += weights[i] * sd;
-        cosSum += weights[i] * cd;
-        weightSum += weights[i];
+        const float wap = weights[i] * a * b;
+        sinSum += wap * sd;
+        cosSum += wap * cd;
     }
     const float denom = EA + EB;
     if (denom > MIN_ENERGY) {
@@ -1023,7 +1026,7 @@ EXPORT void compare_with_phase_delta_weighted(
         const float ampF = (EA > MIN_ENERGY && EB > MIN_ENERGY)
                          ? 2.0f * sqrtf(EA * EB) / denom : 0.0f;
         out[0] = 0.5f * (IF / denom) * ampF;
-        out[1] = (weightSum > 0.0f) ? atan2f(sinSum, cosSum) : 0.0f;
+        out[1] = (sinSum == 0.0f && cosSum == 0.0f) ? 0.0f : atan2f(sinSum, cosSum);
     }
 #endif
 }

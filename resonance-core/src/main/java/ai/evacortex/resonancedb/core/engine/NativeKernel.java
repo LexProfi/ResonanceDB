@@ -156,6 +156,10 @@ public final class NativeKernel implements ResonanceKernel {
             throw new IllegalArgumentException("Pattern length mismatch");
         }
 
+        if (options.isEffectivelyPhaseFree()) {
+            return JAVA_FALLBACK.compareWithPhaseDelta(a, b, options);
+        }
+
         final int len = a.amplitude().length;
         try {
             float[] amp1   = ensureAndFill(TL_Q_AMP,   a.amplitude(), len);
