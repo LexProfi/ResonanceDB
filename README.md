@@ -1,6 +1,6 @@
 # ResonanceDB
 
-[![WBSM](https://img.shields.io/badge/WBSM-Waveform_Based_Semantic_Memory-0d1117?style=flat&labelColor=0d1117)](https://github.com/LexProfi/ResonanceDB)
+[![WBSM](https://img.shields.io/badge/WBSM-0d1117?style=flat)](https://arxiv.org/html/2509.09691v1)
 [![Release](https://img.shields.io/github/v/release/LexProfi/ResonanceDB?label=release&color=blueviolet)](https://github.com/LexProfi/ResonanceDB/releases/latest)
 [![Tests](https://img.shields.io/badge/tests-498_passing-brightgreen)]()
 [![Java](https://img.shields.io/badge/Java-22-orange?logo=openjdk&logoColor=white)]()
