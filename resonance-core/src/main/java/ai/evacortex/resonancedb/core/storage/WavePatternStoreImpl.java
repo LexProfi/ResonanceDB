@@ -866,38 +866,21 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                         (ivfProfile.isDefault())
                         ? ivfSource.scoredCandidates(query, topK, effectiveProbe)
                         : ivfSource.scoredCandidatesWeighted(query, topK, effectiveProbe, ivfProfile);
-                if (!scored.exhaustive() && !scored.candidates().isEmpty()) {
+                if (scored.exhaustive()) {
+                    collected = exactRescoreAllCandidates(scored, query, queryId, topK, options);
+                } else if (!scored.candidates().isEmpty()) {
                     collected = exactScoreFinalists(scored, query, queryId, topK, options);
                 } else {
                     collected = collectMatchesFromCandidates(
                             ivfSource.candidates(query, topK), query, queryId, topK, options);
                 }
             } else {
-                PhaseRoutingProfile profile = PhaseRoutingProfile.from(options);
-                List<SegmentWriter> writers = selectWritersForQuery(query, profile);
+                List<SegmentWriter> writers = getAllWritersStream().toList();
                 int threshold = Math.max(4, writers.size() / Math.max(1, tune.poolParallelism));
 
                 collected = queryPool.invoke(
                         new MatchQueryTask(writers, query, queryId, topK, 0, writers.size(), threshold, options)
                 );
-
-                if (collected.size() < topK) {
-                    Set<String> seen = new HashSet<>();
-                    for (SegmentWriter writer : writers) {
-                        seen.add(writer.getSegmentName());
-                    }
-
-                    List<SegmentWriter> rest = getAllWritersStream()
-                            .filter(w -> !seen.contains(w.getSegmentName()))
-                            .toList();
-
-                    if (!rest.isEmpty()) {
-                        List<HeapItem> extra = queryPool.invoke(
-                                new MatchQueryTask(rest, query, queryId, topK, 0, rest.size(), threshold, options)
-                        );
-                        collected.addAll(extra);
-                    }
-                }
             }
 
             if (deltaBuffer != null && !deltaBuffer.isEmpty()) {
@@ -1402,6 +1385,27 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 : resonanceKernel.compare(query, cand);
         HeapItem item = new HeapItem(new ResonanceMatch(id, energy, cand));
         heapAddOrEvict(heap, item, cmp, topK);
+    }
+
+    /**
+     * Exact-rescores every candidate using the authoritative kernel.
+     * Used when all IVF centroids have been probed (exhaustive=true) to avoid
+     * lossy Float32-based shortlist pruning.
+     */
+    private List<HeapItem> exactRescoreAllCandidates(CandidateSource.ScoredCandidates scored,
+                                                      WavePattern query, String queryId, int topK,
+                                                      CompareOptions options) {
+        Comparator<HeapItem> cmp = HEAP_ORDER;
+        PriorityQueue<HeapItem> heap = new PriorityQueue<>(Math.max(topK, 8), cmp);
+        int len = query.amplitude().length;
+        FlatBuffers fb = TL_FLAT.get();
+        fb.ensure(len, 1);
+
+        for (PostingSidecar.ScoredCandidate sc : scored.candidates()) {
+            exactScoreCandidate(sc.id(), query, queryId, len, fb, heap, cmp, topK, options);
+        }
+
+        return new ArrayList<>(heap);
     }
 
     private List<HeapItem> collectMatchesFromCandidates(

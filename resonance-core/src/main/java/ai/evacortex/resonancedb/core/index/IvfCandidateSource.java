@@ -233,7 +233,8 @@ public final class IvfCandidateSource implements CandidateSource {
             }
         }
 
-        return new ScoredCandidates(results, false);
+        boolean exhaustive = topPartitions.length >= index.size();
+        return new ScoredCandidates(results, exhaustive);
     }
 
     /** Maximum probe fraction for weighted queries (configurable). Default: 40% of centroids. */
@@ -423,7 +424,8 @@ public final class IvfCandidateSource implements CandidateSource {
         lastProbeStats = new WeightedProbeStats(K, visited.size(),
                 scoredIds.size(), roundCount, budgetExhausted);
 
-        return new ScoredCandidates(results, false);
+        boolean exhaustive = visited.size() >= K;
+        return new ScoredCandidates(results, exhaustive);
     }
 
     /**
