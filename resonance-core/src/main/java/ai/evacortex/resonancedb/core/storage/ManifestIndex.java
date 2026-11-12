@@ -106,6 +106,10 @@ public class ManifestIndex implements Closeable {
         return map.containsKey(id);
     }
 
+    public int size() {
+        return map.size();
+    }
+
     public Set<String> getAllSegmentNames() {
         lock.readLock().lock();
         try {

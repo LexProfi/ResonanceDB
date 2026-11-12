@@ -67,21 +67,17 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     private static final int BATCH_SIZE_BASE = Integer.getInteger("resonance.query.batchSize", 1024);
     private static final int OVERFETCH_FACTOR_BASE = Integer.getInteger("resonance.query.overfetch", 4);
     private static final double READ_EPSILON = 0.1;
-    private static final double LOW_COHERENCE_THRESHOLD =
-            Double.parseDouble(System.getProperty("resonance.phase.coherenceThreshold", "0.15"));
     private static final double PHASE_GROUP_EPSILON = 0.15;
     private static final String PHASE_VERSION_FILE = ".circular-phase-v1";
 
-    private static final int BUCKETS =
-            Integer.getInteger("resonance.segment.buckets", 64);
-
-    private static final double BUCKET_WIDTH_RAD = (BUCKETS > 0)
-            ? (2 * Math.PI) / BUCKETS
-            : Double.parseDouble(System.getProperty("resonance.segment.bucketRad", "0.2"));
-
-    private static final int PHASE_NEIGHBORS_MAX =
-            Integer.getInteger("resonance.phase.neighbors.max",
-                    Math.max(8, (int) Math.ceil(Math.PI / BUCKET_WIDTH_RAD)));
+    private final int buckets;
+    private final double bucketWidthRad;
+    private final int phaseNeighborsMax;
+    private final double phaseExpansionStep;
+    private final int phaseStableRounds;
+    private final double phaseMaxExpansion;
+    private final int routingMinPatterns;
+    private final double lowCoherenceThreshold;
 
     private final int patternLen;
     private final Path rootDir;
@@ -92,6 +88,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
     private final ReadWriteLock globalLock = new ReentrantReadWriteLock();
     private final AtomicReference<PhaseShardSelector> shardSelectorRef;
+    private final AtomicBoolean shardSelectorDirty = new AtomicBoolean(false);
+    private final AtomicLong shardSelectorVersion = new AtomicLong(0);
 
     private final SegmentCache readerCache;
     private final SegmentCompactor compactor;
@@ -272,6 +270,26 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             throw new IllegalArgumentException("patternLen must be > 0, got: " + patternLen);
         }
 
+        this.buckets = Integer.getInteger("resonance.segment.buckets", 64);
+        double bwr = (this.buckets > 0)
+                ? (2 * Math.PI) / this.buckets
+                : Double.parseDouble(System.getProperty("resonance.segment.bucketRad", "0.2"));
+        if (bwr <= 0.0) {
+            throw new IllegalArgumentException("bucketWidthRad must be > 0, got: " + bwr);
+        }
+        this.bucketWidthRad = bwr;
+        this.phaseNeighborsMax = Integer.getInteger("resonance.phase.neighbors.max",
+                Math.max(8, (int) Math.ceil(Math.PI / this.bucketWidthRad)));
+        this.phaseExpansionStep = Double.parseDouble(System.getProperty(
+                "resonance.query.phaseExpansionStep",
+                String.valueOf(2.0 * this.bucketWidthRad)));
+        this.phaseStableRounds = Integer.getInteger("resonance.query.phaseStableRounds", 2);
+        this.phaseMaxExpansion = Double.parseDouble(System.getProperty(
+                "resonance.query.phaseMaxExpansion", String.valueOf(Math.PI)));
+        this.routingMinPatterns = Integer.getInteger("resonance.query.routingMinPatterns", 1024);
+        this.lowCoherenceThreshold = Double.parseDouble(System.getProperty(
+                "resonance.phase.coherenceThreshold", "0.15"));
+
         this.patternLen = patternLen;
         this.rootDir = dbRoot.toAbsolutePath().normalize();
         this.runtime = runtime;
@@ -424,7 +442,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
     private String insertViaDelta(String idKey, byte[] idBytes,
                                    WavePattern psi, Map<String, String> metadata) {
-        double phaseCenter = meanPhase(psi.phase());
+        double phaseCenter = weightedMeanPhase(psi.amplitude(), psi.phase());
 
         if (deltaBuffer.activeSize() >= deltaMaxEntries) {
             awaitSealCompletion();
@@ -466,7 +484,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
     private String insertLegacy(String idKey, byte[] idBytes,
                                 WavePattern psi, Map<String, String> metadata) {
-        double phaseCenter = meanPhase(psi.phase());
+        double phaseCenter = weightedMeanPhase(psi.amplitude(), psi.phase());
         try (AutoLock ignored = AutoLock.write(globalLock)) {
             if (manifest.contains(idKey)) {
                 throw new DuplicatePatternException(idKey);
@@ -655,7 +673,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
     private String replaceViaDelta(String oldId, String newId, byte[] newIdBytes,
                                     WavePattern newPattern, Map<String, String> metadata) {
-        double phaseCenter = meanPhase(newPattern.phase());
+        double phaseCenter = weightedMeanPhase(newPattern.amplitude(), newPattern.phase());
 
         CompletableFuture<Long> durFuture;
         try (AutoLock ignored = AutoLock.write(globalLock)) {
@@ -731,7 +749,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
     private String replaceLegacy(String oldId, String newId, byte[] newIdBytes,
                                   WavePattern newPattern, Map<String, String> safeMetadata) {
-        double phaseCenter = meanPhase(newPattern.phase());
+        double phaseCenter = weightedMeanPhase(newPattern.amplitude(), newPattern.phase());
         try (AutoLock ignored = AutoLock.write(globalLock)) {
             ManifestIndex.PatternLocation oldLoc = manifest.get(oldId);
             if (oldLoc == null) {
@@ -875,12 +893,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                             ivfSource.candidates(query, topK), query, queryId, topK, options);
                 }
             } else {
-                List<SegmentWriter> writers = getAllWritersStream().toList();
-                int threshold = Math.max(4, writers.size() / Math.max(1, tune.poolParallelism));
-
-                collected = queryPool.invoke(
-                        new MatchQueryTask(writers, query, queryId, topK, 0, writers.size(), threshold, options)
-                );
+                collected = queryWithPhaseRouting(query, queryId, topK, options);
             }
 
             if (deltaBuffer != null && !deltaBuffer.isEmpty()) {
@@ -988,7 +1001,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     }
 
     public PhaseShardSelector getShardSelector() {
-        return shardSelectorRef.get();
+        return getShardSelectorLazy();
     }
 
     public void compactPhase(String baseName) {
@@ -1664,7 +1677,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 if (manifest.contains(p.contentHash())) return;
                 if (deltaBuffer.contains(p.contentHash())) return;
 
-                double phaseCenter = meanPhase(p.pattern().phase());
+                double phaseCenter = weightedMeanPhase(p.pattern().amplitude(), p.pattern().phase());
                 byte[] idBytes = HashingUtil.parseAndValidateMd5(p.contentHash());
                 deltaBuffer.add(p.contentHash(), p.pattern(), p.metadata(),
                         phaseCenter, idBytes, record.lsn());
@@ -1679,7 +1692,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
                 WalRecord.InsertPayload ip = rp.insert();
                 if (!manifest.contains(ip.contentHash()) && !deltaBuffer.contains(ip.contentHash())) {
-                    double phaseCenter = meanPhase(ip.pattern().phase());
+                    double phaseCenter = weightedMeanPhase(ip.pattern().amplitude(), ip.pattern().phase());
                     byte[] idBytes = HashingUtil.parseAndValidateMd5(ip.contentHash());
                     deltaBuffer.add(ip.contentHash(), ip.pattern(), ip.metadata(),
                             phaseCenter, idBytes, record.lsn());
@@ -1814,52 +1827,126 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         }
     }
 
-    private List<SegmentWriter> selectWritersForQuery(WavePattern query) {
-        return selectWritersForQuery(query, null);
-    }
+    private List<HeapItem> queryWithPhaseRouting(WavePattern query, String queryId,
+                                                    int topK, CompareOptions options) {
+        PhaseShardSelector selector = getShardSelectorLazy();
 
-    private List<SegmentWriter> selectWritersForQuery(WavePattern query, PhaseRoutingProfile profile) {
-        PhaseShardSelector selector = shardSelectorRef.get();
-
-        if (selector.shardCount() <= 1) {
-            return getAllWritersStream().toList();
+        if (selector.shardCount() <= 1 || manifest.size() < routingMinPatterns) {
+            List<SegmentWriter> writers = getAllWritersStream().toList();
+            int threshold = Math.max(4, writers.size() / Math.max(1, tune.poolParallelism));
+            return queryPool.invoke(
+                    new MatchQueryTask(writers, query, queryId, topK, 0, writers.size(), threshold, options));
         }
 
+        double[] amplitude = query.amplitude();
         double[] phase = query.phase();
-        double sinSum = 0.0, cosSum = 0.0;
-        for (double v : phase) {
-            sinSum += Math.sin(v);
-            cosSum += Math.cos(v);
+        double sinSum = 0.0, cosSum = 0.0, ampSum = 0.0;
+        for (int i = 0; i < phase.length; i++) {
+            double w = amplitude[i];
+            sinSum += w * Math.sin(phase[i]);
+            cosSum += w * Math.cos(phase[i]);
+            ampSum += w;
         }
-        double coherence = Math.sqrt(sinSum * sinSum + cosSum * cosSum) / phase.length;
+        double coherence = (ampSum > 0.0)
+                ? Math.sqrt(sinSum * sinSum + cosSum * cosSum) / ampSum
+                : 0.0;
 
-        List<String> shardNames;
-        if (coherence < LOW_COHERENCE_THRESHOLD) {
-            shardNames = selector.allShards();
-        } else if (profile != null && !profile.isDefault()) {
-            shardNames = selector.getRelevantShardsWeighted(query, READ_EPSILON, profile);
-        } else {
-            double meanPhase = (sinSum == 0.0 && cosSum == 0.0) ? 0.0 : Math.atan2(sinSum, cosSum);
-            double eps = READ_EPSILON;
-            shardNames = selector.getRelevantShardsByCenter(meanPhase, eps);
+        if (coherence < lowCoherenceThreshold) {
+            List<SegmentWriter> writers = getAllWritersStream().toList();
+            int threshold = Math.max(4, writers.size() / Math.max(1, tune.poolParallelism));
+            return queryPool.invoke(
+                    new MatchQueryTask(writers, query, queryId, topK, 0, writers.size(), threshold, options));
+        }
 
-            int tries = 0;
-            while (shardNames.isEmpty() && tries < PHASE_NEIGHBORS_MAX) {
-                eps += BUCKET_WIDTH_RAD;
-                shardNames = selector.getRelevantShardsByCenter(meanPhase, eps);
-                tries++;
+        double queryMeanPhase = (sinSum == 0.0 && cosSum == 0.0) ? 0.0 : Math.atan2(sinSum, cosSum);
+
+        double currentRadius = READ_EPSILON;
+        List<String> primaryShards = selector.getRelevantShardsByCenter(queryMeanPhase, currentRadius);
+        int tries = 0;
+        while (primaryShards.isEmpty() && tries < phaseNeighborsMax) {
+            currentRadius += bucketWidthRad;
+            primaryShards = selector.getRelevantShardsByCenter(queryMeanPhase, currentRadius);
+            tries++;
+        }
+        if (primaryShards.isEmpty()) {
+            List<SegmentWriter> writers = getAllWritersStream().toList();
+            int threshold = Math.max(4, writers.size() / Math.max(1, tune.poolParallelism));
+            return queryPool.invoke(
+                    new MatchQueryTask(writers, query, queryId, topK, 0, writers.size(), threshold, options));
+        }
+
+        Set<String> scannedShards = new LinkedHashSet<>(primaryShards);
+        List<SegmentWriter> primaryWriters = resolveWriters(primaryShards);
+        List<HeapItem> collected;
+        if (primaryWriters.isEmpty()) {
+            List<SegmentWriter> writers = getAllWritersStream().toList();
+            int threshold = Math.max(4, writers.size() / Math.max(1, tune.poolParallelism));
+            return queryPool.invoke(
+                    new MatchQueryTask(writers, query, queryId, topK, 0, writers.size(), threshold, options));
+        }
+
+        int threshold = Math.max(4, primaryWriters.size() / Math.max(1, tune.poolParallelism));
+        collected = queryPool.invoke(
+                new MatchQueryTask(primaryWriters, query, queryId, topK,
+                        0, primaryWriters.size(), threshold, options));
+
+        float prevKthScore = kthScore(collected, topK);
+        int stableRounds = 0;
+        int totalShards = selector.shardCount();
+
+        while (stableRounds < phaseStableRounds && currentRadius < phaseMaxExpansion) {
+            if (scannedShards.size() >= totalShards) break;
+
+            double prevRadius = currentRadius;
+            currentRadius += phaseExpansionStep;
+
+            List<String> ringShards = selector.getShardsInRing(queryMeanPhase, prevRadius, currentRadius);
+            ringShards.removeIf(scannedShards::contains);
+            if (ringShards.isEmpty()) {
+                if (collected.size() >= topK) stableRounds++;
+                continue;
+            }
+            scannedShards.addAll(ringShards);
+
+            List<SegmentWriter> ringWriters = resolveWriters(ringShards);
+            if (ringWriters.isEmpty()) {
+                if (collected.size() >= topK) stableRounds++;
+                continue;
+            }
+
+            int ringThreshold = Math.max(4, ringWriters.size() / Math.max(1, tune.poolParallelism));
+            List<HeapItem> extra = queryPool.invoke(
+                    new MatchQueryTask(ringWriters, query, queryId, topK,
+                            0, ringWriters.size(), ringThreshold, options));
+            collected.addAll(extra);
+
+            float newKthScore = kthScore(collected, topK);
+            if (Float.compare(newKthScore, prevKthScore) > 0) {
+                stableRounds = 0;
+                prevKthScore = newKthScore;
+            } else {
+                if (collected.size() >= topK) stableRounds++;
             }
         }
 
+        return collected;
+    }
+
+    private List<SegmentWriter> resolveWriters(List<String> shardNames) {
         Set<String> allowed = new LinkedHashSet<>(shardNames);
-        List<SegmentWriter> writers = getAllWritersStream()
+        return getAllWritersStream()
                 .filter(w -> allowed.contains(w.getSegmentName()))
                 .toList();
+    }
 
-        if (writers.isEmpty()) {
-            writers = getAllWritersStream().toList();
+    private static float kthScore(List<HeapItem> collected, int topK) {
+        if (collected.size() < topK) return 0.0f;
+        float[] scores = new float[collected.size()];
+        for (int i = 0; i < collected.size(); i++) {
+            scores[i] = collected.get(i).match().energy();
         }
-        return writers;
+        Arrays.sort(scores);
+        return scores[scores.length - topK];
     }
 
     private SegmentWriter getOrCreateWriter(String segmentName) {
@@ -1891,7 +1978,24 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     }
 
     private void rebuildShardSelector() {
-        shardSelectorRef.set(createShardSelector());
+        shardSelectorVersion.incrementAndGet();
+        shardSelectorDirty.set(true);
+    }
+
+    private PhaseShardSelector getShardSelectorLazy() {
+        if (shardSelectorDirty.compareAndSet(true, false)) {
+            long versionBefore = shardSelectorVersion.get();
+            PhaseShardSelector fresh = createShardSelector();
+            // Only install if no concurrent mutation happened during build
+            if (shardSelectorVersion.get() == versionBefore) {
+                shardSelectorRef.set(fresh);
+            } else {
+                // A newer mutation occurred — mark dirty again so next reader rebuilds
+                shardSelectorDirty.set(true);
+            }
+            return fresh;
+        }
+        return shardSelectorRef.get();
     }
 
     private String base(String segmentName) {
@@ -1945,7 +2049,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                     if (loc == null) continue;
                     if (!loc.segmentName().equals(segName)) continue;
 
-                    double newCenter = meanPhase(entry.pattern().phase());
+                    double newCenter = weightedMeanPhase(entry.pattern().amplitude(), entry.pattern().phase());
                     if (Math.abs(newCenter - loc.phaseCenter()) > 1e-12) {
                         manifest.add(entry.id(), loc.segmentName(), loc.offset(), newCenter);
                         rebuilt++;
@@ -1994,11 +2098,12 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 .distinct();
     }
 
-    private static double meanPhase(double[] phase) {
+    private static double weightedMeanPhase(double[] amplitude, double[] phase) {
         double sinSum = 0.0, cosSum = 0.0;
-        for (double v : phase) {
-            sinSum += Math.sin(v);
-            cosSum += Math.cos(v);
+        for (int i = 0; i < phase.length; i++) {
+            double w = amplitude[i];
+            sinSum += w * Math.sin(phase[i]);
+            cosSum += w * Math.cos(phase[i]);
         }
         if (sinSum == 0.0 && cosSum == 0.0) {
             return 0.0;
@@ -2007,7 +2112,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     }
 
     private int computePhaseBucket(double phaseCenter) {
-        return normBucketIndex((int) Math.floor((phaseCenter + Math.PI) / BUCKET_WIDTH_RAD));
+        return normBucketIndex((int) Math.floor((phaseCenter + Math.PI) / bucketWidthRad));
     }
 
     private int normBucketIndex(int idx) {
@@ -2022,7 +2127,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     }
 
     private int maxBucketIndex() {
-        return (int) Math.ceil((2 * Math.PI) / BUCKET_WIDTH_RAD) - 1;
+        return (int) Math.ceil((2 * Math.PI) / bucketWidthRad) - 1;
     }
 
     private static boolean checkPhaseOverflow(PhaseSegmentGroup group, double phaseCenter) {

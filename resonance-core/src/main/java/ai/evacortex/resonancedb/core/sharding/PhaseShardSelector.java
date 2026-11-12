@@ -57,14 +57,14 @@ public class PhaseShardSelector {
         if (useExplicitRanges) {
             return routeToShard(pattern);
         } else {
-            double meanPhase = normalizePhase(circularMeanPhase(pattern.phase()));
+            double meanPhase = normalizePhase(weightedMeanPhase(pattern));
             int shardIndex = Math.floorMod(Double.hashCode(meanPhase), totalShards);
             return "phase-" + shardIndex + ".segment";
         }
     }
 
     private String routeToShard(WavePattern pattern) {
-        double avgPhase = normalizePhase(circularMeanPhase(pattern.phase()));
+        double avgPhase = normalizePhase(weightedMeanPhase(pattern));
         Map.Entry<Double, String> entry = phaseShardMap.floorEntry(avgPhase);
         if (entry != null) return entry.getValue();
         return phaseShardMap.firstEntry().getValue();
@@ -75,7 +75,7 @@ public class PhaseShardSelector {
     }
 
     public double[] getPhaseRange(WavePattern pattern) {
-        double avgPhase = normalizePhase(circularMeanPhase(pattern.phase()));
+        double avgPhase = normalizePhase(weightedMeanPhase(pattern));
         if (useExplicitRanges) {
             return new double[]{ avgPhase - epsilon, avgPhase + epsilon };
         } else {
@@ -172,7 +172,7 @@ public class PhaseShardSelector {
     }
 
     public List<String> getRelevantShards(WavePattern query, double customEps) {
-        return getRelevantShardsByCenter(circularMeanPhase(query.phase()), customEps);
+        return getRelevantShardsByCenter(weightedMeanPhase(query), customEps);
     }
 
     public List<String> getRelevantShardsByCenter(double phaseCenter, double customEps) {
@@ -186,6 +186,25 @@ public class PhaseShardSelector {
         double eps = Math.max(0.0, customEps);
 
         return findShardsInRange(avg, eps);
+    }
+
+    public List<String> getShardsInRing(double phaseCenter, double innerRadius, double outerRadius) {
+        if (!useExplicitRanges || phaseShardMap.isEmpty()) return List.of();
+
+        double center = normalizePhase(phaseCenter);
+        double outer = Math.max(0.0, outerRadius);
+        double inner = Math.max(0.0, innerRadius);
+        if (outer <= inner) return List.of();
+
+        List<String> outerShards = findShardsInRange(center, outer);
+        if (inner <= 0.0) return outerShards;
+
+        Set<String> innerSet = new HashSet<>(findShardsInRange(center, inner));
+        List<String> ring = new ArrayList<>();
+        for (String s : outerShards) {
+            if (!innerSet.contains(s)) ring.add(s);
+        }
+        return ring;
     }
 
     private List<String> findShardsInRange(double center, double eps) {
@@ -209,11 +228,14 @@ public class PhaseShardSelector {
         return new ArrayList<>(new LinkedHashSet<>(out));
     }
 
-    private static double circularMeanPhase(double[] phase) {
+    private static double weightedMeanPhase(WavePattern pattern) {
+        double[] amp = pattern.amplitude();
+        double[] phase = pattern.phase();
         double sinSum = 0.0, cosSum = 0.0;
-        for (double p : phase) {
-            sinSum += Math.sin(p);
-            cosSum += Math.cos(p);
+        for (int i = 0; i < phase.length; i++) {
+            double w = amp[i];
+            sinSum += w * Math.sin(phase[i]);
+            cosSum += w * Math.cos(phase[i]);
         }
         if (sinSum == 0.0 && cosSum == 0.0) return 0.0;
         return Math.atan2(sinSum, cosSum);

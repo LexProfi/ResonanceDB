@@ -84,7 +84,7 @@ public class DefaultSegmentCompactor implements SegmentCompactor {
                         if (!loc.segmentName().equals(writer.getSegmentName())) continue;
                         if (loc.offset() != entry.offset()) continue;
                         long newOff = tmpWriter.write(entry.id(), entry.pattern());
-                        double phaseCenter = circularMeanPhase(entry.pattern().phase());
+                        double phaseCenter = weightedMeanPhase(entry.pattern().amplitude(), entry.pattern().phase());
                         pendingEntries.add(new PendingEntry(entry.id(),
                                 writer.getSegmentName(), entry.offset(), newOff, phaseCenter));
                     }
@@ -189,11 +189,12 @@ public class DefaultSegmentCompactor implements SegmentCompactor {
         }
     }
 
-    private static double circularMeanPhase(double[] phase) {
+    private static double weightedMeanPhase(double[] amplitude, double[] phase) {
         double sinSum = 0.0, cosSum = 0.0;
-        for (double p : phase) {
-            sinSum += Math.sin(p);
-            cosSum += Math.cos(p);
+        for (int i = 0; i < phase.length; i++) {
+            double w = amplitude[i];
+            sinSum += w * Math.sin(phase[i]);
+            cosSum += w * Math.cos(phase[i]);
         }
         if (sinSum == 0.0 && cosSum == 0.0) return 0.0;
         return Math.atan2(sinSum, cosSum);

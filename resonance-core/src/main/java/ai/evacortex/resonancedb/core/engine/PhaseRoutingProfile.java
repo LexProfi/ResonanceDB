@@ -109,7 +109,7 @@ public final class PhaseRoutingProfile {
     /**
      * Computes the weighted phase center of a query pattern using this profile's weights.
      *
-     * <p>For default weights, returns the circular mean (atan2-based).
+     * <p>For default weights, returns the amplitude-weighted circular mean.
      * For phase-free, returns 0.0 (no meaningful center).</p>
      *
      * @param query the query pattern
@@ -122,10 +122,11 @@ public final class PhaseRoutingProfile {
         int N = phase.length;
 
         if (isDefault || phaseWeights == null) {
+            double[] amp = query.amplitude();
             double sinSum = 0.0, cosSum = 0.0;
-            for (double p : phase) {
-                sinSum += Math.sin(p);
-                cosSum += Math.cos(p);
+            for (int i = 0; i < N; i++) {
+                sinSum += amp[i] * Math.sin(phase[i]);
+                cosSum += amp[i] * Math.cos(phase[i]);
             }
             if (sinSum == 0.0 && cosSum == 0.0) return 0.0;
             return Math.atan2(sinSum, cosSum);
