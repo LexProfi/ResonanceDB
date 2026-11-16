@@ -103,7 +103,12 @@ public class ManifestIndex implements Closeable {
     }
 
     public boolean contains(String id) {
-        return map.containsKey(id);
+        lock.readLock().lock();
+        try {
+            return map.containsKey(id);
+        } finally {
+            lock.readLock().unlock();
+        }
     }
 
     public int size() {

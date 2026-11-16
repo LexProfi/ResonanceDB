@@ -14,12 +14,12 @@ import ai.evacortex.resonancedb.core.storage.io.SegmentWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Comparator;
 import java.util.List;
 import java.util.OptionalDouble;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
-import java.util.stream.Collectors;
 
 public class PhaseSegmentGroup {
 
@@ -30,6 +30,7 @@ public class PhaseSegmentGroup {
     private final String baseName;
     private final Path baseDir;
     private final CopyOnWriteArrayList<SegmentWriter> writers = new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<String> sealedSegmentNames = new CopyOnWriteArrayList<>();
     private final SegmentCompactor compactor;
     private final ReentrantLock lock = new ReentrantLock();
 
@@ -44,24 +45,46 @@ public class PhaseSegmentGroup {
     }
 
     private void loadExistingSegments() {
+        List<Path> segPaths = new java.util.ArrayList<>();
         try {
-            if (!Files.exists(baseDir)) return;
-            Files.list(baseDir)
-                    .filter(p -> p.getFileName().toString().startsWith(baseName + "-") &&
-                            p.getFileName().toString().endsWith(".segment"))
-                    .sorted()
-                    .forEach(p -> writers.add(new SegmentWriter(p)));
+            if (!Files.exists(baseDir)) {
+                writers.add(createSegment(seq.getAndIncrement()));
+                current = writers.getLast();
+                return;
+            }
+            try (var stream = Files.list(baseDir)) {
+                stream.filter(p -> p.getFileName().toString().startsWith(baseName + "-") &&
+                                p.getFileName().toString().endsWith(".segment"))
+                        .sorted(Comparator.comparingInt(PhaseSegmentGroup::extractSegmentIndex))
+                        .forEach(segPaths::add);
+            }
         } catch (IOException e) {
             throw new RuntimeException("Failed to load segment group: " + baseName, e);
         }
 
-        if (writers.isEmpty()) {
+        if (segPaths.isEmpty()) {
             writers.add(createSegment(seq.getAndIncrement()));
         } else {
-            int lastIdx = writers.size();
-            seq.set(lastIdx);
+            for (int i = 0; i < segPaths.size() - 1; i++) {
+                sealedSegmentNames.add(segPaths.get(i).getFileName().toString());
+            }
+            writers.add(new SegmentWriter(segPaths.getLast()));
+            int maxIndex = extractSegmentIndex(segPaths.getLast());
+            seq.set(maxIndex + 1);
         }
         current = writers.getLast();
+    }
+
+    private static int extractSegmentIndex(Path p) {
+        String name = p.getFileName().toString();
+        int dashIdx = name.lastIndexOf('-');
+        int dotIdx = name.lastIndexOf('.');
+        if (dashIdx < 0 || dotIdx < 0 || dotIdx <= dashIdx) return 0;
+        try {
+            return Integer.parseInt(name.substring(dashIdx + 1, dotIdx));
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     private SegmentWriter createSegment(int index) {
@@ -120,8 +143,24 @@ public class PhaseSegmentGroup {
         return List.copyOf(writers);
     }
 
+    public List<String> getAllSegmentNames() {
+        List<String> all = new java.util.ArrayList<>(sealedSegmentNames.size() + writers.size());
+        all.addAll(sealedSegmentNames);
+        for (SegmentWriter w : writers) {
+            all.add(w.getSegmentName());
+        }
+        return all;
+    }
+
     public List<Path> getPaths() {
-        return writers.stream().map(SegmentWriter::getPath).collect(Collectors.toList());
+        List<Path> paths = new java.util.ArrayList<>(sealedSegmentNames.size() + writers.size());
+        for (String name : sealedSegmentNames) {
+            paths.add(baseDir.resolve(name));
+        }
+        for (SegmentWriter w : writers) {
+            paths.add(w.getPath());
+        }
+        return paths;
     }
 
     public String getBaseName() {
@@ -132,6 +171,7 @@ public class PhaseSegmentGroup {
         lock.lock();
         try {
             writers.clear();
+            sealedSegmentNames.clear();
             writers.add(writer);
             current = writer;
             synchronized (this) {
@@ -153,11 +193,15 @@ public class PhaseSegmentGroup {
     }
 
     public double totalFillRatio() {
-        return writers.stream().mapToDouble(SegmentWriter::getFillRatio).average().orElse(1.0);
+        int sealedCount = sealedSegmentNames.size();
+        double writerSum = writers.stream().mapToDouble(SegmentWriter::getFillRatio).sum();
+        int total = sealedCount + writers.size();
+        return total > 0 ? (sealedCount + writerSum) / total : 1.0;
     }
 
     public boolean shouldCompact() {
-        return writers.size() > 3 && totalFillRatio() < 0.35;
+        int totalCount = sealedSegmentNames.size() + writers.size();
+        return totalCount > 3 && totalFillRatio() < 0.35;
     }
 
     public boolean maybeCompact() {
@@ -170,6 +214,7 @@ public class PhaseSegmentGroup {
 
     public void registerIfAbsent(SegmentWriter writer) {
         writers.addIfAbsent(writer);
+        sealedSegmentNames.remove(writer.getSegmentName());
     }
 
     public synchronized void updatePhaseStats(double newPhase) {
@@ -201,7 +246,23 @@ public class PhaseSegmentGroup {
     }
 
     public boolean containsSegment(String segmentName) {
+        if (sealedSegmentNames.contains(segmentName)) return true;
         return getAll().stream()
                 .anyMatch(w -> w.getSegmentName().equals(segmentName));
+    }
+
+    public void addSealedSegment(String segmentName) {
+        lock.lock();
+        try {
+            if (!containsSegment(segmentName)) {
+                sealedSegmentNames.add(segmentName);
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    public List<String> getSealedSegmentNames() {
+        return List.copyOf(sealedSegmentNames);
     }
 }

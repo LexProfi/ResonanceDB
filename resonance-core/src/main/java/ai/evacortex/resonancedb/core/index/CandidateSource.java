@@ -24,10 +24,34 @@ public interface CandidateSource {
                 .flatMap(Collection::stream)
                 .map(id -> new PostingSidecar.ScoredCandidate(id, 0.0f))
                 .toList();
-        return new ScoredCandidates(flat, true);
+        return new ScoredCandidates(flat, isExhaustive());
     }
 
     boolean isExhaustive();
 
-    record ScoredCandidates(List<PostingSidecar.ScoredCandidate> candidates, boolean exhaustive) {}
+    record ScoredCandidates(List<PostingSidecar.ScoredCandidate> candidates, boolean exhaustive,
+                                QueryWorkStats workStats) {
+        ScoredCandidates(List<PostingSidecar.ScoredCandidate> candidates, boolean exhaustive) {
+            this(candidates, exhaustive, null);
+        }
+    }
+
+    record QueryWorkStats(
+            int totalPartitions,
+            int requestedNProbe,
+            int effectiveNProbe,
+            int probedPartitions,
+            int totalPostingEntries,
+            int uniqueCandidateIds,
+            int duplicatePostingEntries,
+            int liveCandidateIds,
+            int vamanaNodesVisited,
+            int vamanaNewCandidates,
+            int deltaAdditions,
+            long sidecarScanNanos
+    ) {
+        public double uniqueCoverage(int corpusSize) {
+            return corpusSize > 0 ? (double) uniqueCandidateIds / corpusSize : 0.0;
+        }
+    }
 }

@@ -519,8 +519,13 @@ public final class FileSystemCorpusService implements CorpusService, Closeable {
         }
 
         private void beginAccess() {
-            ensureOpen();
             activeOps.incrementAndGet();
+            try {
+                ensureOpen();
+            } catch (Throwable t) {
+                activeOps.decrementAndGet();
+                throw t;
+            }
             lastAccessNanos.set(System.nanoTime());
         }
 
@@ -530,16 +535,35 @@ public final class FileSystemCorpusService implements CorpusService, Closeable {
         }
 
         private boolean tryEvict() {
-            if (activeOps.get() != 0) {
-                return false;
+            lock.lock();
+            try {
+                if (activeOps.get() != 0) {
+                    return false;
+                }
+                WavePatternStoreImpl local = store;
+                store = null;
+                if (local != null) {
+                    local.close();
+                }
+                return local != null;
+            } finally {
+                lock.unlock();
             }
-            closeOpenStore();
-            return true;
         }
 
         private void closeOpenStore() {
+            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
             lock.lock();
             try {
+                while (activeOps.get() != 0) {
+                    lock.unlock();
+                    if (System.nanoTime() >= deadline) {
+                        lock.lock();
+                        break;
+                    }
+                    Thread.onSpinWait();
+                    lock.lock();
+                }
                 WavePatternStoreImpl local = store;
                 store = null;
                 if (local != null) {
@@ -724,16 +748,21 @@ public final class FileSystemCorpusService implements CorpusService, Closeable {
         }
 
         private void mutateInfoCount(long delta) {
-            CorpusInfo current = peekInfo();
-            if (current == null) {
-                return;
-            }
+            lock.lock();
+            try {
+                CorpusInfo current = peekInfo();
+                if (current == null) {
+                    return;
+                }
 
-            Instant now = Instant.now();
-            long nextCount = Math.max(0L, current.patternCount() + delta);
-            CorpusInfo updated = current.withPatternCount(nextCount, now);
-            info = updated;
-            writeMeta(resolveCorpusRoot(corpusId).resolve(CORPUS_META_FILE), StoredCorpusMeta.from(updated));
+                Instant now = Instant.now();
+                long nextCount = Math.max(0L, current.patternCount() + delta);
+                CorpusInfo updated = current.withPatternCount(nextCount, now);
+                info = updated;
+                writeMeta(resolveCorpusRoot(corpusId).resolve(CORPUS_META_FILE), StoredCorpusMeta.from(updated));
+            } finally {
+                lock.unlock();
+            }
         }
     }
 

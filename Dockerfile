@@ -56,9 +56,7 @@ ENV JAVA_TOOL_OPTIONS="\
 -Dresonance.pattern.len=1536 \
 -Dresonance.kernel.native=false \
 -Dresonance.wal.enabled=true \
--Dresonance.wal.durability=group \
--Dresonance.index.enabled=true \
--Dresonance.index.l1.nprobe=8"
+-Dresonance.wal.durability=group"
 
 HEALTHCHECK --interval=15s --timeout=3s --start-period=30s --retries=4 \
   CMD /app/cli/bin/resonance-cli health --url "http://127.0.0.1:${PORT}/health" || exit 1

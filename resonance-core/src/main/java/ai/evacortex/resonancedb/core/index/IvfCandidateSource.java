@@ -45,6 +45,8 @@ public final class IvfCandidateSource implements CandidateSource {
 
     private volatile boolean shutdown;
 
+    private volatile CandidateSource.QueryWorkStats lastQueryStats;
+
     public IvfCandidateSource(CentroidIndex centroidIndex,
                               DeltaIndex delta,
                               ManifestIndex manifest,
@@ -65,6 +67,8 @@ public final class IvfCandidateSource implements CandidateSource {
     public boolean isShutdownRequested() {
         return shutdown;
     }
+
+    public CandidateSource.QueryWorkStats lastQueryStats() { return lastQueryStats; }
 
     public void setSidecarPath(Path path) {
         this.sidecarPathRef = path;
@@ -172,35 +176,72 @@ public final class IvfCandidateSource implements CandidateSource {
         PostingSidecar.Loaded sidecar = this.postingSidecar;
 
         if (index == null || sidecar == null) {
+            lastQueryStats = null;
             return CandidateSource.super.scoredCandidates(query, topK);
         }
 
-        int probeCount = Math.min(effectiveNProbe, index.size());
+        int K = index.size();
+        int probeCount = Math.min(effectiveNProbe, K);
 
         float[] queryU = UnfoldedMath.unfoldFloat32(query);
         float queryEnergy = UnfoldedMath.energyFloat32(query);
 
         double[] queryUDouble = UnfoldedMath.unfold(query);
         UnfoldedMath.l2Normalize(queryUDouble);
-        int[] topPartitions = SphericalKMeans.topNearestCentroids(
-                queryUDouble, index.centroids(), index.dim(), probeCount);
+
+        int[] routeA = SphericalKMeans.topNearestCentroids(
+                queryUDouble, index.centroids(), index.dim(), K);
+
+        ResonanceMoments mom = this.moments;
+        int[] routeB = (mom != null && mom.isCompatible(K, query.amplitude().length))
+                ? mom.topCentroidsByMoment(query, null, K)
+                : routeA;
+
+        Set<Integer> probed = new LinkedHashSet<>();
+        int aIdx = 0, bIdx = 0;
+        while (probed.size() < probeCount) {
+            boolean added = false;
+            while (aIdx < routeA.length && probed.contains(routeA[aIdx])) aIdx++;
+            if (aIdx < routeA.length && probed.size() < probeCount) {
+                probed.add(routeA[aIdx++]);
+                added = true;
+            }
+            while (bIdx < routeB.length && probed.contains(routeB[bIdx])) bIdx++;
+            if (bIdx < routeB.length && probed.size() < probeCount) {
+                probed.add(routeB[bIdx++]);
+                added = true;
+            }
+            if (!added) break;
+        }
 
         List<PostingSidecar.ScoredCandidate> results = new ArrayList<>();
 
-        for (int partIdx : topPartitions) {
+        long sidecarStartNanos = System.nanoTime();
+        for (int partIdx : probed) {
             sidecar.scanPartition(partIdx, queryU, queryEnergy, results);
         }
+        long sidecarNanos = System.nanoTime() - sidecarStartNanos;
+        int totalPostingEntries = results.size();
 
-        results.removeIf(sc -> delta.isDeleted(sc.id()));
-
-        Set<String> scoredIds = new HashSet<>(results.size());
+        Map<String, PostingSidecar.ScoredCandidate> bestByIdMap = new LinkedHashMap<>();
+        Set<String> allSidecarIds = new HashSet<>();
         for (PostingSidecar.ScoredCandidate sc : results) {
-            scoredIds.add(sc.id());
+            allSidecarIds.add(sc.id());
+            if (delta.isDeleted(sc.id())) continue;
+            PostingSidecar.ScoredCandidate existing = bestByIdMap.get(sc.id());
+            if (existing == null || sc.approxScore() > existing.approxScore()) {
+                bestByIdMap.put(sc.id(), sc);
+            }
         }
+        int uniqueCandidateIds = allSidecarIds.size();
+        int duplicatePostingEntries = totalPostingEntries - uniqueCandidateIds;
 
+        Set<String> scoredIds = new HashSet<>(bestByIdMap.keySet());
+
+        int vamanaNewCandidates = 0;
         Map<Integer, VamanaGraph> graphs = vamanaGraphs.get();
         if (!graphs.isEmpty() && readerProvider != null) {
-            for (int partIdx : topPartitions) {
+            for (int partIdx : probed) {
                 VamanaGraph graph = graphs.get(partIdx);
                 if (graph == null || graph.nodeCount() == 0) continue;
 
@@ -219,22 +260,35 @@ public final class IvfCandidateSource implements CandidateSource {
 
                 for (String id : graph.search(query, loader, efSearch, graph.nodeCount())) {
                     if (!scoredIds.contains(id) && !delta.isDeleted(id)) {
-                        results.add(PostingSidecar.ScoredCandidate.forExactRescore(id));
+                        bestByIdMap.put(id, PostingSidecar.ScoredCandidate.forExactRescore(id));
                         scoredIds.add(id);
+                        vamanaNewCandidates++;
                     }
                 }
             }
         }
 
+        int deltaAdditions = 0;
         Set<String> deltaIds = delta.allIds();
         for (String id : deltaIds) {
             if (!scoredIds.contains(id)) {
-                results.add(PostingSidecar.ScoredCandidate.forExactRescore(id));
+                bestByIdMap.put(id, PostingSidecar.ScoredCandidate.forExactRescore(id));
+                deltaAdditions++;
             }
         }
 
-        boolean exhaustive = topPartitions.length >= index.size();
-        return new ScoredCandidates(results, exhaustive);
+        int liveCandidateIds = bestByIdMap.size();
+        List<PostingSidecar.ScoredCandidate> deduped = new ArrayList<>(bestByIdMap.values());
+
+        boolean exhaustive = probed.size() >= K;
+
+        lastQueryStats = new QueryWorkStats(
+                K, effectiveNProbe, probeCount, probed.size(),
+                totalPostingEntries, uniqueCandidateIds, duplicatePostingEntries,
+                liveCandidateIds, 0, vamanaNewCandidates,
+                deltaAdditions, sidecarNanos);
+
+        return new ScoredCandidates(deduped, exhaustive, lastQueryStats);
     }
 
     /** Maximum probe fraction for weighted queries (configurable). Default: 40% of centroids. */
@@ -299,6 +353,7 @@ public final class IvfCandidateSource implements CandidateSource {
 
         if (index == null || sidecar == null) {
             lastProbeStats = null;
+            lastQueryStats = null;
             return CandidateSource.super.scoredCandidates(query, topK);
         }
 
@@ -340,6 +395,7 @@ public final class IvfCandidateSource implements CandidateSource {
         Set<String> scoredIds = new HashSet<>();
         int roundCount = 0;
         boolean budgetExhausted = false;
+        long wtSidecarNanos = 0;
 
         for (double roundFrac : PROBE_ROUNDS) {
             int roundTarget = Math.min(maxProbe, Math.max(baseNProbe, (int) Math.ceil(K * roundFrac)));
@@ -364,12 +420,14 @@ public final class IvfCandidateSource implements CandidateSource {
 
             int newCandidates = 0;
             int idx = 0;
+            long roundStart = System.nanoTime();
             for (int partIdx : visited) {
                 if (idx++ < prevVisited) continue;
                 int beforeSize = results.size();
                 sidecar.scanPartition(partIdx, queryU, queryEnergy, results);
                 newCandidates += (results.size() - beforeSize);
             }
+            wtSidecarNanos += System.nanoTime() - roundStart;
 
             if (roundCount > 1 && newCandidates < topK && newCandidates < results.size() / 4) {
                 break;
@@ -381,11 +439,25 @@ public final class IvfCandidateSource implements CandidateSource {
             }
         }
 
-        results.removeIf(sc -> delta.isDeleted(sc.id()));
+        int wtTotalPosting = results.size();
+
+        Map<String, PostingSidecar.ScoredCandidate> wtBestById = new LinkedHashMap<>();
+        Set<String> wtAllIds = new HashSet<>();
         for (PostingSidecar.ScoredCandidate sc : results) {
+            wtAllIds.add(sc.id());
+            if (delta.isDeleted(sc.id())) continue;
+            PostingSidecar.ScoredCandidate existing = wtBestById.get(sc.id());
+            if (existing == null || sc.approxScore() > existing.approxScore()) {
+                wtBestById.put(sc.id(), sc);
+            }
+        }
+        int wtUniqueIds = wtAllIds.size();
+        int wtDuplicates = wtTotalPosting - wtUniqueIds;
+        for (PostingSidecar.ScoredCandidate sc : wtBestById.values()) {
             scoredIds.add(sc.id());
         }
 
+        int wtVamanaCandidates = 0;
         Map<Integer, VamanaGraph> graphs = vamanaGraphs.get();
         if (!graphs.isEmpty() && readerProvider != null) {
             for (int partIdx : visited) {
@@ -407,25 +479,38 @@ public final class IvfCandidateSource implements CandidateSource {
 
                 for (String id : graph.search(query, loader, efSearch, graph.nodeCount())) {
                     if (!scoredIds.contains(id) && !delta.isDeleted(id)) {
-                        results.add(PostingSidecar.ScoredCandidate.forExactRescore(id));
+                        wtBestById.put(id, PostingSidecar.ScoredCandidate.forExactRescore(id));
                         scoredIds.add(id);
+                        wtVamanaCandidates++;
                     }
                 }
             }
         }
 
+        int wtDeltaAdditions = 0;
         Set<String> deltaIds = delta.allIds();
         for (String id : deltaIds) {
             if (!scoredIds.contains(id)) {
-                results.add(PostingSidecar.ScoredCandidate.forExactRescore(id));
+                wtBestById.put(id, PostingSidecar.ScoredCandidate.forExactRescore(id));
+                wtDeltaAdditions++;
             }
         }
+
+        int wtLiveIds = wtBestById.size();
+        results = new ArrayList<>(wtBestById.values());
 
         lastProbeStats = new WeightedProbeStats(K, visited.size(),
                 scoredIds.size(), roundCount, budgetExhausted);
 
-        boolean exhaustive = visited.size() >= K;
-        return new ScoredCandidates(results, exhaustive);
+        boolean wtExhaustive = visited.size() >= K;
+
+        lastQueryStats = new QueryWorkStats(
+                K, baseNProbe, Math.min(maxProbe, K), visited.size(),
+                wtTotalPosting, wtUniqueIds, wtDuplicates,
+                wtLiveIds, 0, wtVamanaCandidates,
+                wtDeltaAdditions, wtSidecarNanos);
+
+        return new ScoredCandidates(results, wtExhaustive, lastQueryStats);
     }
 
     /**
@@ -476,6 +561,7 @@ public final class IvfCandidateSource implements CandidateSource {
         int unfoldedDim = 2 * patternLen;
         int maxSample = safeParseInt("resonance.index.l1.sampleSize", 20_000);
         double lambda = safeParseDouble("resonance.index.l1.lambda", 0.15);
+        int multiAssign = safeParseInt("resonance.index.l1.multiAssign", 3);
 
         List<double[]> sampleVectors = new ArrayList<>();
         int totalCount = 0;
@@ -547,9 +633,13 @@ public final class IvfCandidateSource implements CandidateSource {
 
             newIndex.assignNormalized(id, u);
 
-            int nearest = SphericalKMeans.nearestCentroid(u, centroids, unfoldedDim);
-            partitions.get(nearest).add(id, UnfoldedMath.unfoldFloat32(p), UnfoldedMath.energyFloat32(p));
-            momentsBuilder.addPattern(nearest, p);
+            float[] unfoldedF32 = UnfoldedMath.unfoldFloat32(p);
+            float energy = UnfoldedMath.energyFloat32(p);
+            int[] assigned = assignToCentroids(u, centroids, unfoldedDim, multiAssign, k);
+            for (int c : assigned) {
+                partitions.get(c).add(id, unfoldedF32, energy);
+            }
+            momentsBuilder.addPattern(assigned[0], p);
         }
         allValidIds = null;
         idToSegment = null;
@@ -623,6 +713,15 @@ public final class IvfCandidateSource implements CandidateSource {
         return u;
     }
 
+    private static int[] assignToCentroids(double[] normalizedU, double[][] centroids,
+                                           int unfoldedDim, int multiAssign, int k) {
+        int effectiveL = Math.min(multiAssign, k);
+        if (effectiveL <= 1) {
+            return new int[]{ SphericalKMeans.nearestCentroid(normalizedU, centroids, unfoldedDim) };
+        }
+        return SphericalKMeans.topNearestCentroids(normalizedU, centroids, unfoldedDim, effectiveL);
+    }
+
     private WavePattern safeReadPattern(Function<String, CachedReader> provider,
                                         String segName, String id, int patternLen) {
         CachedReader reader = safeGetReader(provider, segName);
@@ -640,7 +739,7 @@ public final class IvfCandidateSource implements CandidateSource {
         if (index == null) return;
 
         boolean vamanaEnabled = Boolean.parseBoolean(
-                System.getProperty("resonance.index.l2.enabled", "true"));
+                System.getProperty("resonance.index.l2.enabled", "false"));
         if (!vamanaEnabled) return;
 
         int R = safeParseInt("resonance.index.l2.R", VamanaBuilder.DEFAULT_R);
@@ -813,6 +912,8 @@ public final class IvfCandidateSource implements CandidateSource {
 
         ResonanceMoments.Builder momentsBuilder = new ResonanceMoments.Builder(k, patternLen);
 
+        int multiAssign = safeParseInt("resonance.index.l1.multiAssign", 3);
+
         for (String segName : segmentNames) {
             CachedReader reader = safeGetReader(readerProvider, segName);
             if (reader == null) continue;
@@ -823,10 +924,14 @@ public final class IvfCandidateSource implements CandidateSource {
                 if (p == null) continue;
                 double[] u = unfoldAndNormalize(p);
                 if (u == null) continue;
-                int nearest = SphericalKMeans.nearestCentroid(u, index.centroids(), unfoldedDim);
-                PostingSidecar.PartitionData pd = partitions.get(nearest);
-                if (pd != null) pd.add(id, UnfoldedMath.unfoldFloat32(p), UnfoldedMath.energyFloat32(p));
-                momentsBuilder.addPattern(nearest, p);
+                float[] unfoldedF32 = UnfoldedMath.unfoldFloat32(p);
+                float energy = UnfoldedMath.energyFloat32(p);
+                int[] assigned = assignToCentroids(u, index.centroids(), unfoldedDim, multiAssign, k);
+                for (int c : assigned) {
+                    PostingSidecar.PartitionData pd = partitions.get(c);
+                    if (pd != null) pd.add(id, unfoldedF32, energy);
+                }
+                momentsBuilder.addPattern(assigned[0], p);
             }
         }
 
