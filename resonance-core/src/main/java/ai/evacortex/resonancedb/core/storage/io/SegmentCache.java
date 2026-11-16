@@ -13,6 +13,8 @@ import com.github.benmanes.caffeine.cache.LoadingCache;
 import com.github.benmanes.caffeine.cache.RemovalCause;
 
 import java.io.Closeable;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -21,6 +23,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 public class SegmentCache implements Closeable {
 
+    private final Path dir;
     private final ConcurrentMap<String, Long> versions;
     private final LoadingCache<Key, CachedReader> cache;
     private record Key(String name, long ver) {}
@@ -36,6 +39,7 @@ public class SegmentCache implements Closeable {
     }
 
     public SegmentCache(Path dir, long maxWeightBytes) {
+        this.dir = dir;
         this.versions = new ConcurrentHashMap<>();
         this.cache = Caffeine.newBuilder()
                 .maximumWeight(Math.max(1L << 20, maxWeightBytes))
@@ -70,6 +74,28 @@ public class SegmentCache implements Closeable {
         long v = versions.getOrDefault(seg, -1L);
         if (v < 0) return null;
         Key key = new Key(seg, v);
+        try {
+            return cache.get(key);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    public CachedReader forceReload(String seg) {
+        if (isClosed.get()) return null;
+        long v = versions.getOrDefault(seg, -1L);
+        if (v < 0) {
+            Path segPath = dir.resolve(seg);
+            if (!Files.exists(segPath)) return null;
+            try {
+                v = Files.size(segPath);
+            } catch (IOException e) {
+                return null;
+            }
+            versions.put(seg, v);
+        }
+        Key key = new Key(seg, v);
+        cache.invalidate(key);
         try {
             return cache.get(key);
         } catch (Exception e) {

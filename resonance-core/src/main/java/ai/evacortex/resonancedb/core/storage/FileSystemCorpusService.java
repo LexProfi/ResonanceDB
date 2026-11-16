@@ -530,11 +530,20 @@ public final class FileSystemCorpusService implements CorpusService, Closeable {
         }
 
         private boolean tryEvict() {
-            if (activeOps.get() != 0) {
-                return false;
+            lock.lock();
+            try {
+                if (activeOps.get() != 0) {
+                    return false;
+                }
+                WavePatternStoreImpl local = store;
+                store = null;
+                if (local != null) {
+                    local.close();
+                }
+                return local != null;
+            } finally {
+                lock.unlock();
             }
-            closeOpenStore();
-            return true;
         }
 
         private void closeOpenStore() {

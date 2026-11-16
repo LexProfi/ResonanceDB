@@ -97,6 +97,8 @@ public class WavePatternStoreImplTest {
         assertEquals(id, match.id());
         assertSamePattern(psi, match.pattern());
         assertEquals(1.0f, match.energy(), 1e-5);
+        assertEquals(0L, store.getSegmentsSkippedCacheMiss(),
+                "zero segments must be skipped");
     }
 
     @Test
@@ -609,6 +611,8 @@ public class WavePatternStoreImplTest {
 
         assertTrue(returnedIds.contains(idA), "Result must contain phase A pattern");
         assertTrue(returnedIds.contains(idB), "Result must contain phase B pattern");
+        assertEquals(0L, store.getSegmentsSkippedCacheMiss(),
+                "zero segments must be skipped");
     }
 
     @Test

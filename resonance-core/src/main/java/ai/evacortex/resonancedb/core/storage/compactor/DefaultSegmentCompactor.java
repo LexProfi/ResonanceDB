@@ -53,7 +53,8 @@ public class DefaultSegmentCompactor implements SegmentCompactor {
 
     @Override
     public void compact(PhaseSegmentGroup group) {
-        List<SegmentWriter> oldWriters;
+        List<String> allSegmentNames;
+        List<SegmentWriter> openWriters;
         String finalName;
         Path tmpPath;
         Path finalPath;
@@ -61,8 +62,9 @@ public class DefaultSegmentCompactor implements SegmentCompactor {
 
         globalLock.writeLock().lock();
         try {
-            oldWriters = new ArrayList<>(group.getAll());
-            if (oldWriters.size() <= 1) return;
+            allSegmentNames = new ArrayList<>(group.getAllSegmentNames());
+            openWriters = new ArrayList<>(group.getAll());
+            if (allSegmentNames.size() <= 1) return;
 
             String base = group.getBaseName();
             long timestamp = System.currentTimeMillis();
@@ -76,17 +78,19 @@ public class DefaultSegmentCompactor implements SegmentCompactor {
             SegmentWriter tmpWriter = new SegmentWriter(tmpPath);
 
             pendingEntries = new ArrayList<>();
-            for (SegmentWriter writer : oldWriters) {
-                try (SegmentReader reader = new SegmentReader(writer.getPath())) {
+            for (String segName : allSegmentNames) {
+                Path segPath = segmentDir.resolve(segName);
+                if (!Files.exists(segPath)) continue;
+                try (SegmentReader reader = new SegmentReader(segPath)) {
                     for (SegmentReader.PatternWithId entry : reader.readAllWithId()) {
                         ManifestIndex.PatternLocation loc = manifest.get(entry.id());
                         if (loc == null) continue;
-                        if (!loc.segmentName().equals(writer.getSegmentName())) continue;
+                        if (!loc.segmentName().equals(segName)) continue;
                         if (loc.offset() != entry.offset()) continue;
                         long newOff = tmpWriter.write(entry.id(), entry.pattern());
                         double phaseCenter = weightedMeanPhase(entry.pattern().amplitude(), entry.pattern().phase());
                         pendingEntries.add(new PendingEntry(entry.id(),
-                                writer.getSegmentName(), entry.offset(), newOff, phaseCenter));
+                                segName, entry.offset(), newOff, phaseCenter));
                     }
                 }
             }
@@ -125,17 +129,14 @@ public class DefaultSegmentCompactor implements SegmentCompactor {
                 phaseCenters.add(pe.phaseCenter);
             }
 
-            Set<String> oldWriterNames = new HashSet<>();
-            for (SegmentWriter w : oldWriters) {
-                oldWriterNames.add(w.getSegmentName());
-            }
+            Set<String> oldSegmentNames = new HashSet<>(allSegmentNames);
             List<SegmentWriter> currentWriters = new ArrayList<>(group.getAll());
 
             group.registerIfAbsent(mergedWriter);
             group.resetTo(mergedWriter);
 
             for (SegmentWriter w : currentWriters) {
-                if (!oldWriterNames.contains(w.getSegmentName())) {
+                if (!oldSegmentNames.contains(w.getSegmentName())) {
                     group.registerIfAbsent(w);
                 }
             }
@@ -147,14 +148,24 @@ public class DefaultSegmentCompactor implements SegmentCompactor {
             manifest.flush();
             metaStore.flush();
 
-            for (SegmentWriter w : oldWriters) {
-                String oldSegName = w.getSegmentName();
-                readerCache.removeSegment(oldSegName);
+            Set<String> closedWriterNames = new HashSet<>();
+            for (SegmentWriter w : openWriters) {
+                closedWriterNames.add(w.getSegmentName());
+                readerCache.removeSegment(w.getSegmentName());
                 try {
                     w.close();
                     Files.deleteIfExists(w.getPath());
                 } catch (Exception e) {
-                    System.err.println("WARN compaction cleanup: " + oldSegName + ": " + e.getMessage());
+                    System.err.println("WARN compaction cleanup: " + w.getSegmentName() + ": " + e.getMessage());
+                }
+            }
+            for (String segName : allSegmentNames) {
+                if (closedWriterNames.contains(segName)) continue;
+                readerCache.removeSegment(segName);
+                try {
+                    Files.deleteIfExists(segmentDir.resolve(segName));
+                } catch (Exception e) {
+                    System.err.println("WARN compaction cleanup sealed: " + segName + ": " + e.getMessage());
                 }
             }
 
