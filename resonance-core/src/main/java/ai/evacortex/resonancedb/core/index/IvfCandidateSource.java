@@ -633,21 +633,13 @@ public final class IvfCandidateSource implements CandidateSource {
 
             newIndex.assignNormalized(id, u);
 
-            int effectiveL = Math.min(multiAssign, k);
             float[] unfoldedF32 = UnfoldedMath.unfoldFloat32(p);
             float energy = UnfoldedMath.energyFloat32(p);
-
-            if (effectiveL <= 1) {
-                int nearest = SphericalKMeans.nearestCentroid(u, centroids, unfoldedDim);
-                partitions.get(nearest).add(id, unfoldedF32, energy);
-                momentsBuilder.addPattern(nearest, p);
-            } else {
-                int[] topL = SphericalKMeans.topNearestCentroids(u, centroids, unfoldedDim, effectiveL);
-                for (int c : topL) {
-                    partitions.get(c).add(id, unfoldedF32, energy);
-                }
-                momentsBuilder.addPattern(topL[0], p);
+            int[] assigned = assignToCentroids(u, centroids, unfoldedDim, multiAssign, k);
+            for (int c : assigned) {
+                partitions.get(c).add(id, unfoldedF32, energy);
             }
+            momentsBuilder.addPattern(assigned[0], p);
         }
         allValidIds = null;
         idToSegment = null;
@@ -721,6 +713,15 @@ public final class IvfCandidateSource implements CandidateSource {
         return u;
     }
 
+    private static int[] assignToCentroids(double[] normalizedU, double[][] centroids,
+                                           int unfoldedDim, int multiAssign, int k) {
+        int effectiveL = Math.min(multiAssign, k);
+        if (effectiveL <= 1) {
+            return new int[]{ SphericalKMeans.nearestCentroid(normalizedU, centroids, unfoldedDim) };
+        }
+        return SphericalKMeans.topNearestCentroids(normalizedU, centroids, unfoldedDim, effectiveL);
+    }
+
     private WavePattern safeReadPattern(Function<String, CachedReader> provider,
                                         String segName, String id, int patternLen) {
         CachedReader reader = safeGetReader(provider, segName);
@@ -738,7 +739,7 @@ public final class IvfCandidateSource implements CandidateSource {
         if (index == null) return;
 
         boolean vamanaEnabled = Boolean.parseBoolean(
-                System.getProperty("resonance.index.l2.enabled", "true"));
+                System.getProperty("resonance.index.l2.enabled", "false"));
         if (!vamanaEnabled) return;
 
         int R = safeParseInt("resonance.index.l2.R", VamanaBuilder.DEFAULT_R);
@@ -911,6 +912,8 @@ public final class IvfCandidateSource implements CandidateSource {
 
         ResonanceMoments.Builder momentsBuilder = new ResonanceMoments.Builder(k, patternLen);
 
+        int multiAssign = safeParseInt("resonance.index.l1.multiAssign", 3);
+
         for (String segName : segmentNames) {
             CachedReader reader = safeGetReader(readerProvider, segName);
             if (reader == null) continue;
@@ -921,10 +924,14 @@ public final class IvfCandidateSource implements CandidateSource {
                 if (p == null) continue;
                 double[] u = unfoldAndNormalize(p);
                 if (u == null) continue;
-                int nearest = SphericalKMeans.nearestCentroid(u, index.centroids(), unfoldedDim);
-                PostingSidecar.PartitionData pd = partitions.get(nearest);
-                if (pd != null) pd.add(id, UnfoldedMath.unfoldFloat32(p), UnfoldedMath.energyFloat32(p));
-                momentsBuilder.addPattern(nearest, p);
+                float[] unfoldedF32 = UnfoldedMath.unfoldFloat32(p);
+                float energy = UnfoldedMath.energyFloat32(p);
+                int[] assigned = assignToCentroids(u, index.centroids(), unfoldedDim, multiAssign, k);
+                for (int c : assigned) {
+                    PostingSidecar.PartitionData pd = partitions.get(c);
+                    if (pd != null) pd.add(id, unfoldedF32, energy);
+                }
+                momentsBuilder.addPattern(assigned[0], p);
             }
         }
 

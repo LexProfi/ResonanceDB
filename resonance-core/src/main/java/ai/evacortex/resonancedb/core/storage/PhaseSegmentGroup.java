@@ -14,6 +14,7 @@ import ai.evacortex.resonancedb.core.storage.io.SegmentWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Comparator;
 import java.util.List;
 import java.util.OptionalDouble;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -54,7 +55,7 @@ public class PhaseSegmentGroup {
             try (var stream = Files.list(baseDir)) {
                 stream.filter(p -> p.getFileName().toString().startsWith(baseName + "-") &&
                                 p.getFileName().toString().endsWith(".segment"))
-                        .sorted()
+                        .sorted(Comparator.comparingInt(PhaseSegmentGroup::extractSegmentIndex))
                         .forEach(segPaths::add);
             }
         } catch (IOException e) {
@@ -68,9 +69,22 @@ public class PhaseSegmentGroup {
                 sealedSegmentNames.add(segPaths.get(i).getFileName().toString());
             }
             writers.add(new SegmentWriter(segPaths.getLast()));
-            seq.set(segPaths.size());
+            int maxIndex = extractSegmentIndex(segPaths.getLast());
+            seq.set(maxIndex + 1);
         }
         current = writers.getLast();
+    }
+
+    private static int extractSegmentIndex(Path p) {
+        String name = p.getFileName().toString();
+        int dashIdx = name.lastIndexOf('-');
+        int dotIdx = name.lastIndexOf('.');
+        if (dashIdx < 0 || dotIdx < 0 || dotIdx <= dashIdx) return 0;
+        try {
+            return Integer.parseInt(name.substring(dashIdx + 1, dotIdx));
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     private SegmentWriter createSegment(int index) {

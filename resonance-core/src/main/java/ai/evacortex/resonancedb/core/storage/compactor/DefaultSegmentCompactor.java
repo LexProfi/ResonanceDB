@@ -97,8 +97,6 @@ public class DefaultSegmentCompactor implements SegmentCompactor {
 
             tmpWriter.flush();
             tmpWriter.close();
-
-            group.createAndRegisterNewSegment();
         } catch (IOException e) {
             throw new RuntimeException("Compaction failed: merge phase", e);
         } finally {
@@ -114,6 +112,7 @@ public class DefaultSegmentCompactor implements SegmentCompactor {
 
         globalLock.writeLock().lock();
         try {
+            group.createAndRegisterNewSegment();
             SegmentWriter mergedWriter = new SegmentWriter(finalPath);
             mergedWriter.sync();
 
