@@ -683,9 +683,10 @@ public final class IvfCandidateSource implements CandidateSource {
     }
 
     private void replaceSidecar(PostingSidecar.Loaded newSidecar) {
-        PostingSidecar.Loaded prev = this.postingSidecar;
         this.postingSidecar = newSidecar;
-        if (prev != null) prev.close();
+        // Old sidecar is not closed here — concurrent readers may still be
+        // inside scanPartition(). The old mmap will be reclaimed by GC.
+        // Explicit close() with unmap is only used at shutdown (closeSidecar).
     }
 
     private CachedReader safeGetReader(Function<String, CachedReader> provider, String segName) {
