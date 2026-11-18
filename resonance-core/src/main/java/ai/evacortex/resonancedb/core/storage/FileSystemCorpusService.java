@@ -736,15 +736,20 @@ public final class FileSystemCorpusService implements CorpusService, Closeable {
         }
 
         private void afterReplace() {
-            CorpusInfo current = peekInfo();
-            if (current == null) {
-                return;
-            }
+            lock.lock();
+            try {
+                CorpusInfo current = peekInfo();
+                if (current == null) {
+                    return;
+                }
 
-            Instant now = Instant.now();
-            CorpusInfo updated = current.withPatternCount(current.patternCount(), now);
-            info = updated;
-            writeMeta(resolveCorpusRoot(corpusId).resolve(CORPUS_META_FILE), StoredCorpusMeta.from(updated));
+                Instant now = Instant.now();
+                CorpusInfo updated = current.withPatternCount(current.patternCount(), now);
+                info = updated;
+                writeMeta(resolveCorpusRoot(corpusId).resolve(CORPUS_META_FILE), StoredCorpusMeta.from(updated));
+            } finally {
+                lock.unlock();
+            }
         }
 
         private void mutateInfoCount(long delta) {

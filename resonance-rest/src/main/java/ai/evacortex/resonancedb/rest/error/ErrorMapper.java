@@ -56,6 +56,13 @@ public final class ErrorMapper {
             );
         }
 
+        if (t instanceof IllegalArgumentException iae) {
+            return new RestError(
+                    400,
+                    new ErrorResponse("bad_request", safeMsg(iae))
+            );
+        }
+
         return new RestError(
                 500,
                 new ErrorResponse("internal_error", safeMsg(t))

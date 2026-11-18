@@ -871,6 +871,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
         if (!pendingWalFutures.isEmpty()) flushWalFutures();
 
+        List<ResonanceMatch> prelim;
         try (AutoLock ignored = AutoLock.read(globalLock)) {
             String queryId = HashingUtil.computeContentHash(query);
 
@@ -903,13 +904,13 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 }
             }
 
-            List<ResonanceMatch> prelim = deduplicateTopK(collected, h -> h.match().id(), RESULT_ORDER, topK)
+            prelim = deduplicateTopK(collected, h -> h.match().id(), RESULT_ORDER, topK)
                     .stream()
                     .map(HeapItem::match)
                     .toList();
-
-            return materializePatterns(prelim);
         }
+
+        return materializePatterns(prelim);
     }
 
     @Override
