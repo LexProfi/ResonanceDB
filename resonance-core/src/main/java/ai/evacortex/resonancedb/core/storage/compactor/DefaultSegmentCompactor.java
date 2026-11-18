@@ -60,12 +60,18 @@ public class DefaultSegmentCompactor implements SegmentCompactor {
         Path finalPath;
         List<PendingEntry> pendingEntries;
 
-        globalLock.writeLock().lock();
+        // Phase 1: snapshot segment names under read lock (non-blocking for queries)
+        globalLock.readLock().lock();
         try {
             allSegmentNames = new ArrayList<>(group.getAllSegmentNames());
             openWriters = new ArrayList<>(group.getAll());
             if (allSegmentNames.size() <= 1) return;
+        } finally {
+            globalLock.readLock().unlock();
+        }
 
+        // Phase 2: merge I/O without holding any lock
+        try {
             String base = group.getBaseName();
             long timestamp = System.currentTimeMillis();
             String tmpName = base + "-tmp-merged-" + timestamp + ".segment";
@@ -99,8 +105,6 @@ public class DefaultSegmentCompactor implements SegmentCompactor {
             tmpWriter.close();
         } catch (IOException e) {
             throw new RuntimeException("Compaction failed: merge phase", e);
-        } finally {
-            globalLock.writeLock().unlock();
         }
 
         try {

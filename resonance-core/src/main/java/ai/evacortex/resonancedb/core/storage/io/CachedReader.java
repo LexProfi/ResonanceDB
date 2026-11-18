@@ -24,6 +24,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Stream;
 
 public class CachedReader implements AutoCloseable {
@@ -41,7 +42,7 @@ public class CachedReader implements AutoCloseable {
     private volatile boolean closed = false;
 
     private final AtomicInteger refCount = new AtomicInteger(0);
-    private final Object unmapLock = new Object();
+    private final ReentrantLock unmapLock = new ReentrantLock();
 
     private CachedReader(Path path, FileChannel channel, MappedByteBuffer mmap,
                          Map<String, Long> offsetMap, long lastOffset, long weightInBytes) {
@@ -176,16 +177,20 @@ public class CachedReader implements AutoCloseable {
     }
 
     public void acquire() {
-        synchronized (unmapLock) {
+        unmapLock.lock();
+        try {
             if (closed) {
                 throw new IllegalStateException("Attempted to acquire closed CachedReader for " + path);
             }
             refCount.incrementAndGet();
+        } finally {
+            unmapLock.unlock();
         }
     }
 
     public void release() {
-        synchronized (unmapLock) {
+        unmapLock.lock();
+        try {
             int remaining = refCount.decrementAndGet();
             if (remaining < 0) {
                 throw new IllegalStateException("CachedReader refCount below zero for " + path);
@@ -193,12 +198,15 @@ public class CachedReader implements AutoCloseable {
             if (closed && remaining == 0) {
                 Buffers.unmap(mmap);
             }
+        } finally {
+            unmapLock.unlock();
         }
     }
 
     @Override
     public void close() {
-        synchronized (unmapLock) {
+        unmapLock.lock();
+        try {
             closed = true;
             try {
                 channel.close();
@@ -209,6 +217,8 @@ public class CachedReader implements AutoCloseable {
             if (refCount.get() == 0) {
                 Buffers.unmap(mmap);
             }
+        } finally {
+            unmapLock.unlock();
         }
     }
 

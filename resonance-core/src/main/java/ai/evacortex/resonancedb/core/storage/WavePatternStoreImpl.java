@@ -56,6 +56,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Function;
 
@@ -112,7 +113,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     private final int ivfNProbe;
     private final int ivfDeltaMaxSize;
     private final AtomicBoolean indexRebuildScheduled = new AtomicBoolean(false);
-    private final Object rebuildMutex = new Object();
+    private final ReentrantLock rebuildLock = new ReentrantLock();
     private final AtomicReference<ScheduledFuture<?>> rebuildFuture = new AtomicReference<>();
 
     private final int batchCommitSize = Integer.getInteger("resonance.insert.batchSize", 1);
@@ -129,7 +130,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     private final AtomicBoolean sealScheduled = new AtomicBoolean(false);
     private final AtomicReference<ScheduledFuture<?>> sealFuture = new AtomicReference<>();
     private final ScheduledFuture<?> sealTimerTask;
-    private final Object sealMutex = new Object();
+    private final ReentrantLock sealLock = new ReentrantLock();
     private final WriteAheadLog.DurabilityMode walDurability;
 
     private static final int WAL_SYNC_THRESHOLD = 256;
@@ -1011,13 +1012,16 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     }
 
     public void compactPhase(String baseName) {
-        synchronized (sealMutex) {
+        sealLock.lock();
+        try {
             PhaseSegmentGroup group = segmentGroups.get(baseName);
             if (group != null && group.maybeCompact()) {
                 try (AutoLock ignored = AutoLock.write(globalLock)) {
                     rebuildShardSelector();
                 }
             }
+        } finally {
+            sealLock.unlock();
         }
     }
 
@@ -1101,8 +1105,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             pendingRebuild.cancel(false);
         }
 
-        synchronized (rebuildMutex) {
-        }
+        rebuildLock.lock();
+        rebuildLock.unlock();
 
         try (AutoLock ignored = AutoLock.write(globalLock)) {
             compactionTask.cancel(false);
@@ -1560,7 +1564,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
 
         if (!pendingWalFutures.isEmpty()) flushWalFutures();
 
-        synchronized (sealMutex) {
+        sealLock.lock();
+        try {
             if (deltaBuffer.isEmpty()) return;
 
             Map<String, DeltaBuffer.Entry> frozenEntries;
@@ -1689,6 +1694,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             if (deltaIndex != null && deltaIndex.exceedsThreshold(ivfDeltaMaxSize)) {
                 scheduleIndexRebuild();
             }
+        } finally {
+            sealLock.unlock();
         }
     }
 
@@ -1762,7 +1769,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     private void rebuildIvfIndex() {
         if (ivfSource == null || closed.get()) return;
 
-        synchronized (rebuildMutex) {
+        rebuildLock.lock();
+        try {
             if (closed.get()) return;
 
             Set<String> segNames;
@@ -1804,6 +1812,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 pinned.values().forEach(CachedReader::release);
                 pinned.clear();
             }
+        } finally {
+            rebuildLock.unlock();
         }
     }
 
