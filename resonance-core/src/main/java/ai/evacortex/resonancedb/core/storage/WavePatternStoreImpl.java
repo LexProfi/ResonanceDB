@@ -1121,6 +1121,10 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
                 }
             }
 
+            if (ivfSource != null) {
+                ivfSource.closeSidecar();
+            }
+
             if (wal != null) {
                 try {
                     wal.close();

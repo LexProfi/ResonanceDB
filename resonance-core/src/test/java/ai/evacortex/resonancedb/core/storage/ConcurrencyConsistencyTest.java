@@ -150,6 +150,8 @@ class ConcurrencyConsistencyTest {
                 "hasPhaseStats should be false after removing all contributions (FP epsilon)");
         assertTrue(group.getAvgPhaseIfPresent().isEmpty(),
                 "getAvgPhaseIfPresent should be empty when stats are zeroed");
+
+        group.getAll().forEach(w -> { try { w.close(); } catch (Exception ignored) {} });
     }
 
     @Test
@@ -191,6 +193,8 @@ class ConcurrencyConsistencyTest {
 
         for (Future<?> f : futures) f.get(30, TimeUnit.SECONDS);
         exec.shutdown();
+
+        group.getAll().forEach(w -> { try { w.close(); } catch (Exception ignored) {} });
     }
 
     // ── Fix #6: base() handles merged segment names ────────────────────

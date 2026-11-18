@@ -475,14 +475,13 @@ class SegmentCacheEvictionTest {
         store.insert(p, Map.of());
         store.sealDelta();
 
-        // Delete the actual segment file on disk
+        // Get segment name and evict cached readers first (required on Windows where
+        // memory-mapped files cannot be deleted while the mapping is active)
         String segName = getAnySegmentName();
         Path segPath = tempDir.resolve("segments").resolve(segName);
         assertTrue(java.nio.file.Files.exists(segPath), "Segment file must exist before deletion");
-        java.nio.file.Files.delete(segPath);
-
-        // Evict to force reload attempt
         evictAllCachedReaders();
+        java.nio.file.Files.delete(segPath);
 
         // getOrLoad() should return null (load failure), NOT crash
         SegmentCache cache = getReaderCache();

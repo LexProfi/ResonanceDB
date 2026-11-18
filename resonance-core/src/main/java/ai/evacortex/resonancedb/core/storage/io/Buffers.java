@@ -19,7 +19,7 @@ import java.nio.channels.FileChannel;
 
 /**  Utility — safe explicit unmap for a MappedByteBuffer.  */
 @SuppressWarnings({"removal", "UnsafeUsage"})
-final class Buffers {
+public final class Buffers {
 
     private static final Unsafe UNSAFE;
     private static final java.lang.reflect.Method INVOKE_CLEANER;
@@ -38,7 +38,7 @@ final class Buffers {
 
     private Buffers() {}
 
-    static void unmap(ByteBuffer bb) {
+    public static void unmap(ByteBuffer bb) {
         if (bb == null || !bb.isDirect()) return;
         try {
             INVOKE_CLEANER.invoke(UNSAFE, bb);

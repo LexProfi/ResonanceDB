@@ -16,6 +16,8 @@ import java.nio.ByteOrder;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
+import ai.evacortex.resonancedb.core.storage.io.Buffers;
+
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -96,6 +98,7 @@ public final class PostingSidecar {
         }
 
         public void close() {
+            Buffers.unmap(mmap);
             try { channel.close(); }
             catch (IOException e) { System.err.println("PostingSidecar close: " + e.getMessage()); }
         }
@@ -184,6 +187,7 @@ public final class PostingSidecar {
             }
 
             buf.force();
+            Buffers.unmap(buf);
         }
 
         Files.move(tmpFile, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
@@ -206,12 +210,13 @@ public final class PostingSidecar {
             mmap.get(magic);
             if (magic[0] != MAGIC[0] || magic[1] != MAGIC[1] ||
                     magic[2] != MAGIC[2] || magic[3] != MAGIC[3]) {
+                Buffers.unmap(mmap);
                 channel.close();
                 return null;
             }
 
             int version = mmap.getInt();
-            if (version != VERSION) { channel.close(); return null; }
+            if (version != VERSION) { Buffers.unmap(mmap); channel.close(); return null; }
 
             int partitionCount = mmap.getInt();
             int unfoldedDim = mmap.getInt();

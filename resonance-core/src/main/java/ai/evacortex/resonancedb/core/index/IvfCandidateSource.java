@@ -64,6 +64,12 @@ public final class IvfCandidateSource implements CandidateSource {
         this.shutdown = true;
     }
 
+    public void closeSidecar() {
+        PostingSidecar.Loaded sc = this.postingSidecar;
+        this.postingSidecar = null;
+        if (sc != null) sc.close();
+    }
+
     public boolean isShutdownRequested() {
         return shutdown;
     }
