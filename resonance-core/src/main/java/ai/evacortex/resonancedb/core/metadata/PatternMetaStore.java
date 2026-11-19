@@ -35,8 +35,11 @@ public class PatternMetaStore {
             try (InputStream in = Files.newInputStream(path)) {
                 TypeReference<Map<String, PatternMeta>> typeRef = new TypeReference<>() {};
                 Map<String, PatternMeta> loaded = metaStore.mapper.readValue(in, typeRef);
-                synchronized (metaStore.store) {
+                metaStore.rwLock.writeLock().lock();
+                try {
                     metaStore.store.putAll(loaded);
+                } finally {
+                    metaStore.rwLock.writeLock().unlock();
                 }
             } catch (IOException e) {
                 throw new RuntimeException("Failed to load metadata store", e);
@@ -48,7 +51,7 @@ public class PatternMetaStore {
     private PatternMetaStore(Path metaFile) {
         this.metaFile = metaFile;
         this.mapper = new ObjectMapper();
-        this.store = Collections.synchronizedMap(new HashMap<>());
+        this.store = new HashMap<>();
         this.rwLock = new ReentrantReadWriteLock();
     }
 

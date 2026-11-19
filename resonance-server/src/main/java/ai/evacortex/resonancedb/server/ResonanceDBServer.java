@@ -110,7 +110,13 @@ public final class ResonanceDBServer {
 
         System.out.println("DB  : " + dbRoot);
         System.out.println("Port: " + port);
-        System.out.println("HTTP executor: virtual");
+        String httpExecMode = System.getProperty("resonance.http.executor", "platform");
+        System.out.println("HTTP executor: " + httpExecMode);
+        if (!"virtual".equalsIgnoreCase(httpExecMode)) {
+            int httpThreads = Integer.getInteger("resonance.http.threads",
+                    Runtime.getRuntime().availableProcessors() * 4);
+            System.out.println("HTTP threads: " + httpThreads);
+        }
 
         String maxBody = System.getProperty("resonance.rest.maxBodyBytes");
         if (maxBody != null) {

@@ -33,6 +33,7 @@ public class PhaseSegmentGroup {
     private final CopyOnWriteArrayList<String> sealedSegmentNames = new CopyOnWriteArrayList<>();
     private final SegmentCompactor compactor;
     private final ReentrantLock lock = new ReentrantLock();
+    private final ReentrantLock phaseStatsLock = new ReentrantLock();
 
     private double sinSum = 0.0;
     private double cosSum = 0.0;
@@ -174,9 +175,12 @@ public class PhaseSegmentGroup {
             sealedSegmentNames.clear();
             writers.add(writer);
             current = writer;
-            synchronized (this) {
+            phaseStatsLock.lock();
+            try {
                 sinSum = 0.0;
                 cosSum = 0.0;
+            } finally {
+                phaseStatsLock.unlock();
             }
             String name = writer.getSegmentName();
             int idx = 0;
@@ -217,28 +221,53 @@ public class PhaseSegmentGroup {
         sealedSegmentNames.remove(writer.getSegmentName());
     }
 
-    public synchronized void updatePhaseStats(double newPhase) {
-        this.sinSum += Math.sin(newPhase);
-        this.cosSum += Math.cos(newPhase);
+    public void updatePhaseStats(double newPhase) {
+        phaseStatsLock.lock();
+        try {
+            this.sinSum += Math.sin(newPhase);
+            this.cosSum += Math.cos(newPhase);
+        } finally {
+            phaseStatsLock.unlock();
+        }
     }
 
-    public synchronized void removePhaseStats(double oldPhase) {
-        this.sinSum -= Math.sin(oldPhase);
-        this.cosSum -= Math.cos(oldPhase);
+    public void removePhaseStats(double oldPhase) {
+        phaseStatsLock.lock();
+        try {
+            this.sinSum -= Math.sin(oldPhase);
+            this.cosSum -= Math.cos(oldPhase);
+        } finally {
+            phaseStatsLock.unlock();
+        }
     }
 
-    public synchronized double getAvgPhase() {
-        if (!hasPhaseStatsInternal()) return 0.0;
-        return Math.atan2(sinSum, cosSum);
+    public double getAvgPhase() {
+        phaseStatsLock.lock();
+        try {
+            if (!hasPhaseStatsInternal()) return 0.0;
+            return Math.atan2(sinSum, cosSum);
+        } finally {
+            phaseStatsLock.unlock();
+        }
     }
 
-    public synchronized boolean hasPhaseStats() {
-        return hasPhaseStatsInternal();
+    public boolean hasPhaseStats() {
+        phaseStatsLock.lock();
+        try {
+            return hasPhaseStatsInternal();
+        } finally {
+            phaseStatsLock.unlock();
+        }
     }
 
-    public synchronized OptionalDouble getAvgPhaseIfPresent() {
-        if (!hasPhaseStatsInternal()) return OptionalDouble.empty();
-        return OptionalDouble.of(Math.atan2(sinSum, cosSum));
+    public OptionalDouble getAvgPhaseIfPresent() {
+        phaseStatsLock.lock();
+        try {
+            if (!hasPhaseStatsInternal()) return OptionalDouble.empty();
+            return OptionalDouble.of(Math.atan2(sinSum, cosSum));
+        } finally {
+            phaseStatsLock.unlock();
+        }
     }
 
     private boolean hasPhaseStatsInternal() {

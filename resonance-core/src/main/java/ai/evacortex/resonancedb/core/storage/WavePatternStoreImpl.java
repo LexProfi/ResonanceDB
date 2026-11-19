@@ -134,8 +134,8 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     private final WriteAheadLog.DurabilityMode walDurability;
 
     private static final int WAL_SYNC_THRESHOLD = 256;
-    private final List<CompletableFuture<Long>> pendingWalFutures =
-            Collections.synchronizedList(new ArrayList<>());
+    private final ReentrantLock walFuturesLock = new ReentrantLock();
+    private final List<CompletableFuture<Long>> pendingWalFutures = new ArrayList<>();
 
     private record HeapItem(ResonanceMatch match) {}
     private record SegmentWriteResult(SegmentWriter writer, long offset, long version) {}
@@ -467,8 +467,15 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         switch (walDurability) {
             case STRICT -> durabilityFuture.join();
             case GROUP -> {
-                pendingWalFutures.add(durabilityFuture);
-                if (pendingWalFutures.size() >= WAL_SYNC_THRESHOLD) {
+                boolean shouldFlush;
+                walFuturesLock.lock();
+                try {
+                    pendingWalFutures.add(durabilityFuture);
+                    shouldFlush = pendingWalFutures.size() >= WAL_SYNC_THRESHOLD;
+                } finally {
+                    walFuturesLock.unlock();
+                }
+                if (shouldFlush) {
                     flushWalFutures();
                 }
             }
@@ -608,8 +615,15 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             switch (walDurability) {
                 case STRICT -> durFuture.join();
                 case GROUP -> {
-                    pendingWalFutures.add(durFuture);
-                    if (pendingWalFutures.size() >= WAL_SYNC_THRESHOLD) {
+                    boolean shouldFlush;
+                    walFuturesLock.lock();
+                    try {
+                        pendingWalFutures.add(durFuture);
+                        shouldFlush = pendingWalFutures.size() >= WAL_SYNC_THRESHOLD;
+                    } finally {
+                        walFuturesLock.unlock();
+                    }
+                    if (shouldFlush) {
                         flushWalFutures();
                     }
                 }
@@ -732,8 +746,15 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
         switch (walDurability) {
             case STRICT -> durFuture.join();
             case GROUP -> {
-                pendingWalFutures.add(durFuture);
-                if (pendingWalFutures.size() >= WAL_SYNC_THRESHOLD) {
+                boolean shouldFlush;
+                walFuturesLock.lock();
+                try {
+                    pendingWalFutures.add(durFuture);
+                    shouldFlush = pendingWalFutures.size() >= WAL_SYNC_THRESHOLD;
+                } finally {
+                    walFuturesLock.unlock();
+                }
+                if (shouldFlush) {
                     flushWalFutures();
                 }
             }
@@ -870,7 +891,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             return List.of();
         }
 
-        if (!pendingWalFutures.isEmpty()) flushWalFutures();
+        flushWalFutures();
 
         List<ResonanceMatch> prelim;
         try (AutoLock ignored = AutoLock.read(globalLock)) {
@@ -1086,7 +1107,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
             pendingSeal.cancel(false);
         }
 
-        if (!pendingWalFutures.isEmpty()) flushWalFutures();
+        flushWalFutures();
 
         if (deltaBuffer != null && !deltaBuffer.isEmpty()) {
             try {
@@ -1562,7 +1583,7 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     public void sealDelta() {
         if (deltaBuffer == null) return;
 
-        if (!pendingWalFutures.isEmpty()) flushWalFutures();
+        flushWalFutures();
 
         sealLock.lock();
         try {
@@ -1700,11 +1721,14 @@ public class WavePatternStoreImpl implements ResonanceStore, Closeable {
     }
 
     private void flushWalFutures() {
-        if (pendingWalFutures.isEmpty()) return;
         List<CompletableFuture<Long>> snapshot;
-        synchronized (pendingWalFutures) {
+        walFuturesLock.lock();
+        try {
+            if (pendingWalFutures.isEmpty()) return;
             snapshot = new ArrayList<>(pendingWalFutures);
             pendingWalFutures.clear();
+        } finally {
+            walFuturesLock.unlock();
         }
         CompletableFuture.allOf(snapshot.toArray(CompletableFuture[]::new)).join();
     }

@@ -37,7 +37,11 @@ import java.nio.file.Path;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public final class ResonanceDBRest implements Closeable {
 
@@ -83,7 +87,7 @@ public final class ResonanceDBRest implements Closeable {
         this.server = HttpServer.create(new InetSocketAddress(cfg.port()), 0);
         this.httpExec = (executorOverride != null)
                 ? executorOverride
-                : Executors.newVirtualThreadPerTaskExecutor();
+                : createDefaultExecutor();
         this.server.setExecutor(this.httpExec);
 
         this.json = new JsonCodec(ObjectMapperFactory.create());
@@ -141,6 +145,26 @@ public final class ResonanceDBRest implements Closeable {
     @Override
     public void close() {
         stop(0);
+    }
+
+    static ExecutorService createDefaultExecutor() {
+        String mode = System.getProperty("resonance.http.executor", "platform");
+        if ("virtual".equalsIgnoreCase(mode)) {
+            return Executors.newVirtualThreadPerTaskExecutor();
+        }
+        int cores = Runtime.getRuntime().availableProcessors();
+        int threads = Integer.getInteger("resonance.http.threads", cores * 4);
+        AtomicInteger seq = new AtomicInteger();
+        return new ThreadPoolExecutor(
+                threads, threads,
+                60L, TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(),
+                r -> {
+                    Thread t = new Thread(r, "resonance-http-" + seq.incrementAndGet());
+                    t.setDaemon(true);
+                    return t;
+                }
+        );
     }
 
     private static void closeQuietly(AutoCloseable c) {
