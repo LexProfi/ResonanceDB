@@ -4,7 +4,7 @@ plugins {
 
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(22)
+        languageVersion = JavaLanguageVersion.of(25)
     }
 }
 
@@ -31,12 +31,12 @@ dependencies {
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
-    options.release = 22
+    options.release = 25
     options.compilerArgs += ['--add-modules', 'jdk.incubator.vector']
 }
 
 tasks.withType(Test).configureEach {
-    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(22) }
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(25) }
     maxParallelForks = 1
     forkEvery = 0
     testLogging {
@@ -69,7 +69,6 @@ tasks.withType(Test).configureEach {
     }
 
     def baseArgs = [
-            '--enable-preview',
             '--enable-native-access=ALL-UNNAMED',
             '--add-modules', 'jdk.incubator.vector',
             '-XX:ActiveProcessorCount=12',
@@ -82,8 +81,7 @@ tasks.withType(Test).configureEach {
     if (preset == 'heavy') {
         heapArgs = [
                 '-Xms2g', '-Xmx4g',
-                '-XX:+UseZGC',
-                '-XX:+ZGenerational'
+                '-XX:+UseZGC'
         ]
     } else if (preset == 'mid') {
         heapArgs = [
@@ -120,7 +118,7 @@ tasks.named('test') {
 tasks.register('testJavaPerf', Test) {
     description = "Run performance tests with JavaKernel"
     group = "verification"
-    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(22) }
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(25) }
 
     useJUnitPlatform {
         includeTags 'benchmark'
@@ -136,7 +134,7 @@ tasks.register('testJavaPerf', Test) {
 tasks.register('testNativePerf', Test) {
     description = "Run performance tests with NativeKernel"
     group = "verification"
-    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(22) }
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(25) }
 
     useJUnitPlatform {
         includeTags 'benchmark'
@@ -152,7 +150,7 @@ tasks.register('testNativePerf', Test) {
 tasks.register('testJavaPerfHeavy', Test) {
     description = "Run performance tests with JavaKernel (preset=heavy, use -Ppreset=heavy)"
     group = "verification"
-    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(22) }
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(25) }
 
     useJUnitPlatform {
         includeTags 'benchmark'

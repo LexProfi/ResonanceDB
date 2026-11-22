@@ -48,7 +48,6 @@ class WalKillTest {
 
         ProcessBuilder pb = new ProcessBuilder(
                 javaBin,
-                "--enable-preview",
                 "--add-modules", "jdk.incubator.vector",
                 "-cp", classpath,
                 WalWriterProcess.class.getName(),

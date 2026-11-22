@@ -1,4 +1,4 @@
-FROM eclipse-temurin:22-jdk AS build
+FROM eclipse-temurin:25-jdk AS build
 WORKDIR /src
 
 COPY gradlew settings.gradle* build.gradle* gradle.properties* ./
@@ -24,7 +24,7 @@ RUN set -eux; \
     test -f resonance-server/build/server/licenses/THIRD_PARTY_NOTICES.md; \
     test -f resonance-server/build/server/server/VERSION || true
 
-FROM eclipse-temurin:22-jre
+FROM eclipse-temurin:25-jre
 WORKDIR /app
 
 RUN set -eux; \

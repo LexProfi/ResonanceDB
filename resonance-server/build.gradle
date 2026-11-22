@@ -5,7 +5,7 @@ plugins {
 }
 
 java {
-    toolchain { languageVersion = JavaLanguageVersion.of(22) }
+    toolchain { languageVersion = JavaLanguageVersion.of(25) }
 }
 
 dependencies {
@@ -16,7 +16,6 @@ dependencies {
 application {
     mainClass = 'ai.evacortex.resonancedb.server.ResonanceDBServer'
     applicationDefaultJvmArgs = [
-            '--enable-preview',
             '--enable-native-access=ALL-UNNAMED',
             '--add-modules', 'jdk.incubator.vector',
             '-Dfile.encoding=UTF-8'

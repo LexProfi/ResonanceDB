@@ -3,7 +3,7 @@
 [![WBSM](https://img.shields.io/badge/WBSM-0d1117?style=flat)](https://arxiv.org/html/2509.09691v1)
 [![Release](https://img.shields.io/github/v/release/LexProfi/ResonanceDB?label=release&color=blueviolet)](https://github.com/LexProfi/ResonanceDB/releases/latest)
 [![Tests](https://img.shields.io/badge/tests-498_passing-brightgreen)]()
-[![Java](https://img.shields.io/badge/Java-22-orange?logo=openjdk&logoColor=white)]()
+[![Java](https://img.shields.io/badge/Java-25-orange?logo=openjdk&logoColor=white)]()
 [![Panama FFI](https://img.shields.io/badge/Panama_FFI-Foreign_Function_%26_Memory-teal)]()
 [![License](https://img.shields.io/badge/License-Prosperity_3.0-blue)](./LICENSE)
 
@@ -95,7 +95,7 @@ See also: [Applications of Wave-Based Memory](./docs/whitepapers/Applications-of
 
 | Layer    | Snapshot                                                       |
 | -------- | -------------------------------------------------------------- |
-| Language | Java 22 with optional native C/SIMD via Panama FFI             |
+| Language | Java 25 (LTS) with optional native C/SIMD via Panama FFI      |
 | Storage  | Memory-mapped `.segment` files storing amplitude and phase     |
 | Routing  | Phase-based sharding using mean phase φ̄, with adaptive weighted routing |
 | Build    | Modular Gradle 8 workspace                                     |
@@ -103,9 +103,9 @@ See also: [Applications of Wave-Based Memory](./docs/whitepapers/Applications-of
 
 ---
 
-## ⚡ Why Java 22?
+## ⚡ Why Java 25?
 
-ResonanceDB uses Java 22 primarily for the **Foreign Function & Memory (Panama) API**, enabling:
+ResonanceDB uses Java 25 (LTS) with the finalized **Foreign Function & Memory (Panama) API**, enabling:
 
 * Off-heap execution without garbage-collector involvement on critical paths.
 * Near-C performance while preserving memory safety and strong encapsulation.
@@ -117,7 +117,7 @@ ResonanceDB uses Java 22 primarily for the **Foreign Function & Memory (Panama) 
 
 ### ✅ Requirements
 
-* JDK 22 or newer
+* JDK 25 or newer
 * GCC or Clang (for the optional native kernel)
 * Gradle 8 or newer
 
