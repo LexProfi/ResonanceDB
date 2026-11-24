@@ -2,7 +2,7 @@
 
 [![WBSM](https://img.shields.io/badge/WBSM-0d1117?style=flat)](https://arxiv.org/html/2509.09691v1)
 [![Release](https://img.shields.io/github/v/release/LexProfi/ResonanceDB?label=release&color=blueviolet)](https://github.com/LexProfi/ResonanceDB/releases/latest)
-[![Tests](https://img.shields.io/badge/tests-498_passing-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-534_passing-brightgreen)]()
 [![Java](https://img.shields.io/badge/Java-25-orange?logo=openjdk&logoColor=white)]()
 [![Panama FFI](https://img.shields.io/badge/Panama_FFI-Foreign_Function_%26_Memory-teal)]()
 [![License](https://img.shields.io/badge/License-Prosperity_3.0-blue)](./LICENSE)
